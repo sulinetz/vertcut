@@ -482,7 +482,18 @@ def project_start(pid: str, body: StartIn = StartIn()) -> Dict[str, Any]:
     if not project:
         raise HTTPException(404, "Проект не найден")
     if project.get("status") != "review":
-        raise HTTPException(400, "Видео ещё не готово к настройке")
+        hints = {
+            "draft": "Сначала выберите файл или ссылку и запустите обработку",
+            "queued": "Обработка уже стоит в очереди",
+            "preparing": "Видео ещё скачивается — дождитесь окончания",
+            "running": "Обработка уже идёт",
+            "processing": "Обработка уже идёт",
+            "done": "Видео уже обработано — откройте его в истории",
+            "cancelled": "Обработка отменена — нажмите «Повторить»",
+            "error": "Прошлая попытка упала — нажмите «Повторить»",
+        }
+        raise HTTPException(400, hints.get(project.get("status"),
+                                           "Видео ещё не готово к настройке"))
     if jobs.is_running(pid):
         raise HTTPException(409, "Обработка уже идёт — дождитесь окончания или отмените")
     options = pipeline.normalize_options(body.options or project.get("options"))

@@ -1703,6 +1703,19 @@ async function tmplPoll() {
       state.tmplTimer = setTimeout(tmplPoll, 1200);
       return;
     }
+    if (project.status === "cancelled") {
+      veil.classList.remove("hidden");
+      veil.innerHTML = `<div class="tmpl-error">Обработка отменена</div>
+        <button class="btn-ghost" id="tmplRetry">Начать заново</button>`;
+      $("#tmplRetry").addEventListener("click", async () => {
+        await api(`/api/projects/${project.id}/retry`, {
+          method: "POST",
+          body: JSON.stringify({ force_hd: false, prepare_only: true })
+        });
+        openTemplate(project.id);
+      });
+      return;
+    }
     if (project.status === "error") {
       veil.classList.remove("hidden");
       veil.innerHTML = `<div class="tmpl-error">${esc(project.error || "Не удалось загрузить видео")}</div>
@@ -1768,6 +1781,11 @@ async function startFromTemplate() {
   btn.innerHTML = '<span class="spinner"></span> Запуск';
   try {
     const project = state.tmplDetail.project;
+    if (!["draft", "review"].includes(project.status)) {
+      toast("Это видео уже обработано или ещё не готово к запуску", "err");
+      btn.disabled = false;
+      return;
+    }
     if (project.status === "draft" && project.url === "local:source") {
       if (!state.pendingFile) {
         btn.disabled = false;
