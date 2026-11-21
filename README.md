@@ -38,10 +38,10 @@
 
 | Платформа | Файл | Что внутри |
 |---|---|---|
-| **macOS 11+** (Apple Silicon) | [`ViralCut-1.2.2-macOS-arm64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.2.2-macOS-arm64.zip) · ~619 МБ | Модель Whisper, ffmpeg, 24 шрифта, PO-провайдер |
-| **Windows 10/11** (x64) | [`ViralCut-1.2.2-windows-x64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.2.2-windows-x64.zip) · ~600 МБ | Модель Whisper, ffmpeg, шрифты, WebView2-зависимости |
+| **macOS 11+** (Apple Silicon) | [`ViralCut-1.3.0-macOS-arm64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.3.0-macOS-arm64.zip) · ~619 МБ | Модель Whisper, ffmpeg, 24 шрифта, PO-провайдер |
+| **Windows 10/11** (x64) | [`ViralCut-1.3.0-windows-x64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.3.0-windows-x64.zip) · ~600 МБ | Модель Whisper, ffmpeg, шрифты, WebView2-зависимости |
 
-> Актуальный релиз **1.2.2**. Windows-сборку собирает
+> Актуальный релиз **1.3.0**. Windows-сборку собирает
 > GitHub Actions и прикладывает к релизу; macOS-архив собран и подписан ad-hoc.
 
 ## Почему ViralCut
@@ -135,7 +135,7 @@ Telegram появляется карточка «Доступна версия X
 
 ### Windows 10/11
 
-Скачайте [`ViralCut-1.2.2-windows-x64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.2.2-windows-x64.zip), распакуйте и запустите `ViralCut.exe`.
+Скачайте [`ViralCut-1.3.0-windows-x64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.3.0-windows-x64.zip), распакуйте и запустите `ViralCut.exe`.
 Если Python нет и вы запускаете из исходников — используйте `install_windows.bat`
 (поставит Python 3.12 и WebView2 через winget).
 Подробнее: [docs/WINDOWS.md](docs/WINDOWS.md).
@@ -144,7 +144,7 @@ Telegram появляется карточка «Доступна версия X
 
 #### Готовое приложение
 
-Скачайте [`ViralCut-1.2.2-macOS-arm64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.2.2-macOS-arm64.zip) из раздела **Releases** (≈620 МБ; внутри модели и все зависимости, после установки ничего не докачивается).
+Скачайте [`ViralCut-1.3.0-macOS-arm64.zip`](https://github.com/vanwild11/viralcut/releases/latest/download/ViralCut-1.3.0-macOS-arm64.zip) из раздела **Releases** (≈620 МБ; внутри модели и все зависимости, после установки ничего не докачивается).
 
 1. Распакуйте и перетащите `ViralCut.app` в «Программы».
 2. Запустите — откроется своё окно, браузер не нужен.
@@ -196,7 +196,7 @@ Telegram появляется карточка «Доступна версия X
 | Платформа | Команда | Результат |
 |---|---|---|
 | **macOS** | `./build_app.sh` | `dist/ViralCut.app` |
-| **Windows 10/11** | `powershell -ExecutionPolicy Bypass -File build_windows.ps1` | `release\ViralCut-1.2.2-windows-x64.zip` |
+| **Windows 10/11** | `powershell -ExecutionPolicy Bypass -File build_windows.ps1` | `release\ViralCut-1.3.0-windows-x64.zip` |
 | **Любая ОС** | `./run.sh` | сервер на `http://127.0.0.1:8765` |
 
 Сборка воспроизводится в **GitHub Actions** ([workflow](.github/workflows/build.yml)):
@@ -205,8 +205,8 @@ ZIP автоматически прикрепляется к GitHub Release. mac
 собирается локально (`build_app.sh`) и загружается в релиз.
 
 ```bash
-git tag v1.2.2
-git push origin v1.2.2
+git tag v1.3.0
+git push origin v1.3.0
 ```
 
 ## Как это работает
@@ -365,7 +365,7 @@ Mac скачается заново при первом видео, cookies бр
 - `CHANGELOG.md` — история версий.
 - `THIRD_PARTY_NOTICES.md` — лицензии ffmpeg, Whisper, шрифтов и других компонентов.
 
-Артефакты релиза лежат в `release/v1.2.2/` (в git не коммитятся из-за размера — только
+Артефакты релиза лежат в `release/v1.3.0/` (в git не коммитятся из-за размера — только
 как assets GitHub Release).
 
 
