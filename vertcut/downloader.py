@@ -62,9 +62,19 @@ def _setup_plugins() -> None:
 _setup_plugins()
 
 
+def _is_cookie_db_error(exc: Exception) -> bool:
+    """Браузер занят и не отдаёт базу cookies (частая проблема Chrome на Windows)."""
+    low = str(exc).lower()
+    return ("could not copy" in low and "cookie" in low) or "cookie database" in low
+
+
 def _fmt_err(exc: Exception) -> str:
     msg = str(exc)
     low = msg.lower()
+    if _is_cookie_db_error(exc):
+        return ("Браузер не отдал cookies: его база занята запущенным процессом. "
+                "Закройте Chrome (или выберите Edge/Firefox) и повторите. "
+                "Можно также скачать без cookies — тогда доступны только открытые видео.")
     if "sign in" in low or "login" in low or "cookies" in low or "not a bot" in low:
         return ("Сайт требует авторизацию. Включите «Cookies из браузера» в настройках "
                 "или загрузите видео файлом.")
@@ -446,8 +456,18 @@ def download(url: str, dest_dir: Path, progress: ProgressCb = None,
             meta = None
             for reconnect in range(2):
                 try:
-                    meta = _attempt(url, dest_dir, fmt, clients, browser, progress,
-                                    pot=pot, extractor_args=extra_args)
+                    try:
+                        meta = _attempt(url, dest_dir, fmt, clients, browser, progress,
+                                        pot=pot, extractor_args=extra_args)
+                    except Exception as exc:  # noqa: BLE001
+                        if browser and _is_cookie_db_error(exc):
+                            print("[cookies] база браузера занята — качаю без cookies",
+                                  file=sys.stderr)
+                            browser = None
+                            meta = _attempt(url, dest_dir, fmt, clients, None, progress,
+                                            pot=pot, extractor_args=extra_args)
+                        else:
+                            raise
                     break
                 except StalledDownload as exc:
                     print(f"download stalled ({exc}); reconnecting", file=sys.stderr)
@@ -575,14 +595,30 @@ def probe(url: str, browser: Optional[str] = None) -> Dict[str, Any]:
         # Раньше здесь жёстко включался PO-token-клиент; когда он перестаёт
         # отвечать, «недоступно» показывалось на любую ссылку. Теперь идём тем же
         # перебором клиентов, что и загрузка.
-        info, _args, _label = _youtube_info(url, browser, _pot_enabled())
+        try:
+            info, _args, _label = _youtube_info(url, browser, _pot_enabled())
+        except Exception as exc:  # noqa: BLE001
+            if browser and _is_cookie_db_error(exc):
+                print("[cookies] база браузера занята — повторяю без cookies",
+                      file=sys.stderr)
+                info, _args, _label = _youtube_info(url, None, _pot_enabled())
+            else:
+                raise
     else:
         node = os.environ.get("VERTCUT_NODE")
         if node:
             opts["js_runtimes"] = {"node": {"path": node}}
         opts.update(_cookie_opts(browser))
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as exc:  # noqa: BLE001
+            if browser and _is_cookie_db_error(exc):
+                opts.pop("cookiesfrombrowser", None)
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            else:
+                raise
 
     if info and "entries" in info:
         entries = [e for e in info["entries"] if e]
@@ -836,8 +872,19 @@ def download_section(url: str, dest_dir: Path, start: float, end: float,
                 opts["extractor_args"] = {"youtube": {"player_client": ["android", "tv"]}}
         opts.update(_cookie_opts(browser))
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.extract_info(url, download=True)
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.extract_info(url, download=True)
+            except Exception as exc:  # noqa: BLE001
+                if browser and _is_cookie_db_error(exc):
+                    print("[cookies] база браузера занята — качаю фрагмент без cookies",
+                          file=sys.stderr)
+                    opts.pop("cookiesfrombrowser", None)
+                    browser = None
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        ydl.extract_info(url, download=True)
+                else:
+                    raise
             if any(p.suffix not in (".part", ".ytdl") for p in dest_dir.glob("section.*")):
                 break
         except Exception as exc:  # noqa: BLE001
