@@ -31,9 +31,16 @@ class UpdateSettingsIn(BaseModel):
 class RetryIn(BaseModel):
     force_hd: bool = False
     prepare_only: bool = False
+    options: Dict[str, Any] = {}
 
 
 class StartIn(BaseModel):
+    options: Dict[str, Any] = {}
+
+
+class DraftIn(BaseModel):
+    title: str = ""
+    url: str = ""
     options: Dict[str, Any] = {}
 
 
@@ -304,16 +311,14 @@ def stream_stop(pid: str) -> Dict[str, Any]:
     return {"ok": True}
 
 
-@app.post("/api/upload")
-async def upload(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def _store_upload(pid: str, file: UploadFile) -> Path:
+    """Пишет загруженный файл в папку проекта, проверяя формат, размер и медиа."""
     if not file.filename:
         raise HTTPException(400, "Файл не выбран")
     suffix = Path(file.filename).suffix.lower() or ".mp4"
     if suffix not in ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(400, f"Формат {suffix} не поддерживается — загрузите видео или аудио")
-    project = db.create_project("local:source", pipeline.normalize_options({}),
-                                title=file.filename)
-    workdir = PROJECTS_DIR / project["id"]
+    workdir = PROJECTS_DIR / pid
     workdir.mkdir(parents=True, exist_ok=True)
     target = workdir / f"source{suffix}"
     written = 0
@@ -335,12 +340,10 @@ async def upload(file: UploadFile = File(...)) -> Dict[str, Any]:
                     )
                 fh.write(chunk)
     except HTTPException:
-        shutil.rmtree(workdir, ignore_errors=True)
-        db.delete_project(project["id"])
+        target.unlink(missing_ok=True)
         raise
     if target.stat().st_size < 1024:
-        shutil.rmtree(workdir, ignore_errors=True)
-        db.delete_project(project["id"])
+        target.unlink(missing_ok=True)
         raise HTTPException(400, "Файл пустой или повреждён")
     # Проверяем, что это действительно медиа: иначе в списке появлялся бы
     # проект, который сразу уходит в error.
@@ -351,9 +354,53 @@ async def upload(file: UploadFile = File(...)) -> Dict[str, Any]:
         if not probed.get("duration"):
             raise ValueError("нет длительности")
     except Exception:  # noqa: BLE001
-        shutil.rmtree(workdir, ignore_errors=True)
-        db.delete_project(project["id"])
+        target.unlink(missing_ok=True)
         raise HTTPException(400, "Файл не похож на видео или аудио — проверьте содержимое") from None
+    return target
+
+
+@app.post("/api/projects/draft")
+def create_draft(body: DraftIn) -> Dict[str, Any]:
+    """Проект без исходника: пользователь сначала настраивает параметры.
+
+    Загрузка начнётся только по кнопке «Запуск», а не сразу после выбора файла.
+    """
+    project = db.create_project(body.url.strip() or "local:source",
+                                pipeline.normalize_options(body.options),
+                                title=body.title or "Новый проект")
+    db.update_project(project["id"], status="draft", stage="Настройте параметры и запустите")
+    return db.get_project(project["id"]) or project
+
+
+@app.post("/api/projects/{pid}/upload")
+async def upload_into_project(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    try:
+        target = await _store_upload(pid, file)
+    except HTTPException as exc:
+        db.update_project(pid, status="error", stage="Ошибка загрузки",
+                          error=str(exc.detail)[:400])
+        raise
+    db.update_project(pid, source=str(target), title=file.filename or project.get("title"),
+                      status="review", stage="Видео готово · настройте шаблон",
+                      progress=100, error=None)
+    return db.get_project(pid) or project
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile = File(...)) -> Dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(400, "Файл не выбран")
+    project = db.create_project("local:source", pipeline.normalize_options({}),
+                                title=file.filename)
+    try:
+        target = await _store_upload(project["id"], file)
+    except HTTPException:
+        shutil.rmtree(PROJECTS_DIR / project["id"], ignore_errors=True)
+        db.delete_project(project["id"])
+        raise
     db.update_project(project["id"], source=str(target), title=file.filename)
     jobs.submit_prepare(project["id"])
     return db.get_project(project["id"]) or project
@@ -420,7 +467,7 @@ def project_retry(pid: str, body: RetryIn = RetryIn()) -> Dict[str, Any]:
     if jobs.is_running(pid):
         # текущая обработка ещё останавливается — поставим повтор в очередь
         pipeline.request_cancel(pid)
-    options = dict(project.get("options") or {})
+    options = pipeline.normalize_options(body.options or project.get("options"))
     options["force_hd"] = bool(body.force_hd)
     pipeline.clear_cancel(pid)
     db.clear_clips(pid)

@@ -225,6 +225,22 @@ const DUR_PRESETS = {
   "30-90": { min: 30, max: 90, target: 55, label: "30–90 сек" }
 };
 
+const ASPECT_META = {
+  "9:16": { short: "Вертикально", hint: "Shorts, Reels, TikTok", w: 9, h: 16 },
+  "1:1": { short: "Квадрат", hint: "лента Instagram, VK", w: 1, h: 1 },
+  "16:9": { short: "Горизонтально", hint: "обычное видео, YouTube", w: 16, h: 9 }
+};
+
+const aspectIcon = (a) => {
+  const m = ASPECT_META[a];
+  if (!m) return "";
+  const box = 20;
+  const k = box / Math.max(m.w, m.h);
+  const w = Math.round(m.w * k);
+  const h = Math.round(m.h * k);
+  return `<span class="aspect-ico" style="width:${w}px;height:${h}px"></span>`;
+};
+
 const PLATFORM_OPTIONS = [
   ["universal", "Универсально"],
   ["shorts", "Shorts"],
@@ -248,6 +264,7 @@ const state = {
   tmplTimer: null,
   tmplAnim: null,
   tmplDetail: null,
+  pendingFile: null,
   opts: {
     count: 10,
     dur: "20-45",
@@ -366,7 +383,7 @@ function heroHTML() {
         ${optIcon("aspect", "ico-cyan")}
         <span class="opt-label">Формат</span>
         <div class="seg" data-group="aspect">
-          ${["9:16", "1:1", "16:9"].map((a) => `<button data-val="${a}" class="${o.aspect === a ? "active" : ""}">${a}</button>`).join("")}
+          ${Object.entries(ASPECT_META).map(([a, m]) => `<button data-val="${a}" class="${o.aspect === a ? "active" : ""}" title="${m.hint}">${aspectIcon(a)}${m.short}</button>`).join("")}
         </div>
       </div>
       <div class="opt">
@@ -655,9 +672,9 @@ async function createFromProbe(height) {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Запуск'; }
   try {
     const options = { ...heroOptions(), max_height: height, segments: state.segmentsChoice };
-    const project = await api("/api/projects", {
+    const project = await api("/api/projects/draft", {
       method: "POST",
-      body: JSON.stringify({ url, options, prepare_only: true })
+      body: JSON.stringify({ url, title: "", options })
     });
     state.probeOpen = false;
     $("#modal").classList.add("hidden");
@@ -673,17 +690,24 @@ async function createFromProbe(height) {
 
 async function uploadFile(file) {
   if (!file) return;
+  const openDraft = state.tmplDetail && state.tmplDetail.project
+    && state.tmplDetail.project.status === "draft" && state.tmplPid;
+  if (openDraft) {
+    state.pendingFile = file;
+    await openTemplate(state.tmplPid);
+    return;
+  }
   if (file.size > 4 * 1024 * 1024 * 1024) { toast("Файл больше 4 ГБ", "err"); return; }
-  const form = new FormData();
-  form.append("file", file);
-  toast("Загружаю файл…");
   try {
-    const project = await api("/api/upload", { method: "POST", body: form });
+    const project = await api("/api/projects/draft", {
+      method: "POST",
+      body: JSON.stringify({ title: file.name, options: heroOptions() })
+    });
+    state.pendingFile = file;
     await loadProjects();
-    openProject(project.id);
     openTemplate(project.id);
   } catch (e) {
-    toast(e.message || "Ошибка загрузки", "err");
+    toast(e.message || "Ошибка создания проекта", "err");
   }
 }
 
@@ -1576,7 +1600,7 @@ async function tmplPoll() {
     const text = $("#tmplStageText");
     if (!veil) return;
 
-    if (project.status === "preparing" || project.status === "queued") {
+    if (["preparing", "queued", "running", "processing"].includes(project.status)) {
       veil.classList.remove("hidden");
       text.textContent = project.stage || "Загрузка видео…";
       $("#tmplBar").style.width = Math.max(2, project.progress || 0) + "%";
@@ -1593,7 +1617,7 @@ async function tmplPoll() {
       });
       return;
     }
-    if (project.status === "review") {
+    if (project.status === "draft" || project.status === "review") {
       const defaults = templateDefaults(project);
       $("#tpFont").value = defaults.font;
       $("#tpSize").value = defaults.size;
@@ -1613,7 +1637,16 @@ async function tmplPoll() {
         video.play().catch(() => {});
       }
       veil.classList.add("hidden");
-      $("#tmplStart").disabled = false;
+      const startBtn = $("#tmplStart");
+      if (project.status === "draft") {
+        startBtn.disabled = false;
+        startBtn.textContent = state.pendingFile ? "Загрузить и нарезать" : "Выбрать файл";
+        const pendingName = state.pendingFile ? state.pendingFile.name : "файл не выбран";
+        $("#tmplMeta").textContent = `Файл ещё не загружен · ${pendingName}`;
+        return;
+      }
+      startBtn.disabled = false;
+      startBtn.textContent = "Сделать нарезки";
       const m = project.meta || {};
       $("#tmplMeta").textContent = [
         m.segments_mode ? "Экономный режим: видео качается только для выбранных моментов" : "",
@@ -1639,6 +1672,28 @@ async function startFromTemplate() {
   btn.innerHTML = '<span class="spinner"></span> Запуск';
   try {
     const project = state.tmplDetail.project;
+    if (project.status === "draft" && project.url === "local:source") {
+      if (!state.pendingFile) {
+        btn.disabled = false;
+        btn.textContent = "Выбрать файл";
+        $("#fileInput").click();
+        return;
+      }
+      btn.innerHTML = '<span class="spinner"></span> Загружаю файл';
+      const form = new FormData();
+      form.append("file", state.pendingFile);
+      await api(`/api/projects/${project.id}/upload`, { method: "POST", body: form });
+      state.pendingFile = null;
+      state.tmplDetail = await api(`/api/projects/${project.id}`);
+    } else if (project.status === "draft") {
+      btn.innerHTML = '<span class="spinner"></span> Запускаю';
+      await api(`/api/projects/${project.id}/retry`, {
+        method: "POST",
+        body: JSON.stringify({ force_hd: false, prepare_only: false, options: templateOptions() })
+      });
+      tmplPoll();
+      return;
+    }
     await api(`/api/projects/${project.id}/start`, {
       method: "POST",
       body: JSON.stringify({ options: templateOptions() })
@@ -1730,7 +1785,7 @@ function openEditor(clipId) {
             <div class="field">
               <label>Формат</label>
               <select id="edAspect">
-                ${["9:16", "1:1", "16:9"].map((a) => `<option value="${a}" ${(s.aspect || "9:16") === a ? "selected" : ""}>${a}</option>`).join("")}
+                ${Object.entries(ASPECT_META).map(([a, m]) => `<option value="${a}" ${(s.aspect || "9:16") === a ? "selected" : ""}>${a} — ${m.short}</option>`).join("")}
               </select>
             </div>
             <div class="field">

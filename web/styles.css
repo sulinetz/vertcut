@@ -1367,3 +1367,18 @@ input[type="range"]::-webkit-slider-thumb {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
+
+/* Миниатюра пропорций рядом с форматом кадра */
+.aspect-ico {
+  display: inline-block;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.75;
+  vertical-align: -3px;
+  margin-right: 7px;
+}
+.seg button:hover .aspect-ico,
+.seg button.active .aspect-ico {
+  opacity: 1;
+}
