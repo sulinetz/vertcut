@@ -61,7 +61,7 @@ class ClipEdit(BaseModel):
     sub_speed: Optional[str] = None
 
 
-app = FastAPI(title="ViralCut", version="1.2.0")
+app = FastAPI(title="ViralCut", version="1.2.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

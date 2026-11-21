@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1 — 2026-11-22
+
+- **Фикс запуска Windows-сборки.** `pythonnet` не находил `python3XX.dll` для
+  `Python.Runtime.dll`, из-за чего приложение падало на `import clr` с ошибкой
+  `Failed to resolve Python.Runtime.Loader.Initialize`. Добавлен runtime-hook:
+  `PYTHONNET_PYDLL`, `PYTHONNET_RUNTIME=netfx`, DLL search path и снятие
+  `Zone.Identifier`.
+- Версия 1.2.1.
+
 ## 1.2.0 — 2026-11-21
 
 - **Стабильный релиз.** Из интерфейса убрана пометка «beta» — версия проверена и готова

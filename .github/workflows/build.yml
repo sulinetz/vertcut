@@ -58,12 +58,12 @@ jobs:
 
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path dist\ViralCut -DestinationPath ViralCut-1.2.0-windows-x64.zip
+        run: Compress-Archive -Path dist\ViralCut -DestinationPath ViralCut-1.2.1-windows-x64.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: ViralCut-windows-x64
-          path: ViralCut-1.2.0-windows-x64.zip
+          path: ViralCut-1.2.1-windows-x64.zip
 
   release:
     name: GitHub Release

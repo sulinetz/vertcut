@@ -34,6 +34,12 @@ if (built_model / "model.bin").is_file():
     datas.append((str(built_model), "models/whisper-small"))
 
 binaries = []
+if IS_WIN:
+    # Python.Runtime.dll (netfx) ищет python3XX.dll рядом с собой — кладём копию.
+    _py_dll = Path(sys.base_prefix) / f"python{sys.version_info[0]}{sys.version_info[1]}.dll"
+    if _py_dll.is_file():
+        binaries.append((str(_py_dll), "pythonnet/runtime"))
+
 hiddenimports = [
     "uvicorn.logging",
     "uvicorn.loops.auto",
@@ -77,7 +83,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["desktop/pyi_rth_pythonnet.py"] if IS_WIN else [],
     excludes=["tkinter", "matplotlib", "PyQt5", "PyQt6", "PySide6", "IPython", "pytest",
               "notebook", "jupyter"],
     noarchive=False,
@@ -118,11 +124,11 @@ if IS_MAC:
         name="ViralCut.app",
         icon="assets/ViralCut.icns",
         bundle_identifier="com.viralcut.app",
-        version="1.2.0",
+        version="1.2.1",
         info_plist={
             "CFBundleDisplayName": "ViralCut",
-            "CFBundleShortVersionString": "1.2.0",
-            "CFBundleVersion": "6",
+            "CFBundleShortVersionString": "1.2.1",
+            "CFBundleVersion": "7",
             "LSMinimumSystemVersion": "11.0",
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,
