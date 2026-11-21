@@ -1,0 +1,266 @@
+"""Умное кадрирование: поиск лиц и плавное слежение для вертикального кадра.
+
+Возвращает путь окна кадрирования (keyframes), который render.py превращает
+в выражение для ffmpeg crop. Без лиц — центральный кроп.
+"""
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from . import utils
+from .config import ASSETS_DIR
+
+_MODEL = ASSETS_DIR / "models" / "yunet.onnx"
+
+
+def _make_detector():
+    import cv2
+
+    if _MODEL.exists():
+        try:
+            return "yunet", cv2.FaceDetectorYN.create(str(_MODEL), "", (320, 320), 0.6, 0.3, 5000)
+        except Exception:
+            pass
+    return "haar", None
+
+
+def _detect(detector: Tuple[str, Any], frame) -> List[Dict[str, float]]:
+    import cv2
+
+    kind, det = detector
+    h, w = frame.shape[:2]
+    out: List[Dict[str, float]] = []
+    if kind == "yunet" and det is not None:
+        try:
+            det.setInputSize((w, h))
+            _, faces = det.detect(frame)
+        except Exception:
+            faces = None
+        if faces is not None:
+            for f in faces:
+                x, y, fw, fh = float(f[0]), float(f[1]), float(f[2]), float(f[3])
+                score = float(f[-1])
+                if score < 0.5 or fw < 16:
+                    continue
+                out.append({"cx": x + fw / 2, "cy": y + fh / 2, "w": fw, "h": fh, "score": score})
+        return out
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
+    for (x, y, fw, fh) in faces:
+        out.append({"cx": x + fw / 2, "cy": y + fh / 2, "w": float(fw), "h": float(fh), "score": 1.0})
+    return out
+
+
+def _median(values: Sequence[float], window: int = 5) -> List[float]:
+    out: List[float] = []
+    half = window // 2
+    for i in range(len(values)):
+        chunk = sorted(values[max(0, i - half): min(len(values), i + half + 1)])
+        out.append(chunk[len(chunk) // 2])
+    return out
+
+
+def _smooth(values: List[Optional[float]], alpha: float = 0.25,
+            max_speed: float = 160.0, dt: float = 0.5) -> List[float]:
+    """Заполняет пропуски, сглаживает EMA и ограничивает скорость движения окна."""
+    filled: List[float] = []
+    last: Optional[float] = None
+    for v in values:
+        if v is None:
+            if last is None:
+                filled.append(float("nan"))
+            else:
+                filled.append(last)
+        else:
+            last = v
+            filled.append(v)
+
+    known = [v for v in filled if not math.isnan(v)]
+    if not known:
+        return []
+    default = known[len(known) // 2]
+    filled = [default if math.isnan(v) else v for v in filled]
+    med = _median(filled, 3)
+
+    out: List[float] = []
+    current = med[0]
+    for target in med:
+        current += (target - current) * alpha
+        delta = current - (out[-1] if out else current)
+        limit = max_speed * dt
+        if abs(delta) > limit:
+            current = (out[-1] if out else current) + math.copysign(limit, delta)
+        out.append(current)
+    return out
+
+
+def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16",
+                    sample_fps: float = 2.0, max_width: int = 960) -> Optional[Dict[str, Any]]:
+    """Анализирует фрагмент и возвращает keyframes окна кадрирования.
+
+    Результат: {"x": [...], "y": [...], "times": [...], "crop_w": int, "crop_h": int}
+    Координаты — в пикселях исходного видео, times — секунды от начала клипа.
+    """
+    try:
+        import cv2
+    except Exception:
+        return None
+
+    info = utils.probe(source)
+    src_w, src_h = info["width"], info["height"]
+    aw, ah = (9, 16)
+    try:
+        aw, ah = [int(v) for v in aspect.split(":")]
+    except Exception:
+        pass
+
+    # окно кадрирования под целевой аспект, максимально возможное (без апскейла по ширине)
+    if src_w / src_h > aw / ah:
+        crop_h = src_h
+        crop_w = max(2, int(round(src_h * aw / ah)))
+    else:
+        crop_w = src_w
+        crop_h = max(2, int(round(src_w * ah / aw)))
+
+    cap = cv2.VideoCapture(str(source))
+    if not cap.isOpened():
+        return None
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        duration = max(0.1, end - start)
+        step = max(1, int(round(fps / max(0.5, sample_fps))))
+        cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000.0)
+
+        detector = _make_detector()
+        samples: List[Tuple[float, List[Dict[str, float]]]] = []
+        frame_idx = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            ts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if ts < start - 0.05:
+                frame_idx += 1
+                continue
+            if ts > end:
+                break
+            if frame_idx % step == 0:
+                h, w = frame.shape[:2]
+                scale = min(1.0, max_width / max(1, w))
+                small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1 else frame
+                faces = _detect(detector, small)
+                if scale < 1:
+                    for face in faces:
+                        for key in ("cx", "cy", "w", "h"):
+                            face[key] /= scale
+                samples.append((max(0.0, ts - start), faces))
+            frame_idx += 1
+
+        if not samples:
+            return None
+
+        dt = max(0.05, duration / max(1, len(samples) - 1))
+        xs: List[Optional[float]] = []
+        ys: List[Optional[float]] = []
+        prev_cx: Optional[float] = None
+
+        for _, faces in samples:
+            if not faces:
+                xs.append(None)
+                ys.append(None)
+                continue
+            faces = sorted(faces, key=lambda f: f["w"] * f["h"], reverse=True)
+            primary = faces[0]
+            if prev_cx is not None and len(faces) > 1:
+                # держимся за тем же человеком, а не прыгаем на самое крупное лицо
+                def cost(f: Dict[str, float]) -> float:
+                    return abs(f["cx"] - prev_cx) / max(1.0, src_w) + 0.35 * (1 - f["w"] / max(1.0, primary["w"]))
+                primary = min(faces, key=cost)
+            prev_cx = primary["cx"]
+
+            # если два лица рядом и оба влезают в окно — центрируем между ними
+            cx = primary["cx"]
+            near = [f for f in faces if abs(f["cx"] - primary["cx"]) < crop_w * 0.95]
+            if len(near) >= 2:
+                cx = sum(f["cx"] for f in near) / len(near)
+
+            xs.append(cx)
+            ys.append(primary["cy"])
+
+        if not any(v is not None for v in xs):
+            center_x = max(0.0, (src_w - crop_w) / 2)
+            center_y = max(0.0, (src_h - crop_h) / 2)
+            return {"times": [0.0, duration], "x": [center_x, center_x],
+                    "y": [center_y, center_y], "crop_w": crop_w, "crop_h": crop_h,
+                    "faces": 0, "samples": len(samples), "coverage": 0.0,
+                    "source": [src_w, src_h]}
+
+        smooth_x = _smooth(xs, alpha=0.5, max_speed=max(60.0, crop_w * 0.6), dt=dt)
+        smooth_y = _smooth(ys, alpha=0.3, max_speed=max(40.0, crop_h * 0.4), dt=dt)
+
+        max_x = max(0.0, src_w - crop_w)
+        max_y = max(0.0, src_h - crop_h)
+        times: List[float] = []
+        path_x: List[float] = []
+        path_y: List[float] = []
+        for (ts, _), cx, cy in zip(samples, smooth_x, smooth_y):
+            x = max(0.0, min(max_x, cx - crop_w / 2))
+            y = max(0.0, min(max_y, cy - crop_h * 0.45))
+            times.append(round(ts, 3))
+            path_x.append(round(x, 1))
+            path_y.append(round(y, 1))
+
+        face_frames = sum(1 for _, f in samples if f)
+        return {
+            "times": times,
+            "x": path_x,
+            "y": path_y,
+            "crop_w": crop_w,
+            "crop_h": crop_h,
+            "faces": face_frames,
+            "samples": len(samples),
+            "coverage": round(face_frames / max(1, len(samples)), 3),
+            "source": [src_w, src_h],
+        }
+    finally:
+        cap.release()
+
+
+def _piecewise(times: List[float], values: List[float], clamp_max: float, var: str = "t") -> str:
+    """Выражение ffmpeg: кусочно-линейная интерполяция через сумму ramp-функций."""
+    if not times or not values:
+        return "0"
+    if len(times) == 1:
+        return f"{values[0]:.1f}"
+    slopes: List[float] = []
+    for i in range(len(times) - 1):
+        dt = max(1e-3, times[i + 1] - times[i])
+        slopes.append((values[i + 1] - values[i]) / dt)
+
+    expr = f"{values[0]:.1f}"
+    prev_slope = 0.0
+    for i, slope in enumerate(slopes):
+        delta = slope - prev_slope
+        prev_slope = slope
+        if abs(delta) < 1e-4:
+            continue
+        expr += f"+({delta:.3f})*max(0\\,{var}-{times[i]:.3f})"
+    # после последнего keyframe движение прекращается
+    delta = -prev_slope
+    if abs(delta) > 1e-4:
+        expr += f"+({delta:.3f})*max(0\\,{var}-{times[-1]:.3f})"
+    return f"max(0\\,min({clamp_max:.1f}\\,{expr}))"
+
+
+def crop_expressions(path: Dict[str, Any]) -> Tuple[str, str]:
+    """Возвращает (x_expr, y_expr) для фильтра crop."""
+    times = path["times"]
+    max_x = max(0.0, path["source"][0] - path["crop_w"])
+    max_y = max(0.0, path["source"][1] - path["crop_h"])
+    x_expr = _piecewise(times, path["x"], max_x, "t")
+    y_expr = _piecewise(times, path["y"], max_y, "t")
+    return x_expr, y_expr
