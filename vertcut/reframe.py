@@ -128,6 +128,100 @@ def _mouth_motion(prev_faces, prev_patches, faces, patches) -> List[float]:
     return scores
 
 
+def _inside(face: Dict[str, float], rect: Tuple[float, float, float, float]) -> bool:
+    x0, y0, x1, y1 = rect
+    return x0 <= face["cx"] <= x1 and y0 <= face["cy"] <= y1
+
+
+def _facecam_box(face_w: float, face_h: float, cx: float, cy: float,
+                 src_w: int, src_h: int) -> Dict[str, float]:
+    """Прямоугольник врезки вокруг стабильного маленького лица.
+
+    Берём квадрат с запасом вокруг лица: врезка обычно включает плечи и фон,
+    а не только лицо.
+    """
+    side = max(4.6 * face_w, 2.0 * face_h)
+    side = max(0.14 * src_w, min(0.34 * src_w, side))
+    w = side
+    h = side * 0.78
+    x = cx - w / 2
+    y = cy - h * 0.42
+    x = max(0.0, min(src_w - w, x))
+    y = max(0.0, min(src_h - h, y))
+    return {"x": round(x, 1), "y": round(y, 1), "w": round(w, 1), "h": round(h, 1)}
+
+
+def detect_facecam(source: Path, start: float, end: float,
+                   sample_fps: float = 2.0, max_width: int = 960,
+                   min_share: float = 0.45) -> Optional[Dict[str, Any]]:
+    """Ищет врезку с лицом: маленькое лицо, которое стоит на одном месте.
+
+    Возвращает {"x","y","w","h","share","source"} в пикселях исходника
+    или None, если стабильной врезки нет.
+    """
+    try:
+        import cv2
+    except Exception:
+        return None
+    info = utils.probe(source)
+    src_w, src_h = info["width"], info["height"]
+    if not src_w or not src_h:
+        return None
+
+    cap = cv2.VideoCapture(str(source))
+    if not cap.isOpened():
+        return None
+    detector = _make_detector()
+    buckets: Dict[Tuple[int, int], List[Dict[str, float]]] = {}
+    total = 0
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        step = max(1, int(round(fps / max(0.5, sample_fps))))
+        cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000.0)
+        index = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            ts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if ts < start - 0.05:
+                index += 1
+                continue
+            if ts > end:
+                break
+            if index % step == 0:
+                total += 1
+                fh, fw = frame.shape[:2]
+                scale = min(1.0, max_width / max(1, fw))
+                small = cv2.resize(frame, (int(fw * scale), int(fh * scale))) if scale < 1 else frame
+                faces = _detect(detector, small)
+                for face in faces:
+                    if scale < 1:
+                        for key in ("cx", "cy", "w", "h"):
+                            face[key] /= scale
+                    if face["w"] > 0.32 * src_w:
+                        continue
+                    key = (round(face["cx"] / (0.04 * src_w)), round(face["cy"] / (0.04 * src_h)))
+                    buckets.setdefault(key, []).append(face)
+            index += 1
+    finally:
+        cap.release()
+
+    if not buckets or total == 0:
+        return None
+    best = max(buckets.values(), key=len)
+    share = len(best) / total
+    if share < min_share:
+        return None
+    cx = sorted(f["cx"] for f in best)[len(best) // 2]
+    cy = sorted(f["cy"] for f in best)[len(best) // 2]
+    fw = sorted(f["w"] for f in best)[len(best) // 2]
+    fh = sorted(f["h"] for f in best)[len(best) // 2]
+    box = _facecam_box(fw, fh, cx, cy, src_w, src_h)
+    box.update({"share": round(share, 3), "source": [src_w, src_h]})
+    return box
+
+
 def _median(values: Sequence[float], window: int = 5) -> List[float]:
     out: List[float] = []
     half = window // 2
@@ -172,8 +266,13 @@ def _smooth(values: List[Optional[float]], alpha: float = 0.25,
 
 
 def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16",
-                    sample_fps: float = 2.0, max_width: int = 960) -> Optional[Dict[str, Any]]:
+                    sample_fps: float = 2.0, max_width: int = 960,
+                    exclude: Optional[Tuple[float, float, float, float]] = None,
+                    avoid: Optional[Tuple[float, float, float, float]] = None) -> Optional[Dict[str, Any]]:
     """Анализирует фрагмент и возвращает keyframes окна кадрирования.
+
+    exclude — прямоугольник, лица внутри которого игнорируются (врезка).
+    avoid — прямоугольник, который окно по возможности не должно накрывать.
 
     Результат: {"x": [...], "y": [...], "times": [...], "crop_w": int, "crop_h": int}
     Координаты — в пикселях исходного видео, times — секунды от начала клипа.
@@ -230,6 +329,9 @@ def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16"
                     for face in faces:
                         for key in ("cx", "cy", "w", "h"):
                             face[key] /= scale
+                if exclude is not None:
+                    keep = [i for i, f in enumerate(faces) if not _inside(f, exclude)]
+                    faces = [faces[i] for i in keep]
                 mouth = [_mouth_patch(frame, face) for face in faces]
                 samples.append((max(0.0, ts - start), faces, mouth))
             frame_idx += 1
@@ -299,13 +401,23 @@ def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16"
 
         max_x = max(0.0, src_w - crop_w)
         max_y = max(0.0, src_h - crop_h)
-        times: List[float] = []
+        # Врезку не накрываем окном, если это возможно без выхода за кадр.
+        avoid_x0, avoid_y0 = 0.0, 0.0
+        if avoid is not None:
+            ax0, ay0, ax1, ay1 = avoid
+            if ax1 + crop_w <= src_w:
+                avoid_x0 = ax1
+            elif ax0 - crop_w >= 0:
+                avoid_x0 = 0.0
+            if ay1 + crop_h <= src_h:
+                avoid_y0 = ay1
+        times: List[str] = []
         path_x: List[float] = []
         path_y: List[float] = []
         for (ts, _, _), cx, cy in zip(samples, smooth_x, smooth_y):
-            x = max(0.0, min(max_x, cx - crop_w / 2))
+            x = max(avoid_x0, min(max_x, cx - crop_w / 2))
             # голова должна оставаться в кадре целиком: держим лицо по центру-верху
-            y = max(0.0, min(max_y, cy - crop_h * 0.42))
+            y = max(avoid_y0, min(max_y, cy - crop_h * 0.42))
             times.append(round(ts, 3))
             path_x.append(round(x, 1))
             path_y.append(round(y, 1))

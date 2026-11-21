@@ -66,6 +66,7 @@ class ClipEdit(BaseModel):
     sub_offset: Optional[int] = None
     sub_speed: Optional[str] = None
     platform: Optional[str] = None
+    layout: Optional[str] = None
 
 
 # Лимиты загрузки: интерфейс проверяет 4 ГБ, но сервер обязан проверять сам.
@@ -124,6 +125,10 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
         raise HTTPException(400, "Неизвестная скорость субтитров")
     if "platform" in data and not platforms.is_known(data["platform"]):
         raise HTTPException(400, "Неизвестная площадка")
+    if "layout" in data:
+        from . import render as _render
+        if data["layout"] not in ("", *_render.STREAM_LAYOUTS):
+            raise HTTPException(400, "Неизвестный пресет кадра")
     if "sub_font" in data and not subtitles.font_exists(data["sub_font"]):
         raise HTTPException(400, "Шрифт не найден")
     if "sub_size" in data:

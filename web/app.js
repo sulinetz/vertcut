@@ -261,6 +261,7 @@ const state = {
     subOffset: 0,
     subSpeed: "calm",
     platform: "universal",
+    layout: "",
     cookies: "",
     fontTarget: "#fontSelect"
   }
@@ -382,6 +383,16 @@ function heroHTML() {
           <button data-val="auto" class="${o.mode === "auto" ? "active" : ""}">Умный кроп</button>
           <button data-val="blur" class="${o.mode === "blur" ? "active" : ""}">Размытый фон</button>
           <button data-val="crop" class="${o.mode === "crop" ? "active" : ""}">По центру</button>
+        </div>
+      </div>
+      <div class="opt">
+        ${optIcon("frame", "ico-purple")}
+        <span class="opt-label">Пресет стрима</span>
+        <div class="seg" data-group="layout">
+          <button data-val="" class="${!o.layout ? "active" : ""}">Выкл</button>
+          <button data-val="face_third" class="${o.layout === "face_third" ? "active" : ""}">Лицо · треть</button>
+          <button data-val="face_large" class="${o.layout === "face_large" ? "active" : ""}">Лицо · крупно</button>
+          <button data-val="band" class="${o.layout === "band" ? "active" : ""}">Полоса снизу</button>
         </div>
       </div>
       <div class="opt">
@@ -526,6 +537,7 @@ function heroOptions() {
     sub_offset: state.opts.subOffset,
     sub_speed: state.opts.subSpeed,
     platform: state.opts.platform,
+    layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
     language: "auto"
   };
@@ -1696,6 +1708,15 @@ function openEditor(clipId) {
               </select>
             </div>
             <div class="field">
+              <label>Пресет стрима</label>
+              <select id="edLayout">
+                <option value="" ${!s.layout ? "selected" : ""}>Выключен</option>
+                <option value="face_third" ${s.layout === "face_third" ? "selected" : ""}>Лицо · треть</option>
+                <option value="face_large" ${s.layout === "face_large" ? "selected" : ""}>Лицо · крупно</option>
+                <option value="band" ${s.layout === "band" ? "selected" : ""}>Полоса снизу</option>
+              </select>
+            </div>
+            <div class="field">
               <label>Формат</label>
               <select id="edAspect">
                 ${["9:16", "1:1", "16:9"].map((a) => `<option value="${a}" ${(s.aspect || "9:16") === a ? "selected" : ""}>${a}</option>`).join("")}
@@ -1834,6 +1855,7 @@ function openEditor(clipId) {
       aspect: $("#edAspect").value,
       mode: $("#edMode").value,
       platform: $("#edPlatform").value,
+      layout: $("#edLayout").value,
       subtitles: $("#edSubs").checked,
       uppercase: $("#edUpper").checked,
       show_hook: $("#edShowHook").checked,

@@ -32,6 +32,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "sub_offset": 0,
     "sub_speed": "calm",
     "platform": platforms.DEFAULT_PLATFORM,
+    "layout": "",
     "max_height": 1080,
     "segments": False,
     "force_hd": False,
@@ -76,6 +77,8 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["sub_speed"] = "calm"
     if not platforms.is_known(opts.get("platform")):
         opts["platform"] = platforms.DEFAULT_PLATFORM
+    if opts.get("layout") not in ("", *render.STREAM_LAYOUTS):
+        opts["layout"] = ""
     try:
         opts["sub_offset"] = max(-120, min(180, int(opts.get("sub_offset", 0))))
     except Exception:
@@ -203,7 +206,7 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "show_hook": opts["show_hook"], "focus_x": 0.5, "sub_size": opts["sub_size"],
         "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
         "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
-        "platform": opts["platform"],
+        "platform": opts["platform"], "layout": opts["layout"],
         "segments": bool(opts.get("segments")),
     }
 
@@ -451,7 +454,7 @@ def process_project(pid: str) -> None:
             "show_hook": opts["show_hook"], "focus_x": 0.5, "sub_size": opts["sub_size"],
             "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
             "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
-            "platform": opts["platform"],
+            "platform": opts["platform"], "layout": opts["layout"],
         }
         _check_cancel(pid)
         total = len(found)
@@ -569,6 +572,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             offset=int(settings.get("sub_offset", 0)),
             speed=settings.get("sub_speed", "calm"),
             platform=settings.get("platform", platforms.DEFAULT_PLATFORM),
+            bottom_reserve=(render.BAND_H if settings.get("layout") == "band" else 0),
         )
         ass_path = ass_dir / f"{clip['id']}.ass"
         ass_path.write_text(text, encoding="utf-8")
@@ -576,21 +580,44 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     out_path = out_dir / f"clip_{clip['idx'] + 1:02d}.mp4"
     crop_path = None
     mode = settings.get("mode", "auto")
-    if mode == "auto":
+    layout = settings.get("layout") or ""
+    if layout not in render.STREAM_LAYOUTS:
+        layout = ""
+    platform = settings.get("platform", "")
+    facecam: Optional[Dict[str, Any]] = None
+    exclude = avoid = None
+    crop_aspect = settings.get("aspect", "9:16")
+
+    if layout:
+        # Пресет стрима: находим врезку и не даём окну кадрирования её накрыть.
+        try:
+            facecam = reframe.detect_facecam(source, clip["start"], clip["end"])
+        except Exception:
+            facecam = None
+        if facecam:
+            exclude = (facecam["x"], facecam["y"],
+                       facecam["x"] + facecam["w"], facecam["y"] + facecam["h"])
+            avoid = exclude
+            crop_aspect = "27:32" if layout == "band" else "9:16"
+        else:
+            layout = ""
+
+    if mode == "auto" or layout:
         try:
             crop_path = reframe.build_crop_path(
-                source, clip["start"], clip["end"], aspect=settings.get("aspect", "9:16"))
+                source, clip["start"], clip["end"], aspect=crop_aspect,
+                exclude=exclude, avoid=avoid)
         except Exception:
             crop_path = None
         # если лиц почти нет (скринкаст, слайды) — сохраняем весь кадр на размытом фоне
-        if crop_path and crop_path.get("coverage", 1.0) < 0.18:
+        if not layout and crop_path and crop_path.get("coverage", 1.0) < 0.18:
             mode = "blur"
             crop_path = None
     render.render_clip(
         source, clip["start"], clip["end"], out_path, ass_path=ass_path,
         aspect=settings.get("aspect", "9:16"), mode=mode,
         focus_x=float(settings.get("focus_x", 0.5)), on_progress=on_progress,
-        crop_path=crop_path,
+        crop_path=crop_path, layout=layout, facecam=facecam, platform=platform,
     )
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"
     render.make_thumb(out_path, thumb_path, at=min(1.2, max(0.2, (clip["end"] - clip["start"]) * 0.15)))
@@ -615,7 +642,7 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
     if settings.get("segments"):
         raise RuntimeError("Клип собран в экономном режиме из фрагмента. Шаблон меняется до запуска нарезки.")
     for key in ("aspect", "mode", "subtitles", "accent", "uppercase", "show_hook", "focus_x",
-                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "platform"):
+                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "platform", "layout"):
         if key in payload and payload[key] is not None:
             settings[key] = payload[key]
     start = float(payload.get("start", clip["start"]))

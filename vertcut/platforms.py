@@ -75,11 +75,11 @@ def clamp_y(y: float, key: Optional[str], anchor: str = "bottom",
     return max(top_limit, min(y, bottom_limit))
 
 
-def bottom_text_y(key: Optional[str], gap: int = 60) -> int:
-    """Базовая линия субтитров снизу: над интерфейсом площадки."""
+def bottom_text_y(key: Optional[str], gap: int = 60, reserve: int = 0) -> int:
+    """Базовая линия субтитров снизу: над интерфейсом площадки и над панелью."""
     z = zones(key)
     # Даже без интерфейса не прижимаем текст к самому краю.
-    reserved = max(320, int(z["bottom"]) + gap)
+    reserved = max(320, int(z["bottom"]) + gap, int(reserve) + gap)
     return max(int(z["top"]) + 200, PLAY_H - reserved)
 
 

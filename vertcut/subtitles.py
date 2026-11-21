@@ -250,7 +250,7 @@ def _cues(words: List[Dict[str, Any]], max_chars: int = 32, max_words: int = 6,
     return cues
 
 
-def _pos_tag(position: str, offset: int, platform: str = "") -> str:
+def _pos_tag(position: str, offset: int, platform: str = "", reserve: int = 0) -> str:
     """Возвращает override-тег положения с учётом интерфейса площадки."""
     from . import platforms
 
@@ -263,7 +263,7 @@ def _pos_tag(position: str, offset: int, platform: str = "") -> str:
         x0, y0, _, y1 = platforms.safe_rect(platform)
         y = max(y0 + 120, min(y1 - 120, mid))
         return f"\\an5\\pos({PLAY_W // 2},{int(y)})"
-    y = platforms.bottom_text_y(platform) - offset
+    y = platforms.bottom_text_y(platform, reserve=reserve) - offset
     y = platforms.clamp_y(y, platform, anchor="bottom")
     return f"\\an2\\pos({PLAY_W // 2},{int(y)})"
 
@@ -366,7 +366,7 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               show_hook: bool = True, sub_size: int = 118, hook_size: int = 96,
               font: str = "montserrat",
               position: str = "bottom", offset: int = 0,
-              speed: str = "calm", platform: str = "") -> str:
+              speed: str = "calm", platform: str = "", bottom_reserve: int = 0) -> str:
     """Собирает ASS-файл для фрагмента. Тайминги слов абсолютные (от начала видео)."""
     accent_color = ACCENTS.get(accent, ACCENTS["yellow"])
     info = font_info(font)
@@ -384,7 +384,7 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
     )
     events: List[str] = []
     clip_len = max(0.1, clip_end - clip_start)
-    pos = _pos_tag(position, int(offset), platform)
+    pos = _pos_tag(position, int(offset), platform, int(bottom_reserve))
 
     local = []
     for w in words:

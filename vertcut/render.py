@@ -18,12 +18,55 @@ from .utils import MediaError, probe, run, subprocess_kwargs
 
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}
 
+# Пресеты для стримов: игра на весь кадр плюс врезка с лицом.
+STREAM_SIZES = {"face_third": 360, "face_large": 520, "face_huge": 640}
+STREAM_LAYOUTS = tuple(STREAM_SIZES) + ("band",)
+BAND_H = 640
+
 
 def _esc(path: Path) -> str:
     # экранирование для аргумента фильтра ffmpeg
     p = str(path).replace("\\", "/")
     p = p.replace(":", "\\:").replace("'", "\\'")
     return p
+
+
+def _stream_chain(w: int, h: int, crop_path: Optional[Dict[str, Any]],
+                  facecam: Dict[str, Any], layout: str, platform: str) -> str:
+    """Игра на весь кадр + врезка с лицом поверх (или полосой снизу)."""
+    from . import platforms
+
+    fx, fy = float(facecam["x"]), float(facecam["y"])
+    fw, fh = int(facecam["w"]), int(facecam["h"])
+    fx, fy = int(fx), int(fy)
+    sharp = ",unsharp=5:5:0.8:5:5:0.0"
+
+    if crop_path:
+        x_expr, y_expr = crop_expressions(crop_path)
+        cw = int(crop_path["crop_w"])
+        ch = int(crop_path["crop_h"])
+        base = (f"[0:v]crop={cw}:{ch}:x='{x_expr}':y='{y_expr}',"
+                f"scale={w}:{h if layout != 'band' else 1280}:flags=lanczos")
+    else:
+        base = f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+
+    if layout == "band":
+        face = (f"[0:v]crop={fw}:{fh}:{fx}:{fy},"
+                f"scale={w}:{BAND_H}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{BAND_H},setsar=1{sharp}[face]")
+        top = f"{base},pad={w}:{h}:0:0:black[top]"
+        return f"{face};{top};[top][face]overlay=0:{h - BAND_H}[base]"
+
+    size = STREAM_SIZES.get(layout, STREAM_SIZES["face_large"])
+    face_h = int(round(size * 0.78))
+    # Панель ставим сверху слева: внизу живут субтитры и интерфейс площадки.
+    z = platforms.zones(platform)
+    x = max(int(z["left"]), 24)
+    y = int(z["top"]) + 40
+    face = (f"[0:v]crop={fw}:{fh}:{fx}:{fy},"
+            f"scale={size}:{face_h}:flags=lanczos,setsar=1{sharp}[face]")
+    return (f"{face};{base},setsar=1[top];"
+            f"[top][face]overlay={x}:{y}[base]")
 
 
 def _bg_chain(w: int, h: int, focus_x: float = 0.5, sharpen: bool = False) -> str:
@@ -138,8 +181,12 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 mode: str = "blur", focus_x: float = 0.5,
                 on_progress: Optional[Callable[[float], None]] = None,
                 crf: int = 21, preset: str = "veryfast",
-                crop_path: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                crop_path: Optional[Dict[str, Any]] = None,
+                layout: str = "", facecam: Optional[Dict[str, Any]] = None,
+                platform: str = "") -> Dict[str, Any]:
     w, h = ASPECTS.get(aspect, ASPECTS["9:16"])
+    if layout in STREAM_LAYOUTS and facecam:
+        w, h = ASPECTS["9:16"]
     duration = max(0.4, clip_end - clip_start)
     info = probe(source)
     if info["height"] >= 1000:
@@ -147,7 +194,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         preset = "veryfast"
 
     sharpen = info["width"] < w * 0.75
-    if mode == "auto" and crop_path:
+    if layout in STREAM_LAYOUTS and facecam:
+        parts = [_stream_chain(w, h, crop_path, facecam, layout, platform)]
+    elif mode == "auto" and crop_path:
         sharpen = float(crop_path.get("crop_w", info["width"])) < w * 1.15
         parts = [_auto_chain(w, h, crop_path, sharpen)]
     elif mode == "blur":
