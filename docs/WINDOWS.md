@@ -1,10 +1,10 @@
-# ViralCut для Windows 10 и 11
+# VertCut для Windows 10 и 11
 
 ## Скачать и запустить
 
-1. Скачайте `ViralCut-1.2.1-windows-x64.zip` из раздела **Releases** на GitHub.
-2. Распакуйте архив в любую папку, например `C:\ViralCut`.
-3. Запустите `ViralCut.exe`.
+1. Скачайте `VertCut-1.2.1-windows-x64.zip` из раздела **Releases** на GitHub.
+2. Распакуйте архив в любую папку, например `C:\VertCut`.
+3. Запустите `VertCut.exe`.
 
 Сборка не подписана сертификатом, поэтому SmartScreen может показать предупреждение:
 **«Подробнее» → «Выполнить в любом случае»**. Это нормально для открытого проекта.
@@ -15,12 +15,12 @@
 
 ## Где лежат данные
 
-- Проекты, клипы, модель и логи: `%APPDATA%\ViralCut`
-- Сохранённые клипы (кнопка «Скачать»): `%USERPROFILE%\Downloads\ViralCut`
-- Лог: `%APPDATA%\ViralCut\app.log`
+- Проекты, клипы, модель и логи: `%APPDATA%\VertCut`
+- Сохранённые клипы (кнопка «Скачать»): `%USERPROFILE%\Downloads\VertCut`
+- Лог: `%APPDATA%\VertCut\app.log`
 
-Удалить программу можно простым удалением папки с `ViralCut.exe`; данные останутся
-в `%APPDATA%\ViralCut`, пока вы не удалите их вручную.
+Удалить программу можно простым удалением папки с `VertCut.exe`; данные останутся
+в `%APPDATA%\VertCut`, пока вы не удалите их вручную.
 
 ## Запуск из исходников (без сборки)
 
@@ -41,8 +41,8 @@ powershell -ExecutionPolicy Bypass -File build_windows.ps1
 ```
 
 Скрипт создаст `.venv-win`, поставит PyInstaller, скачает модель Whisper Small
-(если её нет), соберёт `dist\ViralCut\ViralCut.exe` и упакует
-`release\ViralCut-1.2.1-windows-x64.zip`.
+(если её нет), соберёт `dist\VertCut\VertCut.exe` и упакует
+`release\VertCut-1.2.1-windows-x64.zip`.
 
 Флаги:
 
@@ -64,7 +64,7 @@ macOS-архив для Apple Silicon собирается локально (`./
 ```bash
 git init
 git add .
-git commit -m "ViralCut 1.2.1"
+git commit -m "VertCut 1.2.1"
 git branch -M main
 git remote add origin https://github.com/<user>/<repo>.git
 git push -u origin main

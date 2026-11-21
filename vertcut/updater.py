@@ -5,9 +5,9 @@
 а не создавать нагрузку. Результат кешируется в `data/update.json`, поэтому
 офлайн-запуск ничего не ждёт и не падает.
 
-Что уходит наружу: только `GET /releases/latest` с User-Agent `ViralCut/<версия>`.
+Что уходит наружу: только `GET /releases/latest` с User-Agent `VertCut/<версия>`.
 Ни видео, ни пути, ни настройки не отправляются. Отключается переменной
-`VIRALCUT_UPDATE_CHECK=0` или через `POST /api/update/settings`.
+`VERTCUT_UPDATE_CHECK=0` или через `POST /api/update/settings`.
 """
 from __future__ import annotations
 
@@ -24,10 +24,12 @@ from ._version import __version__
 from .config import DATA_DIR
 
 STATE_FILE = DATA_DIR / "update.json"
-DEFAULT_API = "https://api.github.com/repos/vanwild11/viralcut/releases/latest"
-RELEASES_PAGE = "https://github.com/vanwild11/viralcut/releases/latest"
+# Локальная сборка VertCut: проверка обновлений выключена, пока не задан
+# собственный источник релизов через VERTCUT_UPDATE_URL.
+DEFAULT_API = os.environ.get("VERTCUT_UPDATE_URL", "").strip()
+RELEASES_PAGE = os.environ.get("VERTCUT_RELEASES_PAGE", "").strip()
 # Проверяем не чаще, чем раз в 6 часов; форс-запрос — по кнопке.
-TTL_SECONDS = float(os.environ.get("VIRALCUT_UPDATE_TTL", str(6 * 3600)))
+TTL_SECONDS = float(os.environ.get("VERTCUT_UPDATE_TTL", str(6 * 3600)))
 TIMEOUT_SECONDS = 5.0
 
 _CHECKING = threading.Lock()
@@ -36,7 +38,9 @@ _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$"
 
 
 def _env_enabled() -> bool:
-    return os.environ.get("VIRALCUT_UPDATE_CHECK", "1").strip().lower() not in (
+    if not DEFAULT_API:
+        return False
+    return os.environ.get("VERTCUT_UPDATE_CHECK", "1").strip().lower() not in (
         "0", "false", "no", "off")
 
 
@@ -118,7 +122,7 @@ def payload() -> Dict[str, Any]:
 
 def _fetch(url: str) -> Optional[Dict[str, Any]]:
     request = urllib.request.Request(url, headers={
-        "User-Agent": f"ViralCut/{__version__}",
+        "User-Agent": f"VertCut/{__version__}",
         "Accept": "application/vnd.github+json",
     })
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
@@ -142,7 +146,7 @@ def check(force: bool = False) -> Dict[str, Any]:
         if not force and checked_at and (time.time() - checked_at) < TTL_SECONDS:
             return payload()
         try:
-            release = _fetch(os.environ.get("VIRALCUT_UPDATE_URL") or DEFAULT_API) or {}
+            release = _fetch(DEFAULT_API) or {}
             tag = str(release.get("tag_name") or "").strip()
             prerelease = bool(release.get("prerelease"))
             draft = bool(release.get("draft"))

@@ -69,7 +69,7 @@ def hw_encoder() -> Optional[str]:
     """
     if "value" in _HW_CACHE:
         return _HW_CACHE["value"]
-    if os.environ.get("VIRALCUT_HW_ENCODE", "auto").strip().lower() in ("0", "false", "no", "off"):
+    if os.environ.get("VERTCUT_HW_ENCODE", "auto").strip().lower() in ("0", "false", "no", "off"):
         _HW_CACHE["value"] = None
         return None
     preferred = {"darwin": ["h264_videotoolbox"], "win32": ["h264_nvenc", "h264_qsv"],

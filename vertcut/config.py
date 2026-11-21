@@ -12,21 +12,27 @@ WEB_DIR = ROOT / "web"
 ASSETS_DIR = ROOT / "assets"
 FONTS_DIR = ASSETS_DIR / "fonts"
 
-DATA_DIR = Path(os.environ.get("VIRALCUT_DATA", ROOT / "data")).resolve()
+# Совместимость: старые переменные VIRALCUT_* продолжают работать,
+# если новая VERTCUT_* не задана.
+for _key in list(os.environ):
+    if _key.startswith("VIRALCUT_"):
+        os.environ.setdefault("VERTCUT_" + _key[len("VIRALCUT_"):], os.environ[_key])
+
+DATA_DIR = Path(os.environ.get("VERTCUT_DATA", ROOT / "data")).resolve()
 PROJECTS_DIR = DATA_DIR / "projects"
 MODELS_DIR = DATA_DIR / "models"
-DB_PATH = DATA_DIR / "viralcut.db"
+DB_PATH = DATA_DIR / "vertcut.db"
 
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Размер модели Whisper: tiny / base / small / medium / large-v3
-WHISPER_MODEL = os.environ.get("VIRALCUT_WHISPER", "small")
-WHISPER_LOCAL_DIR = os.environ.get("VIRALCUT_WHISPER_DIR", "")
-WHISPER_DEVICE = os.environ.get("VIRALCUT_DEVICE", "auto")
-WHISPER_COMPUTE = os.environ.get("VIRALCUT_COMPUTE", "int8")
+WHISPER_MODEL = os.environ.get("VERTCUT_WHISPER", "small")
+WHISPER_LOCAL_DIR = os.environ.get("VERTCUT_WHISPER_DIR", "")
+WHISPER_DEVICE = os.environ.get("VERTCUT_DEVICE", "auto")
+WHISPER_COMPUTE = os.environ.get("VERTCUT_COMPUTE", "int8")
 
-MAX_WORKERS = int(os.environ.get("VIRALCUT_WORKERS", "1"))
+MAX_WORKERS = int(os.environ.get("VERTCUT_WORKERS", "1"))
 
 _ffmpeg_cache: Optional[str] = None
 _ffmpeg_dir_cache: Optional[Path] = None
@@ -37,7 +43,7 @@ def ffmpeg() -> str:
     global _ffmpeg_cache
     if _ffmpeg_cache:
         return _ffmpeg_cache
-    env = os.environ.get("VIRALCUT_FFMPEG")
+    env = os.environ.get("VERTCUT_FFMPEG")
     if env and Path(env).exists():
         _ffmpeg_cache = env
         return env

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from viralcut import analyze, render, subtitles, utils  # noqa: E402
+from vertcut import analyze, render, subtitles, utils  # noqa: E402
 
 root = Path(__file__).resolve().parent.parent
 source = root / "data/test/source_long.mp4"

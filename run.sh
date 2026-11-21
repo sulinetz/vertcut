@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Запуск ViralCut: ./run.sh  (опционально --port 8765)
+# Запуск VertCut: ./run.sh  (опционально --port 8765)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -15,4 +15,4 @@ else
   PY=".venv/bin/python"
 fi
 
-exec "$PY" -m viralcut "$@"
+exec "$PY" -m vertcut "$@"

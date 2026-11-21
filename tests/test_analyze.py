@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from viralcut import analyze
+from vertcut import analyze
 
 
 def make_segment(sentences, step=0.32, pause=0.45, start_at=0.0):
@@ -168,7 +168,7 @@ class RetimeWordsTest(unittest.TestCase):
         ]
 
     def test_fixes_word_and_keeps_timing(self):
-        from viralcut import subtitles
+        from vertcut import subtitles
 
         out = subtitles.retime_words(self._words(), "мы нашли баг в экспорте")
         self.assertEqual([w["word"] for w in out], ["мы", "нашли", "баг", "в", "экспорте"])
@@ -176,7 +176,7 @@ class RetimeWordsTest(unittest.TestCase):
         self.assertAlmostEqual(out[2]["end"], 1.4, places=2)
 
     def test_inserted_words_get_time_slice(self):
-        from viralcut import subtitles
+        from vertcut import subtitles
 
         out = subtitles.retime_words(self._words(), "мы нашли баг в новом экспорте")
         self.assertEqual(len(out), 6)
@@ -184,14 +184,14 @@ class RetimeWordsTest(unittest.TestCase):
         self.assertGreaterEqual(out[4]["start"], out[3]["start"])
 
     def test_empty_text_means_no_subtitles(self):
-        from viralcut import subtitles
+        from vertcut import subtitles
 
         self.assertEqual(subtitles.retime_words(self._words(), "   "), [])
 
 
 class SrtExportTest(unittest.TestCase):
     def test_srt_has_timing_lines(self):
-        from viralcut import subtitles
+        from vertcut import subtitles
 
         words = [{"word": "Привет", "start": 1.0, "end": 1.4},
                  {"word": "мир.", "start": 1.5, "end": 2.0},

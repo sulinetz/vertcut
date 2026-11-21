@@ -40,18 +40,18 @@ ProgressCb = Optional[Callable[[float, str], None]]
 # --- параметры распознавания -------------------------------------------------
 
 # Beam-search вместо жадного декодирования: заметно меньше ошибок в словах.
-BEAM_SIZE = max(1, int(os.environ.get("VIRALCUT_WHISPER_BEAM", "5")))
+BEAM_SIZE = max(1, int(os.environ.get("VERTCUT_WHISPER_BEAM", "5")))
 # Сколько сомнительных сегментов перепроверять (0 — выключить).
-RECHECK_LIMIT = max(0, int(os.environ.get("VIRALCUT_WHISPER_RECHECK", "8")))
+RECHECK_LIMIT = max(0, int(os.environ.get("VERTCUT_WHISPER_RECHECK", "8")))
 # Батчевое декодирование: на 6-минутной записи 2.6× быстрее и точнее, потому что
 # faster-whisper режет аудио по VAD и подаёт пачки в модель вместо одного потока.
-BATCH_SIZE = max(1, int(os.environ.get("VIRALCUT_WHISPER_BATCH_SIZE", "8")))
-BATCH_MIN_SECONDS = float(os.environ.get("VIRALCUT_WHISPER_BATCH_MIN", "60"))
+BATCH_SIZE = max(1, int(os.environ.get("VERTCUT_WHISPER_BATCH_SIZE", "8")))
+BATCH_MIN_SECONDS = float(os.environ.get("VERTCUT_WHISPER_BATCH_MIN", "60"))
 # Порог уверенности, ниже которого сегмент считаем сомнительным.
-WEAK_LOGPROB = float(os.environ.get("VIRALCUT_WHISPER_WEAK_LOGP", "-0.62"))
+WEAK_LOGPROB = float(os.environ.get("VERTCUT_WHISPER_WEAK_LOGP", "-0.62"))
 # Подсказка для декодера: пунктуация, регистр и типичные для роликов слова.
-ASR_PROMPT = os.environ.get("VIRALCUT_WHISPER_PROMPT", (
-    "ViralCut, вертикальные клипы, субтитры, подкаст, интервью. "
+ASR_PROMPT = os.environ.get("VERTCUT_WHISPER_PROMPT", (
+    "VertCut, вертикальные клипы, субтитры, подкаст, интервью. "
     "Русская речь с пунктуацией; имена и термины пишутся так же, как в оригинале."
 ))
 
@@ -389,11 +389,11 @@ def transcribe(media: Path, workdir: Path, language: Optional[str] = None,
 
     # Чистим звук: убираем низкочастотный гул и шипение, выравниваем громкость.
     wav = utils.extract_asr_audio(media, workdir / "audio16k.wav")
-    chunk_seconds = max(120, int(os.environ.get("VIRALCUT_WHISPER_CHUNK", "600")))
-    trigger = max(chunk_seconds, int(os.environ.get("VIRALCUT_WHISPER_CHUNK_MIN", "1800")))
+    chunk_seconds = max(120, int(os.environ.get("VERTCUT_WHISPER_CHUNK", "600")))
+    trigger = max(chunk_seconds, int(os.environ.get("VERTCUT_WHISPER_CHUNK_MIN", "1800")))
     long_audio = duration > trigger
     batched = (duration >= BATCH_MIN_SECONDS
-               and os.environ.get("VIRALCUT_WHISPER_BATCH", "1").strip() not in ("0", "false", "no", "off"))
+               and os.environ.get("VERTCUT_WHISPER_BATCH", "1").strip() not in ("0", "false", "no", "off"))
     model = _get_model(long_audio=long_audio)
     spans: List[tuple[Path, float, float]] = [(wav, 0.0, duration)]
     chunks_folder: Optional[Path] = None

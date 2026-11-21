@@ -1,16 +1,16 @@
-"""Сборка ViralCut для macOS (Apple Silicon) и Windows 10/11 (x64)."""
+"""Сборка VertCut для macOS (Apple Silicon) и Windows 10/11 (x64)."""
 import re as _re
 from pathlib import Path as _Path
 
 
 def _read_version() -> str:
-    """Версия берётся из viralcut/_version.py — единый источник истины.
+    """Версия берётся из vertcut/_version.py — единый источник истины.
 
     PyInstaller исполняет spec без `__file__`, поэтому берём SPECPATH, который
     он выставляет сам (каталог спецификации = корень проекта).
     """
     base = _Path(globals().get("SPECPATH") or ".")
-    source = base / "viralcut" / "_version.py"
+    source = base / "vertcut" / "_version.py"
     try:
         match = _re.search(r'__version__\s*=\s*"([^"]+)"', source.read_text(encoding="utf-8"))
     except OSError:
@@ -116,7 +116,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="ViralCut",
+    name="VertCut",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -124,7 +124,7 @@ exe = EXE(
     console=False,
     argv_emulation=False,
     disable_windowed_traceback=False,
-    icon="assets/ViralCut.ico" if IS_WIN else None,
+    icon="assets/VertCut.ico" if IS_WIN else None,
 )
 
 coll = COLLECT(
@@ -134,24 +134,24 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="ViralCut",
+    name="VertCut",
 )
 
 if IS_MAC:
     app = BUNDLE(
         coll,
-        name="ViralCut.app",
-        icon="assets/ViralCut.icns",
-        bundle_identifier="com.viralcut.app",
+        name="VertCut.app",
+        icon="assets/VertCut.icns",
+        bundle_identifier="com.vertcut.app",
         version=_APP_VERSION,
         info_plist={
-            "CFBundleDisplayName": "ViralCut",
+            "CFBundleDisplayName": "VertCut",
             "CFBundleShortVersionString": _APP_VERSION,
             "CFBundleVersion": _APP_VERSION,
             "LSMinimumSystemVersion": "11.0",
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,
             "LSApplicationCategoryType": "public.app-category.video",
-            "NSHumanReadableCopyright": "ViralCut",
+            "NSHumanReadableCopyright": "VertCut",
         },
     )

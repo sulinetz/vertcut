@@ -1,9 +1,9 @@
-"""Точка входа настольного ViralCut для macOS и Windows.
+"""Точка входа настольного VertCut для macOS и Windows.
 
 Поднимает локальный сервер в фоновом потоке и открывает окно WebView
 (WKWebView на macOS, EdgeChromium/WebView2 на Windows).
 Данные (проекты, модель, БД) хранятся в папке приложения:
-macOS — ~/Library/Application Support/ViralCut, Windows — %APPDATA%\\ViralCut.
+macOS — ~/Library/Application Support/VertCut, Windows — %APPDATA%\\VertCut.
 """
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict
 
-APP_NAME = "ViralCut"
+APP_NAME = "VertCut"
 
-# при запуске из исходников (python desktop/main.py) пакет viralcut лежит рядом
+# при запуске из исходников (python desktop/main.py) пакет vertcut лежит рядом
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -96,20 +96,20 @@ class DesktopApi:
         self.data_dir = data_dir
 
     def _downloads(self) -> Path:
-        folder = downloads_dir() / "ViralCut"
+        folder = downloads_dir() / "VertCut"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
     @staticmethod
     def _ask_enabled() -> bool:
-        return os.environ.get("VIRALCUT_ASK_SAVE", "1") != "0"
+        return os.environ.get("VERTCUT_ASK_SAVE", "1") != "0"
 
     def _ask_target(self, suggested: str):
         """Диалог «Сохранить как»: сразу в системной папке «Загрузки».
 
         Возвращает Path, None (пользователь закрыл диалог) или "unavailable",
         когда окно ещё не готово/платформа не умеет диалог — тогда сохраняем
-        в Загрузки/ViralCut без вопроса.
+        в Загрузки/VertCut без вопроса.
         """
         try:
             import webview
@@ -159,7 +159,7 @@ class DesktopApi:
             pass
 
     def save_clip(self, clip_id: str) -> Dict[str, Any]:
-        from viralcut import db
+        from vertcut import db
 
         clip = db.get_clip(clip_id)
         if not clip or not clip.get("path"):
@@ -168,7 +168,7 @@ class DesktopApi:
         if not src.exists():
             return {"ok": False, "error": "Файл клипа не найден на диске"}
         name = f"{clip.get('idx', 0) + 1:02d}_{self._safe(clip.get('title') or 'clip')}.mp4"
-        # VIRALCUT_ASK_SAVE=0 — сохранять молча в Загрузки/ViralCut (пакетный экспорт).
+        # VERTCUT_ASK_SAVE=0 — сохранять молча в Загрузки/VertCut (пакетный экспорт).
         target = self._ask_target(name) if self._ask_enabled() else "unavailable"
         if target is None:
             return {"ok": False, "cancelled": True}
@@ -183,18 +183,18 @@ class DesktopApi:
         return {"ok": True, "path": str(dest), "folder": str(dest.parent)}
 
     def save_zip(self, project_id: str) -> Dict[str, Any]:
-        from viralcut import db, pipeline
-        from viralcut.config import PROJECTS_DIR
+        from vertcut import db, pipeline
+        from vertcut.config import PROJECTS_DIR
 
         project = db.get_project(project_id)
         if not project:
             return {"ok": False, "error": "Проект не найден"}
-        archive = PROJECTS_DIR / project_id / f"viralcut_{project_id}.zip"
+        archive = PROJECTS_DIR / project_id / f"vertcut_{project_id}.zip"
         try:
             pipeline.export_zip(project_id, archive)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)[:300]}
-        name = f"viralcut_{self._safe(project.get('title') or 'clips')}.zip"
+        name = f"vertcut_{self._safe(project.get('title') or 'clips')}.zip"
         target = self._ask_target(name) if self._ask_enabled() else "unavailable"
         if target is None:
             return {"ok": False, "cancelled": True}
@@ -224,7 +224,7 @@ class DesktopApi:
             return {"ok": False, "error": str(exc)[:200]}
 
     def open_project_folder(self, project_id: str) -> Dict[str, Any]:
-        from viralcut.config import PROJECTS_DIR
+        from vertcut.config import PROJECTS_DIR
 
         folder = PROJECTS_DIR / project_id / "clips"
         if not folder.exists():
@@ -242,7 +242,7 @@ class DesktopApi:
 
 
 def default_data_dir() -> Path:
-    env = os.environ.get("VIRALCUT_DATA")
+    env = os.environ.get("VERTCUT_DATA")
     if env:
         return Path(env).expanduser().resolve()
     if IS_WINDOWS:
@@ -355,8 +355,8 @@ def start_pot_provider(data_dir: Path, vendor: Path, log) -> "subprocess.Popen |
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=1) as resp:
                     if resp.status == 200:
-                        os.environ["VIRALCUT_POT_URL"] = f"http://127.0.0.1:{port}"
-                        os.environ["VIRALCUT_NODE"] = str(node)
+                        os.environ["VERTCUT_POT_URL"] = f"http://127.0.0.1:{port}"
+                        os.environ["VERTCUT_NODE"] = str(node)
                         print(f"POT provider: http://127.0.0.1:{port}", flush=True)
                         return proc
             except Exception:
@@ -370,7 +370,7 @@ def start_pot_provider(data_dir: Path, vendor: Path, log) -> "subprocess.Popen |
 
 def setup_paths(data_dir: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["VIRALCUT_DATA"] = str(data_dir)
+    os.environ["VERTCUT_DATA"] = str(data_dir)
     os.environ.setdefault("XDG_CACHE_HOME", str(data_dir / "cache"))
     if getattr(sys, "frozen", False):
         bundle = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -378,7 +378,7 @@ def setup_paths(data_dir: Path) -> None:
             sys.path.insert(0, str(bundle))
         bundled_model = bundle / "models" / "whisper-small"
         if (bundled_model / "model.bin").is_file():
-            os.environ["VIRALCUT_WHISPER_DIR"] = str(bundled_model)
+            os.environ["VERTCUT_WHISPER_DIR"] = str(bundled_model)
 
 
 def _acquire_instance_lock(data_dir: Path):
@@ -411,7 +411,7 @@ def main() -> None:
     lock = _acquire_instance_lock(data_dir)
     if lock is None:
         try:
-            print("ViralCut уже запущен — второй экземпляр не нужен", flush=True)
+            print("VertCut уже запущен — второй экземпляр не нужен", flush=True)
         except Exception:
             pass
         return
@@ -454,9 +454,9 @@ def main() -> None:
 
         import uvicorn
 
-        from viralcut.main import app as fastapi_app
+        from vertcut.main import app as fastapi_app
 
-        port = int(os.environ.get("VIRALCUT_PORT") or free_port())
+        port = int(os.environ.get("VERTCUT_PORT") or free_port())
         config = uvicorn.Config(
             fastapi_app,
             host="127.0.0.1",
@@ -466,7 +466,7 @@ def main() -> None:
             lifespan="on",
         )
         server = uvicorn.Server(config)
-        thread = threading.Thread(target=server.run, name="viralcut-http", daemon=True)
+        thread = threading.Thread(target=server.run, name="vertcut-http", daemon=True)
         thread.start()
 
         if not wait_health(port):
@@ -475,7 +475,7 @@ def main() -> None:
         print(f"server: http://127.0.0.1:{port}", flush=True)
         url = f"http://127.0.0.1:{port}/"
 
-        if os.environ.get("VIRALCUT_HEADLESS"):
+        if os.environ.get("VERTCUT_HEADLESS"):
             print("headless mode", flush=True)
             while True:
                 time.sleep(1)
@@ -495,7 +495,7 @@ def main() -> None:
             window.events.closing += shutdown
         except Exception:
             pass
-        auto_close = os.environ.get("VIRALCUT_AUTOCLOSE")
+        auto_close = os.environ.get("VERTCUT_AUTOCLOSE")
         if auto_close:
             threading.Timer(float(auto_close), window.destroy).start()
         webview.start()

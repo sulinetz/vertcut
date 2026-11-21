@@ -1,4 +1,4 @@
-"""FastAPI-приложение ViralCut."""
+"""FastAPI-приложение VertCut."""
 from __future__ import annotations
 
 import os
@@ -72,7 +72,7 @@ ALLOWED_UPLOAD_SUFFIXES = {
     ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".ts", ".mts", ".m2ts",
     ".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac",
 }
-MAX_UPLOAD_BYTES = int(float(os.environ.get("VIRALCUT_MAX_UPLOAD_GB", "4")) * 1024 ** 3)
+MAX_UPLOAD_BYTES = int(float(os.environ.get("VERTCUT_MAX_UPLOAD_GB", "4")) * 1024 ** 3)
 MAX_FONT_BYTES = 24 * 1024 * 1024
 
 
@@ -87,7 +87,7 @@ async def _lifespan(_app: FastAPI):
 
 # CORS не нужен: страница отдаётся с того же origin, что и API. Без него чужая
 # вкладка в браузере не может дёргать локальный сервер (SSRF/забивка диска).
-app = FastAPI(title="ViralCut", version=__version__, lifespan=_lifespan)
+app = FastAPI(title="VertCut", version=__version__, lifespan=_lifespan)
 
 
 @app.middleware("http")
@@ -319,7 +319,7 @@ async def upload(file: UploadFile = File(...)) -> Dict[str, Any]:
                     raise HTTPException(
                         413,
                         f"Файл больше {size_hint} — загрузите фрагмент короче "
-                        "или поднимите VIRALCUT_MAX_UPLOAD_GB",
+                        "или поднимите VERTCUT_MAX_UPLOAD_GB",
                     )
                 fh.write(chunk)
     except HTTPException:
@@ -480,12 +480,12 @@ def project_zip(pid: str) -> FileResponse:
     project = db.get_project(pid)
     if not project:
         raise HTTPException(404, "Проект не найден")
-    dest = PROJECTS_DIR / pid / f"viralcut_{pid}.zip"
+    dest = PROJECTS_DIR / pid / f"vertcut_{pid}.zip"
     try:
         pipeline.export_zip(pid, dest)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, str(exc)) from exc
-    return FileResponse(dest, filename="viralcut_clips.zip", media_type="application/zip")
+    return FileResponse(dest, filename="vertcut_clips.zip", media_type="application/zip")
 
 
 @app.get("/")

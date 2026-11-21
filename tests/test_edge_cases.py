@@ -12,7 +12,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-FF = Path("viralcut-studio/dist/ViralCutStudio/_internal/imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-v9.0")
+FF = Path("vertcut-studio/dist/VertCutStudio/_internal/imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-v9.0")
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8863"
 
 

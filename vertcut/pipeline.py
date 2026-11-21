@@ -524,7 +524,7 @@ def _render_workers() -> int:
     Один ffmpeg занимает ~3 ядра, поэтому на 8–10 ядрах это 2–3 рендера: суммарно
     в 1.5–2 раза быстрее, а машина остаётся отзывчивой.
     """
-    raw = os.environ.get("VIRALCUT_RENDER_WORKERS")
+    raw = os.environ.get("VERTCUT_RENDER_WORKERS")
     if raw:
         try:
             return max(1, min(8, int(raw)))

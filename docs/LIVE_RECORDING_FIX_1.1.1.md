@@ -1,7 +1,7 @@
 # Почему запись эфира висела 15 минут без клипов — разбор и исправление (1.1.1)
 
-Дата: 2026-11-21. Затронуты `viralcut/live.py`, `viralcut/db.py`, `viralcut/jobs.py`,
-`viralcut/transcribe.py`, `web/app.js`.
+Дата: 2026-11-21. Затронуты `vertcut/live.py`, `vertcut/db.py`, `vertcut/jobs.py`,
+`vertcut/transcribe.py`, `web/app.js`.
 
 ## Симптомы
 
@@ -102,7 +102,7 @@ MPEG-TS (HLS v3) — файла нет, и ffmpeg падал с `No such file or
 «Подключаюсь к эфиру…». Обновление происходило только когда появлялся первый клип
 (`clips.length` менялся), то есть через 3–5 минут.
 
-**Доказательство:** 16:33:41 в `viralcut.db` — `stage="Запись · 1 мин"`,
+**Доказательство:** 16:33:41 в `vertcut.db` — `stage="Запись · 1 мин"`,
 `live_duration=82.2`, `live_bytes=67 МБ`, а в окне — «Подключаюсь к эфиру…».
 
 **Исправлено:**

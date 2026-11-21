@@ -1,4 +1,4 @@
-/* ViralCut — клиент */
+/* VertCut — клиент */
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -425,15 +425,6 @@ function heroHTML() {
         </select>
       </div>
     </div>
-
-    <a class="tg-hero" href="https://t.me/ivanAI22" data-external="https://t.me/ivanAI22" target="_blank" rel="noopener">
-      <span class="tg-ico">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.7 3.4 2.9 11.2c-.9.3-.9 1.5 0 1.8l4.6 1.6 1.7 5.4c.2.7 1.1.9 1.6.3l2.4-2.6 4.5 3.3c.6.4 1.5.1 1.7-.6l3-15.2c.2-.9-.7-1.6-1.5-1.3zM9.4 14.1l8.6-5.5-6.8 7-.2 3.1-1.6-4.6z"/></svg>
-      </span>
-      <span>Обновления и примеры клипов — в Telegram</span>
-      <b>@ivanAI22</b>
-      <span class="tg-arrow">↗</span>
-    </a>
   </section>`;
 }
 
@@ -1958,7 +1949,11 @@ function renderUpdate(data) {
     card.hidden = true;
     return;
   }
-  const url = data.url || "https://github.com/vanwild11/viralcut/releases/latest";
+  const url = data.url || "";
+  if (!url) {
+    card.hidden = true;
+    return;
+  }
   card.href = url;
   card.setAttribute("data-external", url);
   $("#updateTitle").textContent = `Доступна версия ${data.latest}`;

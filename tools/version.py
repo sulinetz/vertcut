@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Печатает версию приложения из единого источника — `viralcut/_version.py`.
+"""Печатает версию приложения из единого источника — `vertcut/_version.py`.
 
 Используется сборкой (build_dmg.sh), CI и релизными скриптами, чтобы номер
 версии не расходился по файлам.
@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-VERSION_FILE = Path(__file__).resolve().parent.parent / "viralcut" / "_version.py"
+VERSION_FILE = Path(__file__).resolve().parent.parent / "vertcut" / "_version.py"
 
 
 def main() -> int:

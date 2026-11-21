@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data/test/out"
 OUT.mkdir(parents=True, exist_ok=True)
-BASE = os.environ.get("VIRALCUT_URL", "http://127.0.0.1:8765")
+BASE = os.environ.get("VERTCUT_URL", "http://127.0.0.1:8765")
 PROJECT = sys.argv[1] if len(sys.argv) > 1 else ""
 
 report = {"console_errors": [], "page_errors": [], "checks": {}}

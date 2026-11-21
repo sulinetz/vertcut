@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Сборка ViralCut.app (macOS, Apple Silicon)
+# Сборка VertCut.app (macOS, Apple Silicon)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,13 +18,13 @@ fi
 # и остаётся воспроизводимой на любой машине и в CI.
 export PYINSTALLER_CONFIG_DIR="$PWD/build/pyinstaller-config"
 mkdir -p "$PYINSTALLER_CONFIG_DIR"
-PYTHONPYCACHEPREFIX="$PWD/.pycache" "$PY" -m PyInstaller ViralCut.spec --noconfirm --clean
+PYTHONPYCACHEPREFIX="$PWD/.pycache" "$PY" -m PyInstaller VertCut.spec --noconfirm --clean
 
-APP="dist/ViralCut.app"
+APP="dist/VertCut.app"
 
 echo "Подписываю ad-hoc…"
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP" && echo "Подпись в порядке"
 
-du -sh "dist/ViralCut.app"
-echo "Готово: dist/ViralCut.app"
+du -sh "dist/VertCut.app"
+echo "Готово: dist/VertCut.app"

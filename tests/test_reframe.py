@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from viralcut import reframe
+from vertcut import reframe
 
 STOCK = Path("docs/promo/live-action/stock")
 

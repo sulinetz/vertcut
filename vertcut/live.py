@@ -21,13 +21,13 @@ from .errors import Cancelled
 
 # Первое окно короче остальных: первый клип появляется через несколько минут,
 # а не после полного пятиминутного окна.
-WINDOW_SECONDS = max(60, int(os.environ.get("VIRALCUT_LIVE_WINDOW", "300")))
-FIRST_WINDOW_SECONDS = max(30, int(os.environ.get("VIRALCUT_LIVE_FIRST_WINDOW", "120")))
+WINDOW_SECONDS = max(60, int(os.environ.get("VERTCUT_LIVE_WINDOW", "300")))
+FIRST_WINDOW_SECONDS = max(30, int(os.environ.get("VERTCUT_LIVE_FIRST_WINDOW", "120")))
 MIN_TAIL_SECONDS = 8.0
 POLL_SECONDS = 1.5
-OFFLINE_RETRY_SECONDS = max(5.0, float(os.environ.get("VIRALCUT_LIVE_OFFLINE_RETRY", "30")))
+OFFLINE_RETRY_SECONDS = max(5.0, float(os.environ.get("VERTCUT_LIVE_OFFLINE_RETRY", "30")))
 MAX_BACKOFF_SECONDS = 30.0
-SEGMENT_WORKERS = max(1, min(8, int(os.environ.get("VIRALCUT_LIVE_DOWNLOAD_WORKERS", "4"))))
+SEGMENT_WORKERS = max(1, min(8, int(os.environ.get("VERTCUT_LIVE_DOWNLOAD_WORKERS", "4"))))
 SEGMENT_BATCH = 12
 AD_MARKERS = re.compile(
     r"twitch-stitched-ad|SCTE35|CUE-OUT|CUE-IN|X-TV-TWITCH-AD|stitched-ad|EXT-X-CUE-OUT",
@@ -93,7 +93,7 @@ def _hls_url(url: str, browser: Optional[str] = None) -> str:
 
 
 def _http_get(url: str, timeout: float = 25.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "ViralCut/1.1",
+    req = urllib.request.Request(url, headers={"User-Agent": "VertCut/1.1",
                                                "Accept": "*/*"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()

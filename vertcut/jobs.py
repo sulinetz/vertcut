@@ -16,7 +16,7 @@ _lock = threading.Lock()
 # Каждый эфир — отдельный поток. Раньше стримы шли через пул на 3 места, и
 # несколько «ждущих эфир» записей навсегда занимали очередь: следующая запись
 # висела на «Запись · подключение», хотя ничего не начиналось.
-MAX_STREAMS = max(1, int(os.environ.get("VIRALCUT_MAX_STREAMS", "6")))
+MAX_STREAMS = max(1, int(os.environ.get("VERTCUT_MAX_STREAMS", "6")))
 _streams: Dict[str, threading.Thread] = {}
 _streams_lock = threading.Lock()
 

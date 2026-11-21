@@ -4,9 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 VERSION="$(python3 tools/version.py)"
-NAME="ViralCut-${VERSION}-macOS-arm64"
+NAME="VertCut-${VERSION}-macOS-arm64"
 
-APP="dist/ViralCut.app"
+APP="dist/VertCut.app"
 [ -d "$APP" ] || { echo "Сначала соберите приложение: ./build_app.sh"; exit 1; }
 
 # ZIP — универсальный вариант, сохраняет подпись и права
@@ -20,9 +20,9 @@ mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 
-if hdiutil create -volname "ViralCut" -srcfolder "$STAGE" -ov -format UDZO \
-    "dist/ViralCut-${VERSION}.dmg" >/dev/null 2>&1; then
-  echo "DMG: dist/ViralCut-${VERSION}.dmg"
+if hdiutil create -volname "VertCut" -srcfolder "$STAGE" -ov -format UDZO \
+    "dist/VertCut-${VERSION}.dmg" >/dev/null 2>&1; then
+  echo "DMG: dist/VertCut-${VERSION}.dmg"
 else
   echo "DMG создать не удалось (нет прав) — используйте ZIP."
 fi

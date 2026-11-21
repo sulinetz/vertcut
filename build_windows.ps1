@@ -1,4 +1,4 @@
-# Сборка ViralCut для Windows 10/11 (x64) в один exe-каталог + ZIP.
+# Сборка VertCut для Windows 10/11 (x64) в один exe-каталог + ZIP.
 # Запуск:  powershell -ExecutionPolicy Bypass -File build_windows.ps1
 param(
     [string]$Version = "1.2.2",
@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-Write-Host "[ViralCut] Python..." -ForegroundColor Cyan
+Write-Host "[VertCut] Python..." -ForegroundColor Cyan
 $py = $null
 foreach ($candidate in @("py -3.12", "python")) {
     try {
@@ -20,7 +20,7 @@ foreach ($candidate in @("py -3.12", "python")) {
 if (-not $py) { throw "Не найден Python 3.12. Установите с https://www.python.org/downloads/windows/" }
 
 if (-not (Test-Path ".venv-win\Scripts\python.exe")) {
-    Write-Host "[ViralCut] создаю .venv-win..." -ForegroundColor Cyan
+    Write-Host "[VertCut] создаю .venv-win..." -ForegroundColor Cyan
     & cmd /c "$py -m venv .venv-win"
 }
 $venvPy = Join-Path $PSScriptRoot ".venv-win\Scripts\python.exe"
@@ -30,7 +30,7 @@ $venvPip = Join-Path $PSScriptRoot ".venv-win\Scripts\pip.exe"
 & $venvPip install -r requirements-desktop.txt pyinstaller
 
 if (-not $SkipModel -and -not (Test-Path "build\whisper-small\model.bin")) {
-    Write-Host "[ViralCut] скачиваю Whisper Small (один раз)..." -ForegroundColor Cyan
+    Write-Host "[VertCut] скачиваю Whisper Small (один раз)..." -ForegroundColor Cyan
     try {
         & $venvPy -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small', local_dir='build/whisper-small', allow_patterns=['model.bin','config.json','tokenizer.json','vocabulary.txt'])"
     } catch {
@@ -38,17 +38,17 @@ if (-not $SkipModel -and -not (Test-Path "build\whisper-small\model.bin")) {
     }
 }
 
-Write-Host "[ViralCut] PyInstaller..." -ForegroundColor Cyan
-& (Join-Path $PSScriptRoot ".venv-win\Scripts\pyinstaller.exe") ViralCut.spec --noconfirm --clean
+Write-Host "[VertCut] PyInstaller..." -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot ".venv-win\Scripts\pyinstaller.exe") VertCut.spec --noconfirm --clean
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller завершился с ошибкой" }
 
 $outDir = Join-Path $PSScriptRoot "release"
 New-Item -ItemType Directory -Force $outDir | Out-Null
-$zip = Join-Path $outDir "ViralCut-$Version-windows-x64.zip"
+$zip = Join-Path $outDir "VertCut-$Version-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Write-Host "[ViralCut] упаковываю $zip..." -ForegroundColor Cyan
-Compress-Archive -Path "dist\ViralCut" -DestinationPath $zip -CompressionLevel Optimal
+Write-Host "[VertCut] упаковываю $zip..." -ForegroundColor Cyan
+Compress-Archive -Path "dist\VertCut" -DestinationPath $zip -CompressionLevel Optimal
 
 Write-Host ""
 Write-Host "Готово: $zip" -ForegroundColor Green
-Write-Host "Запуск: dist\ViralCut\ViralCut.exe"
+Write-Host "Запуск: dist\VertCut\VertCut.exe"

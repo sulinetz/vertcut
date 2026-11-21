@@ -46,15 +46,15 @@ jobs:
         run: python -m unittest tests.test_analyze -v
 
       - name: Build
-        run: pyinstaller ViralCut.spec --noconfirm --clean
+        run: pyinstaller VertCut.spec --noconfirm --clean
 
       - name: Smoke test (headless HTTP)
         shell: pwsh
         run: |
-          $env:VIRALCUT_HEADLESS = "1"
-          $env:VIRALCUT_DATA = "$env:RUNNER_TEMP\vc-smoke"
-          $env:VIRALCUT_PORT = "8799"
-          $proc = Start-Process -FilePath "dist\ViralCut\ViralCut.exe" -PassThru
+          $env:VERTCUT_HEADLESS = "1"
+          $env:VERTCUT_DATA = "$env:RUNNER_TEMP\vc-smoke"
+          $env:VERTCUT_PORT = "8799"
+          $proc = Start-Process -FilePath "dist\VertCut\VertCut.exe" -PassThru
           $ok = $false
           for ($i = 0; $i -lt 80; $i++) {
             Start-Sleep -Milliseconds 500
@@ -64,19 +64,19 @@ jobs:
             } catch { }
           }
           if (-not $ok) {
-            if (Test-Path "$env:VIRALCUT_DATA\app.log") { Get-Content "$env:VIRALCUT_DATA\app.log" }
+            if (Test-Path "$env:VERTCUT_DATA\app.log") { Get-Content "$env:VERTCUT_DATA\app.log" }
             throw "Приложение не ответило на /api/health"
           }
           Stop-Process -Id $proc.Id -Force
 
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path dist\ViralCut -DestinationPath "ViralCut-${{ steps.version.outputs.value }}-windows-x64.zip"
+        run: Compress-Archive -Path dist\VertCut -DestinationPath "VertCut-${{ steps.version.outputs.value }}-windows-x64.zip"
 
       - name: Checksums
         shell: pwsh
         run: |
-          $zip = Get-ChildItem "ViralCut-*-windows-x64.zip"
+          $zip = Get-ChildItem "VertCut-*-windows-x64.zip"
           $hash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
           "$hash  $($zip.Name)" | Out-File -Encoding ascii SHA256SUMS-windows.txt
           Get-Content SHA256SUMS-windows.txt
@@ -85,7 +85,7 @@ jobs:
         with:
           name: windows-zip
           path: |
-            ViralCut-*-windows-x64.zip
+            VertCut-*-windows-x64.zip
             SHA256SUMS-windows.txt
 
   release:

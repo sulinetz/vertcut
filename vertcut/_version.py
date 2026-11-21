@@ -1,6 +1,6 @@
 """Единственный источник версии приложения.
 
-Версию читают `viralcut.__version__`, FastAPI-приложение, PyInstaller-spec и
+Версию читают `vertcut.__version__`, FastAPI-приложение, PyInstaller-spec и
 CI — чтобы они не расходились, меняем число только здесь.
 """
 __version__ = "1.4.1"

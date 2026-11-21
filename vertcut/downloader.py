@@ -115,7 +115,7 @@ def _clean_partials(dest_dir: Path) -> None:
 
 
 def _pot_enabled() -> bool:
-    return bool(os.environ.get("VIRALCUT_POT_URL") and os.environ.get("VIRALCUT_NODE"))
+    return bool(os.environ.get("VERTCUT_POT_URL") and os.environ.get("VERTCUT_NODE"))
 
 
 def _attempt(url: str, dest_dir: Path, fmt: str, clients: Optional[List[str]],
@@ -199,11 +199,11 @@ def _attempt(url: str, dest_dir: Path, fmt: str, clients: Optional[List[str]],
         if pot:
             youtube_args["fetch_pot"] = ["always"]
         opts["extractor_args"] = {"youtube": youtube_args}
-    if pot and os.environ.get("VIRALCUT_POT_URL"):
+    if pot and os.environ.get("VERTCUT_POT_URL"):
         opts.setdefault("extractor_args", {})["youtubepot-bgutilhttp"] = {
-            "base_url": [os.environ["VIRALCUT_POT_URL"]]}
-        if os.environ.get("VIRALCUT_NODE"):
-            opts["js_runtimes"] = {"node": {"path": os.environ["VIRALCUT_NODE"]}}
+            "base_url": [os.environ["VERTCUT_POT_URL"]]}
+        if os.environ.get("VERTCUT_NODE"):
+            opts["js_runtimes"] = {"node": {"path": os.environ["VERTCUT_NODE"]}}
     opts.update(_cookie_opts(browser))
 
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -315,11 +315,11 @@ def _youtube_info(url: str, browser: Optional[str], pot: bool,
         }
         if args:
             opts["extractor_args"] = {k: dict(v) for k, v in args.items()}
-        if pot and os.environ.get("VIRALCUT_POT_URL"):
+        if pot and os.environ.get("VERTCUT_POT_URL"):
             opts.setdefault("extractor_args", {})["youtubepot-bgutilhttp"] = {
-                "base_url": [os.environ["VIRALCUT_POT_URL"]]}
-            if os.environ.get("VIRALCUT_NODE"):
-                opts["js_runtimes"] = {"node": {"path": os.environ["VIRALCUT_NODE"]}}
+                "base_url": [os.environ["VERTCUT_POT_URL"]]}
+            if os.environ.get("VERTCUT_NODE"):
+                opts["js_runtimes"] = {"node": {"path": os.environ["VERTCUT_NODE"]}}
         opts.update(_cookie_opts(browser))
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -542,7 +542,7 @@ def is_direct_media(url: str) -> bool:
 
 def _pot_token(content_binding: str = "") -> Optional[str]:
     """Запрашивает GVS PO-token у локального провайдера."""
-    base = os.environ.get("VIRALCUT_POT_URL")
+    base = os.environ.get("VERTCUT_POT_URL")
     if not base:
         return None
     try:
@@ -577,7 +577,7 @@ def probe(url: str, browser: Optional[str] = None) -> Dict[str, Any]:
         # перебором клиентов, что и загрузка.
         info, _args, _label = _youtube_info(url, browser, _pot_enabled())
     else:
-        node = os.environ.get("VIRALCUT_NODE")
+        node = os.environ.get("VERTCUT_NODE")
         if node:
             opts["js_runtimes"] = {"node": {"path": node}}
         opts.update(_cookie_opts(browser))
@@ -731,13 +731,13 @@ def download_audio(url: str, dest_dir: Path, progress: ProgressCb = None,
         "ffmpeg_location": str(ffmpeg_bin_dir()),
         "socket_timeout": 30,
     }
-    if is_youtube(url) and _pot_enabled() and os.environ.get("VIRALCUT_POT_URL"):
+    if is_youtube(url) and _pot_enabled() and os.environ.get("VERTCUT_POT_URL"):
         opts["extractor_args"] = {
             "youtube": {"player_client": ["mweb", "web"], "fetch_pot": ["always"]},
-            "youtubepot-bgutilhttp": {"base_url": [os.environ["VIRALCUT_POT_URL"]]},
+            "youtubepot-bgutilhttp": {"base_url": [os.environ["VERTCUT_POT_URL"]]},
         }
-        if os.environ.get("VIRALCUT_NODE"):
-            opts["js_runtimes"] = {"node": {"path": os.environ["VIRALCUT_NODE"]}}
+        if os.environ.get("VERTCUT_NODE"):
+            opts["js_runtimes"] = {"node": {"path": os.environ["VERTCUT_NODE"]}}
     opts.update(_cookie_opts(browser))
     info = None
     for reconnect in range(2):
@@ -829,9 +829,9 @@ def download_section(url: str, dest_dir: Path, start: float, end: float,
             if _pot_enabled():
                 opts["extractor_args"] = {
                     "youtube": {"player_client": ["mweb", "web"], "fetch_pot": ["always"]},
-                    "youtubepot-bgutilhttp": {"base_url": [os.environ["VIRALCUT_POT_URL"]]},
+                    "youtubepot-bgutilhttp": {"base_url": [os.environ["VERTCUT_POT_URL"]]},
                 }
-                opts["js_runtimes"] = {"node": {"path": os.environ["VIRALCUT_NODE"]}}
+                opts["js_runtimes"] = {"node": {"path": os.environ["VERTCUT_NODE"]}}
             else:
                 opts["extractor_args"] = {"youtube": {"player_client": ["android", "tv"]}}
         opts.update(_cookie_opts(browser))

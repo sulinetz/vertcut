@@ -1,9 +1,9 @@
 import subprocess, sys
 from pathlib import Path
 sys.path.insert(0,'.')
-from viralcut import subtitles, render
-from viralcut.config import FONTS_DIR
-from viralcut.utils import probe
+from vertcut import subtitles, render
+from vertcut.config import FONTS_DIR
+from vertcut.utils import probe
 
 src = Path("data/test/face_src.mp4")
 out = Path("data/test/fonts"); out.mkdir(parents=True, exist_ok=True)

@@ -21,12 +21,12 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = Path(tempfile.mkdtemp(prefix="viralcut-selftest-"))
-os.environ["VIRALCUT_DATA"] = str(DATA)
+DATA = Path(tempfile.mkdtemp(prefix="vertcut-selftest-"))
+os.environ["VERTCUT_DATA"] = str(DATA)
 sys.path.insert(0, str(ROOT))
 
-from viralcut import analyze, db, live, pipeline, transcribe  # noqa: E402
-from viralcut.config import ffmpeg  # noqa: E402
+from vertcut import analyze, db, live, pipeline, transcribe  # noqa: E402
+from vertcut.config import ffmpeg  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -124,7 +124,7 @@ def test_fmp4_window() -> None:
     playlist.unlink(missing_ok=True)
     rc, wav = _extract(workdir, paths, "probe", 12)
     if rc == 0 and wav.exists():
-        from viralcut import utils
+        from vertcut import utils
         duration = utils.media_duration(wav)
         check("fMP4: окно извлекается целиком, а не первые секунды",
               duration > 10.0, f"{duration:.1f} с")
