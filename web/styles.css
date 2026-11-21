@@ -1382,3 +1382,27 @@ input[type="range"]::-webkit-slider-thumb {
 .seg button.active .aspect-ico {
   opacity: 1;
 }
+
+/* Выбранный файл на главном экране */
+.pending-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.16);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  color: #93c5fd;
+  font-size: 13px;
+  cursor: pointer;
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-file:hover {
+  background: rgba(59, 130, 246, 0.24);
+}
+.pending-file.hidden {
+  display: none;
+}

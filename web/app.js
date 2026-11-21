@@ -360,6 +360,7 @@ function heroHTML() {
       <span>или</span>
       <button class="link-btn" id="uploadBtn">загрузите видеофайлом</button>
       <span>· mp4, mov, webm · длинные подкасты и интервью</span>
+      <span id="pendingFile" class="pending-file hidden"></span>
     </div>
     <div class="hero-note">Twitch: VOD или клип. Прямой эфир — на вкладке «Прямой эфир» слева.</div>
 
@@ -533,6 +534,20 @@ function bindHero() {
   if (startBtn) startBtn.addEventListener("click", submitLink);
   const urlInput = $("#urlInput");
   if (urlInput) urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLink(); });
+  if (urlInput) urlInput.addEventListener("input", () => {
+    if (!urlInput.value.trim()) return;
+    state.pendingFile = null;
+    updatePendingChip();
+    const btn = $("#startBtn");
+    if (btn) btn.textContent = "Сделать нарезки";
+  });
+  const chip = $("#pendingFile");
+  if (chip) chip.addEventListener("click", () => {
+    state.pendingFile = null;
+    updatePendingChip();
+    const btn = $("#startBtn");
+    if (btn) btn.textContent = "Сделать нарезки";
+  });
   const uploadBtn = $("#uploadBtn");
   if (uploadBtn) uploadBtn.addEventListener("click", () => $("#fileInput").click());
 }
@@ -561,6 +576,7 @@ function heroOptions() {
 }
 
 async function submitLink() {
+  if (state.pendingFile) { startLocalFile(); return; }
   const input = $("#urlInput");
   const url = (input.value || "").trim();
   if (!url) { input.focus(); toast("Вставьте ссылку на видео", "err"); return; }
@@ -688,26 +704,56 @@ async function createFromProbe(height) {
   }
 }
 
-async function uploadFile(file) {
-  if (!file) return;
-  const openDraft = state.tmplDetail && state.tmplDetail.project
-    && state.tmplDetail.project.status === "draft" && state.tmplPid;
-  if (openDraft) {
-    state.pendingFile = file;
-    await openTemplate(state.tmplPid);
+function updatePendingChip() {
+  const chip = $("#pendingFile");
+  if (!chip) return;
+  if (!state.pendingFile) {
+    chip.classList.add("hidden");
+    chip.textContent = "";
     return;
   }
+  const mb = state.pendingFile.size / (1024 * 1024);
+  chip.textContent = `${state.pendingFile.name} · ${formatSize(Math.round(mb))} · убрать`;
+  chip.classList.remove("hidden");
+}
+
+function uploadFile(file) {
+  if (!file) return;
   if (file.size > 4 * 1024 * 1024 * 1024) { toast("Файл больше 4 ГБ", "err"); return; }
+  state.pendingFile = file;
+  const input = $("#urlInput");
+  if (input) input.value = "";
+  updatePendingChip();
+  const hint = $("#startBtn");
+  if (hint) hint.textContent = "Запустить нарезку";
+  toast("Файл выбран — настройте параметры и нажмите «Запустить нарезку»");
+}
+
+async function startLocalFile() {
+  const file = state.pendingFile;
+  const btn = $("#startBtn");
+  const label = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Загружаю'; }
   try {
     const project = await api("/api/projects/draft", {
       method: "POST",
       body: JSON.stringify({ title: file.name, options: heroOptions() })
     });
-    state.pendingFile = file;
+    const form = new FormData();
+    form.append("file", file);
+    await api(`/api/projects/${project.id}/upload`, { method: "POST", body: form });
+    await api(`/api/projects/${project.id}/start`, {
+      method: "POST",
+      body: JSON.stringify({ options: heroOptions() })
+    });
+    state.pendingFile = null;
+    updatePendingChip();
     await loadProjects();
-    openTemplate(project.id);
+    openProject(project.id);
+    toast("Файл загружен, идёт обработка");
   } catch (e) {
-    toast(e.message || "Ошибка создания проекта", "err");
+    toast(e.message || "Ошибка загрузки", "err");
+    if (btn) { btn.disabled = false; btn.textContent = label || "Запустить нарезку"; }
   }
 }
 

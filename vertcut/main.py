@@ -107,8 +107,12 @@ async def _static_cache_headers(request, call_next):
     """Шрифты и статика неизменяемы в пределах сессии — не перекачиваем их каждым опросом."""
     response = await call_next(request)
     path = request.url.path
-    if path.startswith(("/fonts/", "/userfonts/", "/static/")):
+    # Шрифты неизменяемы, а код интерфейса — нет: иначе правки не доезжают
+    # до WebView, который держит app.js в кэше.
+    if path.startswith(("/fonts/", "/userfonts/")):
         response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+    elif path.startswith("/static/") or path == "/":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 
