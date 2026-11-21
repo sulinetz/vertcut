@@ -4,6 +4,12 @@
 
 ## Скачать
 
+| Платформа | Файл |
+|---|---|
+| **Windows 10/11 x64** | [ViralCut-1.2.0-windows-x64.zip](https://github.com/vanwild11/viralcut/releases/download/v1.2.0/ViralCut-1.2.0-windows-x64.zip) |
+| **macOS 11+ Apple Silicon** | [ViralCut-1.2.0-macOS-arm64.zip](https://github.com/vanwild11/viralcut/releases/download/v1.2.0/ViralCut-1.2.0-macOS-arm64.zip) |
+
+
 **ViralCut-1.2.0-macOS-arm64.zip** — Apple Silicon (M1/M2/M3/M4), macOS 11+.
 
 **ViralCut-1.2.0-windows-x64.zip** — Windows 10/11 x64, нативный `ViralCut.exe`.
