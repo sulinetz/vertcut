@@ -387,9 +387,17 @@ async def upload_into_project(pid: str, file: UploadFile = File(...)) -> Dict[st
         db.update_project(pid, status="error", stage="Ошибка загрузки",
                           error=str(exc.detail)[:400])
         raise
+    try:
+        from . import utils
+
+        tracks = utils.subtitle_streams(target)
+    except Exception:  # noqa: BLE001
+        tracks = []
     db.update_project(pid, source=str(target), title=file.filename or project.get("title"),
                       status="review", stage="Видео готово · настройте шаблон",
                       progress=100, error=None)
+    if tracks:
+        db.merge_meta(pid, {"subtitle_tracks": tracks})
     return db.get_project(pid) or project
 
 
@@ -408,6 +416,41 @@ async def upload(file: UploadFile = File(...)) -> Dict[str, Any]:
     db.update_project(project["id"], source=str(target), title=file.filename)
     jobs.submit_prepare(project["id"])
     return db.get_project(project["id"]) or project
+
+
+SUBTITLE_SUFFIXES = {".srt", ".ass", ".ssa", ".vtt"}
+
+
+@app.post("/api/projects/{pid}/subtitles")
+async def upload_subtitles(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Приложить свои субтитры: текст возьмётся из файла вместо распознавания."""
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in SUBTITLE_SUFFIXES:
+        raise HTTPException(400, "Нужен файл .srt, .ass, .ssa или .vtt")
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Файл субтитров больше 10 МБ")
+    workdir = PROJECTS_DIR / pid
+    workdir.mkdir(parents=True, exist_ok=True)
+    for old in SUBTITLE_SUFFIXES:
+        (workdir / f"subtitles{old}").unlink(missing_ok=True)
+    target = workdir / f"subtitles{suffix}"
+    target.write_bytes(data)
+    try:
+        from . import utils
+
+        segments = utils.parse_subtitles(target)
+    except Exception as exc:  # noqa: BLE001
+        target.unlink(missing_ok=True)
+        raise HTTPException(400, f"Не удалось прочитать субтитры: {str(exc)[:120]}") from exc
+    if not segments:
+        target.unlink(missing_ok=True)
+        raise HTTPException(400, "В файле не нашлось реплик")
+    db.merge_meta(pid, {"subtitles_attached": len(segments)})
+    return {"ok": True, "segments": len(segments)}
 
 
 @app.get("/api/projects/{pid}")

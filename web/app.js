@@ -222,7 +222,9 @@ const DUR_PRESETS = {
   "15-30": { min: 15, max: 30, target: 22, label: "15–30 сек" },
   "20-45": { min: 20, max: 45, target: 32, label: "20–45 сек" },
   "30-60": { min: 30, max: 60, target: 42, label: "30–60 сек" },
-  "30-90": { min: 30, max: 90, target: 55, label: "30–90 сек" }
+  "30-90": { min: 30, max: 90, target: 55, label: "30–90 сек" },
+  "60-120": { min: 60, max: 120, target: 90, label: "1–2 мин" },
+  "120-180": { min: 120, max: 180, target: 150, label: "2–3 мин" }
 };
 
 const ASPECT_META = {
@@ -265,11 +267,13 @@ const state = {
   tmplAnim: null,
   tmplDetail: null,
   pendingFile: null,
+  pendingSubs: null,
   opts: {
     count: 10,
     dur: "20-45",
     aspect: "9:16",
     mode: "auto",
+    select: "smart",
     subtitles: true,
     accent: "yellow",
     subFont: "montserrat",
@@ -361,11 +365,25 @@ function heroHTML() {
       <button class="link-btn" id="uploadBtn">загрузите видеофайлом</button>
       <span>· mp4, mov, webm · длинные подкасты и интервью</span>
       <span id="pendingFile" class="pending-file hidden"></span>
+      <span>·</span>
+      <button class="link-btn" id="subsBtn">приложите субтитры</button>
+      <span id="pendingSubs" class="pending-file hidden"></span>
     </div>
     <div class="hero-note">Twitch: VOD или клип. Прямой эфир — на вкладке «Прямой эфир» слева.</div>
 
     <div class="group-title"><span>Параметры нарезки</span><span class="group-hint">всё можно поменять позже</span></div>
     <div class="options">
+      <div class="opt">
+        ${optIcon("count", "ico-cyan")}
+        <div>
+          <span class="opt-label">Что делать</span>
+          <span class="opt-hint">Умные моменты — ищет лучшие куски по речи. Просто порезать — равные части без анализа, быстрее.</span>
+        </div>
+        <div class="seg" data-group="select">
+          <button data-val="smart" class="${o.select === "smart" ? "active" : ""}">Умные моменты</button>
+          <button data-val="even" class="${o.select === "even" ? "active" : ""}">Просто порезать</button>
+        </div>
+      </div>
       <div class="opt">
         ${optIcon("count", "ico-purple")}
         <span class="opt-label">Сколько нарезок</span>
@@ -375,14 +393,20 @@ function heroHTML() {
       </div>
       <div class="opt">
         ${optIcon("duration", "ico-blue")}
-        <span class="opt-label">Длительность клипа</span>
+        <div>
+          <span class="opt-label">Длительность клипа</span>
+          <span class="opt-hint">Сколько секунд в одном ролике. Для «просто порезать» это длина равного куска.</span>
+        </div>
         <div class="seg" data-group="dur">
           ${Object.entries(DUR_PRESETS).map(([k, v]) => `<button data-val="${k}" class="${o.dur === k ? "active" : ""}">${v.label}</button>`).join("")}
         </div>
       </div>
       <div class="opt">
         ${optIcon("aspect", "ico-cyan")}
-        <span class="opt-label">Формат</span>
+        <div>
+          <span class="opt-label">Формат</span>
+          <span class="opt-hint">Вертикально — Shorts, Reels, TikTok. Квадрат — лента. Горизонтально — обычное видео.</span>
+        </div>
         <div class="seg" data-group="aspect">
           ${Object.entries(ASPECT_META).map(([a, m]) => `<button data-val="${a}" class="${o.aspect === a ? "active" : ""}" title="${m.hint}">${aspectIcon(a)}${m.short}</button>`).join("")}
         </div>
@@ -396,7 +420,10 @@ function heroHTML() {
       </div>
       <div class="opt">
         ${optIcon("frame", "ico-green")}
-        <span class="opt-label">Кадр</span>
+        <div>
+          <span class="opt-label">Кадр</span>
+          <span class="opt-hint">Умный кроп — следит за лицом и держит его в кадре. Размытый фон — весь кадр, поля размыты. По центру — просто центр.</span>
+        </div>
         <div class="seg" data-group="mode">
           <button data-val="auto" class="${o.mode === "auto" ? "active" : ""}">Умный кроп</button>
           <button data-val="blur" class="${o.mode === "blur" ? "active" : ""}">Размытый фон</button>
@@ -405,7 +432,10 @@ function heroHTML() {
       </div>
       <div class="opt">
         ${optIcon("frame", "ico-purple")}
-        <span class="opt-label">Пресет стрима</span>
+        <div>
+          <span class="opt-label">Пресет стрима</span>
+          <span class="opt-hint">Для видео с маленькой врезкой лица (стримы, реакции). Лицо выносится поверх кадра.</span>
+        </div>
         <div class="seg" data-group="layout">
           <button data-val="" class="${!o.layout ? "active" : ""}">Выкл</button>
           <button data-val="face_third" class="${o.layout === "face_third" ? "active" : ""}">Лицо · треть</button>
@@ -550,6 +580,13 @@ function bindHero() {
   });
   const uploadBtn = $("#uploadBtn");
   if (uploadBtn) uploadBtn.addEventListener("click", () => $("#fileInput").click());
+  const subsBtn = $("#subsBtn");
+  if (subsBtn) subsBtn.addEventListener("click", () => $("#subsInput").click());
+  const subsChip = $("#pendingSubs");
+  if (subsChip) subsChip.addEventListener("click", () => {
+    state.pendingSubs = null;
+    subsChip.classList.add("hidden");
+  });
 }
 
 function heroOptions() {
@@ -561,6 +598,7 @@ function heroOptions() {
     target_dur: d.target,
     aspect: state.opts.aspect,
     mode: state.opts.mode,
+    select: state.opts.select,
     subtitles: state.opts.subtitles,
     accent: state.opts.accent,
     sub_font: state.opts.subFont,
@@ -739,6 +777,18 @@ async function startLocalFile() {
       method: "POST",
       body: JSON.stringify({ title: file.name, options: heroOptions() })
     });
+    if (state.pendingSubs) {
+      const subsForm = new FormData();
+      subsForm.append("file", state.pendingSubs);
+      try {
+        await api(`/api/projects/${project.id}/subtitles`, { method: "POST", body: subsForm });
+      } catch (err) {
+        toast("Субтитры не приняты: " + err.message, "err");
+      }
+      state.pendingSubs = null;
+      const chip = $("#pendingSubs");
+      if (chip) chip.classList.add("hidden");
+    }
     const form = new FormData();
     form.append("file", file);
     await api(`/api/projects/${project.id}/upload`, { method: "POST", body: form });
@@ -2046,6 +2096,23 @@ $("#main").addEventListener("click", async (e) => {
     } catch (err) { toast(err.message, "err"); }
     return;
   }
+});
+
+$("#subsInput").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (!/\.(srt|ass|ssa|vtt)$/i.test(file.name)) {
+    toast("Нужен файл .srt, .ass или .vtt", "err");
+    return;
+  }
+  state.pendingSubs = file;
+  const chip = $("#pendingSubs");
+  if (chip) {
+    chip.textContent = `${file.name} · убрать`;
+    chip.classList.remove("hidden");
+  }
+  toast("Субтитры приложены — текст возьмётся из файла");
 });
 
 $("#fileInput").addEventListener("change", (e) => {

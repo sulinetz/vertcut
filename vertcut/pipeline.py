@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import threading
 import time
@@ -33,6 +34,8 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "sub_speed": "calm",
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
+    "select": "smart",
+    "subtitle_source": "auto",
     "max_height": 1080,
     "segments": False,
     "force_hd": False,
@@ -79,6 +82,10 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["platform"] = platforms.DEFAULT_PLATFORM
     if opts.get("layout") not in ("", *render.STREAM_LAYOUTS):
         opts["layout"] = ""
+    if opts.get("select") not in ("smart", "even"):
+        opts["select"] = "smart"
+    if opts.get("subtitle_source") not in ("auto", "whisper"):
+        opts["subtitle_source"] = "auto"
     try:
         opts["sub_offset"] = max(-120, min(180, int(opts.get("sub_offset", 0))))
     except Exception:
@@ -373,6 +380,78 @@ def prepare_project(pid: str) -> None:
         _update(pid, status="error", error=str(exc)[:600], stage="Ошибка загрузки")
 
 
+def _even_segments(duration: float, opts: Dict[str, Any],
+                   transcript: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ровная нарезка: делит видео на равные части без анализа речи.
+
+    Нужна, когда «умные моменты» не требуются — например, нарезка серии
+    на равные куски. Если субтитры включены, слова вырезаются из транскрипта
+    по времени, чтобы караоке работало.
+    """
+    duration = max(1.0, float(duration))
+    count = int(opts.get("count") or 0)
+    target = max(1.0, float(opts.get("target_dur") or 60))
+    if count <= 0:
+        count = int(round(duration / target))
+    count = max(1, min(200, count))
+    max_dur = max(5.0, float(opts.get("max_dur") or 60))
+    min_dur = max(3.0, float(opts.get("min_dur") or 15))
+    step = duration / count
+    while step > max_dur and count < 200:
+        count = min(200, count + max(1, int(step / max_dur)))
+        step = duration / count
+    while step < min_dur and count > 1:
+        count -= 1
+        step = duration / count
+
+    segments = (transcript or {}).get("segments") or []
+    out: List[Dict[str, Any]] = []
+    for i in range(count):
+        start = round(i * step, 2)
+        end = round(min(duration, (i + 1) * step), 2)
+        if end - start < 1.0:
+            continue
+        words = [
+            w for seg in segments
+            if float(seg.get("end") or 0) > start and float(seg.get("start") or 0) < end
+            for w in (seg.get("words") or [])
+        ]
+        out.append({
+            "start": start, "end": end, "score": 0.5,
+            "title": f"Часть {i + 1}", "hook": "", "caption": "",
+            "words": words, "parts": {},
+        })
+    return out
+
+
+def _hook_allowed(transcript: Dict[str, Any]) -> bool:
+    """Хук имеет смысл для кириллицы и латиницы, но не для CJK."""
+    text = " ".join(str(s.get("text") or "") for s in (transcript.get("segments") or [])[:3])
+    return not re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]", text)
+
+
+def _existing_subtitles(source: Path, workdir: Path) -> Optional[Dict[str, Any]]:
+    """Готовые субтитры: приложенные вручную или вшитые текстовой дорожкой."""
+    for name in ("subtitles.srt", "subtitles.ass", "subtitles.ssa", "subtitles.vtt"):
+        path = workdir / name
+        if path.exists() and path.stat().st_size > 8:
+            segs = utils.parse_subtitles(path)
+            if segs:
+                return {"language": "", "duration": 0.0, "segments": segs,
+                        "engine": f"subtitles-{path.suffix.lstrip('.').lower()}"}
+
+    cached = workdir / "source_subs.srt"
+    if not cached.exists() or cached.stat().st_size < 8:
+        if not utils.subtitle_streams(source):
+            return None
+        if not utils.extract_subtitles(source, cached):
+            return None
+    segs = utils.parse_subtitles(cached)
+    if not segs:
+        return None
+    return {"language": "", "duration": 0.0, "segments": segs, "engine": "embedded-subtitles"}
+
+
 def process_project(pid: str) -> None:
     """Распознаёт речь и рендерит нарезки из уже скачанного исходника."""
     project = db.get_project(pid)
@@ -409,44 +488,69 @@ def process_project(pid: str) -> None:
     duration = info["duration"]
 
     try:
-        progress(0.05, "Распознавание речи")
+        select = opts.get("select") or "smart"
         transcript: Optional[Dict[str, Any]] = None
-        if not transcribe.model_cached():
-            progress(0.05, "Скачиваю модель распознавания речи (~460 МБ, один раз)")
-        stop_hb, hb_thread = _heartbeat(pid, "Распознавание речи")
-        try:
-            transcript = transcribe.transcribe(
-                source, workdir, language=opts.get("language") or None,
-                on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
+        need_text = select != "even" or bool(opts.get("subtitles"))
+        hook_ok = False
+        prepared = None
+        if need_text and opts.get("subtitle_source", "auto") != "whisper":
+            try:
+                prepared = _existing_subtitles(source, workdir)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+        if prepared is not None:
+            progress(0.35, "Использую готовые субтитры")
+            transcript = prepared
+            _update(pid, language=None)
+            hook_ok = _hook_allowed(transcript)
+            db.merge_meta(pid, {
+                "engine": transcript.get("engine"),
+                "segments": len(transcript.get("segments") or []),
+            })
+        elif need_text:
+            progress(0.05, "Распознавание речи")
+            if not transcribe.model_cached():
+                progress(0.05, "Скачиваю модель распознавания речи (~460 МБ, один раз)")
+            stop_hb, hb_thread = _heartbeat(pid, "Распознавание речи")
+            try:
+                transcript = transcribe.transcribe(
+                    source, workdir, language=opts.get("language") or None,
+                    on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
+                )
+                stop_hb.set(); hb_thread.join(timeout=1)
+            except Exception as exc:  # noqa: BLE001
+                stop_hb.set(); hb_thread.join(timeout=1)
+                sub_path = downloader.fetch_subtitles(project["url"], workdir,
+                                                      browser=opts.get("cookies_browser") or None)
+                if sub_path:
+                    segs = utils.parse_vtt(Path(sub_path))
+                    if segs:
+                        transcript = {"language": "ru", "duration": duration, "segments": segs,
+                                      "engine": "source-subtitles"}
+                if transcript is None:
+                    raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
+
+            _update(pid, language=transcript.get("language"))
+            hook_ok = _hook_allowed(transcript)
+            db.merge_meta(pid, {
+                "engine": transcript.get("engine"),
+                "segments": len(transcript.get("segments") or []),
+            })
+        else:
+            _update(pid, language=None)
+            db.merge_meta(pid, {"engine": "even-split"})
+
+        if select == "even":
+            progress(0.55, "Нарезка на равные части")
+            found = _even_segments(duration, opts, transcript)
+        else:
+            progress(0.55, "Поиск вирусных моментов")
+            found = analyze.find_segments(
+                transcript["segments"], source, duration,
+                count=opts["count"] or 0,
+                min_dur=opts["min_dur"], max_dur=opts["max_dur"],
+                target_dur=opts["target_dur"],
             )
-            stop_hb.set(); hb_thread.join(timeout=1)
-        except Exception as exc:  # noqa: BLE001
-            stop_hb.set(); hb_thread.join(timeout=1)
-            sub_path = downloader.fetch_subtitles(project["url"], workdir,
-                                                  browser=opts.get("cookies_browser") or None)
-            if sub_path:
-                segs = utils.parse_vtt(Path(sub_path))
-                if segs:
-                    transcript = {"language": "ru", "duration": duration, "segments": segs,
-                                  "engine": "source-subtitles"}
-            if transcript is None:
-                raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
-
-        _update(pid, language=transcript.get("language"))
-        lang = str(transcript.get("language") or "").lower()[:2]
-        hook_ok = lang in ("ru", "en") or not lang
-        db.merge_meta(pid, {
-            "engine": transcript.get("engine"),
-            "segments": len(transcript.get("segments") or []),
-        })
-
-        progress(0.55, "Поиск вирусных моментов")
-        found = analyze.find_segments(
-            transcript["segments"], source, duration,
-            count=opts["count"] or 0,
-            min_dur=opts["min_dur"], max_dur=opts["max_dur"],
-            target_dur=opts["target_dur"],
-        )
         if not found:
             raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")
 

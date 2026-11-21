@@ -1406,3 +1406,16 @@ input[type="range"]::-webkit-slider-thumb {
 .pending-file.hidden {
   display: none;
 }
+
+/* Подсказка под названием настройки */
+.opt-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(235, 235, 245, 0.45);
+  max-width: 620px;
+}
+.opt > div > .opt-label {
+  display: block;
+}
