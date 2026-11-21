@@ -250,16 +250,22 @@ def _cues(words: List[Dict[str, Any]], max_chars: int = 32, max_words: int = 6,
     return cues
 
 
-def _pos_tag(position: str, offset: int) -> str:
-    """Возвращает override-тег положения. offset > 0 — выше/дальше от края."""
+def _pos_tag(position: str, offset: int, platform: str = "") -> str:
+    """Возвращает override-тег положения с учётом интерфейса площадки."""
+    from . import platforms
+
     if position == "top":
-        y = max(60, 260 - offset)
-        return f"\\an8\\pos({PLAY_W // 2},{y})"
+        y = max(60, platforms.top_text_y(platform) + 120 - offset)
+        y = platforms.clamp_y(y, platform, anchor="top")
+        return f"\\an8\\pos({PLAY_W // 2},{int(y)})"
     if position == "middle":
-        y = max(120, min(PLAY_H - 120, 960 - offset))
-        return f"\\an5\\pos({PLAY_W // 2},{y})"
-    y = max(200, min(PLAY_H - 80, 1580 - offset))
-    return f"\\an2\\pos({PLAY_W // 2},{y})"
+        mid = 960 - offset
+        x0, y0, _, y1 = platforms.safe_rect(platform)
+        y = max(y0 + 120, min(y1 - 120, mid))
+        return f"\\an5\\pos({PLAY_W // 2},{int(y)})"
+    y = platforms.bottom_text_y(platform) - offset
+    y = platforms.clamp_y(y, platform, anchor="bottom")
+    return f"\\an2\\pos({PLAY_W // 2},{int(y)})"
 
 
 def _plain(token: str) -> str:
@@ -360,7 +366,7 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               show_hook: bool = True, sub_size: int = 118, hook_size: int = 96,
               font: str = "montserrat",
               position: str = "bottom", offset: int = 0,
-              speed: str = "calm") -> str:
+              speed: str = "calm", platform: str = "") -> str:
     """Собирает ASS-файл для фрагмента. Тайминги слов абсолютные (от начала видео)."""
     accent_color = ACCENTS.get(accent, ACCENTS["yellow"])
     info = font_info(font)
@@ -378,7 +384,7 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
     )
     events: List[str] = []
     clip_len = max(0.1, clip_end - clip_start)
-    pos = _pos_tag(position, int(offset))
+    pos = _pos_tag(position, int(offset), platform)
 
     local = []
     for w in words:
@@ -410,7 +416,16 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
         body = "\\N".join(hook_lines)
         start, end = 0.15, min(clip_len - 0.1, max(1.8, min(4.2, clip_len * 0.3)))
         # если субтитры сверху — хук уводим вниз, чтобы не перекрывались
-        hook_pos = "\\an2\\pos(540,1700)" if position == "top" else "\\an8\\pos(540,240)"
+        # Хук ставим с противоположной стороны от субтитров, тоже внутри
+        # безопасной области площадки.
+        from . import platforms
+
+        if position == "top":
+            hook_y = platforms.bottom_text_y(platform) - 20
+            hook_pos = f"\\an2\\pos({PLAY_W // 2},{int(hook_y)})"
+        else:
+            hook_y = platforms.top_text_y(platform)
+            hook_pos = f"\\an8\\pos({PLAY_W // 2},{int(hook_y)})"
         events.append(
             f"Dialogue: 1,{ass_time(start)},{ass_time(end)},Hook,,0,0,0,,"
             f"{{{hook_pos}\\fad(180,220)\\fscx104\\fscy104}}"

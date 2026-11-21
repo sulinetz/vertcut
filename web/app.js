@@ -225,6 +225,14 @@ const DUR_PRESETS = {
   "30-90": { min: 30, max: 90, target: 55, label: "30–90 сек" }
 };
 
+const PLATFORM_OPTIONS = [
+  ["universal", "Универсально"],
+  ["shorts", "Shorts"],
+  ["tiktok", "TikTok"],
+  ["reels", "Reels"],
+  ["none", "Без зон"]
+];
+
 const state = {
   projects: [],
   current: null,
@@ -252,6 +260,7 @@ const state = {
     subPos: "bottom",
     subOffset: 0,
     subSpeed: "calm",
+    platform: "universal",
     cookies: "",
     fontTarget: "#fontSelect"
   }
@@ -357,6 +366,13 @@ function heroHTML() {
         <span class="opt-label">Формат</span>
         <div class="seg" data-group="aspect">
           ${["9:16", "1:1", "16:9"].map((a) => `<button data-val="${a}" class="${o.aspect === a ? "active" : ""}">${a}</button>`).join("")}
+        </div>
+      </div>
+      <div class="opt">
+        ${optIcon("aspect", "ico-cyan")}
+        <span class="opt-label">Площадка</span>
+        <div class="seg" data-group="platform">
+          ${PLATFORM_OPTIONS.map(([k, v]) => `<button data-val="${k}" class="${o.platform === k ? "active" : ""}">${v}</button>`).join("")}
         </div>
       </div>
       <div class="opt">
@@ -509,6 +525,7 @@ function heroOptions() {
     sub_position: state.opts.subPos,
     sub_offset: state.opts.subOffset,
     sub_speed: state.opts.subSpeed,
+    platform: state.opts.platform,
     cookies_browser: state.opts.cookies,
     language: "auto"
   };
@@ -1673,6 +1690,12 @@ function openEditor(clipId) {
           </div>
           <div class="row2">
             <div class="field">
+              <label>Площадка</label>
+              <select id="edPlatform">
+                ${PLATFORM_OPTIONS.map(([k, v]) => `<option value="${k}" ${(s.platform || "universal") === k ? "selected" : ""}>${v}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
               <label>Формат</label>
               <select id="edAspect">
                 ${["9:16", "1:1", "16:9"].map((a) => `<option value="${a}" ${(s.aspect || "9:16") === a ? "selected" : ""}>${a}</option>`).join("")}
@@ -1810,6 +1833,7 @@ function openEditor(clipId) {
       })(),
       aspect: $("#edAspect").value,
       mode: $("#edMode").value,
+      platform: $("#edPlatform").value,
       subtitles: $("#edSubs").checked,
       uppercase: $("#edUpper").checked,
       show_hook: $("#edShowHook").checked,

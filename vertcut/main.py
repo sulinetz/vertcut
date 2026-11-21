@@ -65,6 +65,7 @@ class ClipEdit(BaseModel):
     sub_position: Optional[str] = None
     sub_offset: Optional[int] = None
     sub_speed: Optional[str] = None
+    platform: Optional[str] = None
 
 
 # Лимиты загрузки: интерфейс проверяет 4 ГБ, но сервер обязан проверять сам.
@@ -108,7 +109,7 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
 
     Раньше значения уезжали в фоновую задачу, и клип молча переходил в error.
     """
-    from . import render, subtitles
+    from . import platforms, render, subtitles
 
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     if "aspect" in data and data["aspect"] not in render.ASPECTS:
@@ -121,6 +122,8 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
         raise HTTPException(400, "Неизвестное положение субтитров")
     if "sub_speed" in data and data["sub_speed"] not in subtitles.SPEEDS:
         raise HTTPException(400, "Неизвестная скорость субтитров")
+    if "platform" in data and not platforms.is_known(data["platform"]):
+        raise HTTPException(400, "Неизвестная площадка")
     if "sub_font" in data and not subtitles.font_exists(data["sub_font"]):
         raise HTTPException(400, "Шрифт не найден")
     if "sub_size" in data:

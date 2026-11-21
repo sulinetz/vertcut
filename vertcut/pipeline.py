@@ -9,7 +9,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import analyze, db, downloader, reframe, render, subtitles, transcribe, utils
+from . import analyze, db, downloader, platforms, reframe, render, subtitles, transcribe, utils
 from .errors import Cancelled
 from .config import PROJECTS_DIR
 
@@ -31,6 +31,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "sub_position": "bottom",
     "sub_offset": 0,
     "sub_speed": "calm",
+    "platform": platforms.DEFAULT_PLATFORM,
     "max_height": 1080,
     "segments": False,
     "force_hd": False,
@@ -73,6 +74,8 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["sub_position"] = "bottom"
     if opts.get("sub_speed") not in subtitles.SPEEDS:
         opts["sub_speed"] = "calm"
+    if not platforms.is_known(opts.get("platform")):
+        opts["platform"] = platforms.DEFAULT_PLATFORM
     try:
         opts["sub_offset"] = max(-120, min(180, int(opts.get("sub_offset", 0))))
     except Exception:
@@ -200,6 +203,7 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "show_hook": opts["show_hook"], "focus_x": 0.5, "sub_size": opts["sub_size"],
         "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
         "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
+        "platform": opts["platform"],
         "segments": bool(opts.get("segments")),
     }
 
@@ -447,6 +451,7 @@ def process_project(pid: str) -> None:
             "show_hook": opts["show_hook"], "focus_x": 0.5, "sub_size": opts["sub_size"],
             "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
             "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
+            "platform": opts["platform"],
         }
         _check_cancel(pid)
         total = len(found)
@@ -563,6 +568,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             position=settings.get("sub_position", "bottom"),
             offset=int(settings.get("sub_offset", 0)),
             speed=settings.get("sub_speed", "calm"),
+            platform=settings.get("platform", platforms.DEFAULT_PLATFORM),
         )
         ass_path = ass_dir / f"{clip['id']}.ass"
         ass_path.write_text(text, encoding="utf-8")
@@ -609,7 +615,7 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
     if settings.get("segments"):
         raise RuntimeError("Клип собран в экономном режиме из фрагмента. Шаблон меняется до запуска нарезки.")
     for key in ("aspect", "mode", "subtitles", "accent", "uppercase", "show_hook", "focus_x",
-                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed"):
+                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "platform"):
         if key in payload and payload[key] is not None:
             settings[key] = payload[key]
     start = float(payload.get("start", clip["start"]))
