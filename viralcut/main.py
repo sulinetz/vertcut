@@ -24,6 +24,10 @@ class ProjectIn(BaseModel):
     prepare_only: bool = False
 
 
+class UpdateSettingsIn(BaseModel):
+    enabled: bool = True
+
+
 class RetryIn(BaseModel):
     force_hd: bool = False
     prepare_only: bool = False
@@ -148,6 +152,24 @@ def health() -> Dict[str, Any]:
         "model": transcribe.model_cached(),
         "projects": db.count_projects(),
     }
+
+
+@app.get("/api/update")
+def update_state(force: bool = False) -> Dict[str, Any]:
+    """Состояние проверки обновлений; сеть — только в фоне или по force."""
+    from . import updater
+
+    if force:
+        return updater.check(force=True)
+    updater.maybe_check_async()
+    return updater.payload()
+
+
+@app.post("/api/update/settings")
+def update_settings(body: UpdateSettingsIn) -> Dict[str, Any]:
+    from . import updater
+
+    return updater.set_enabled(body.enabled)
 
 
 @app.get("/api/fonts")

@@ -1925,6 +1925,51 @@ async function checkHealth() {
   }
 }
 
+async function checkUpdates() {
+  try {
+    const res = await fetch("/api/update");
+    if (!res.ok) return;
+    renderUpdate(await res.json());
+  } catch (_) { /* офлайн — просто не показываем */ }
+}
+
+function renderUpdate(data) {
+  const card = $("#updateCard");
+  if (!card) return;
+  const dismissed = localStorage.getItem("vcUpdateDismissed");
+  if (!data || !data.available || !data.latest || dismissed === data.latest) {
+    card.hidden = true;
+    return;
+  }
+  const url = data.url || "https://github.com/vanwild11/viralcut/releases/latest";
+  card.href = url;
+  card.setAttribute("data-external", url);
+  $("#updateTitle").textContent = `Доступна версия ${data.latest}`;
+  const note = String(data.notes || "").split("\n").map((l) => l.replace(/^#+\s*/, "").trim()).find(Boolean);
+  $("#updateSub").textContent = note ? note.slice(0, 70) : "Скачать с GitHub";
+  card.hidden = false;
+  if (localStorage.getItem("vcUpdateSeen") !== data.latest) {
+    localStorage.setItem("vcUpdateSeen", data.latest);
+    toast(`Вышла новая версия ${data.latest} — скачать на GitHub`);
+  }
+}
+
+function bindUpdateCard() {
+  const card = $("#updateCard");
+  if (!card) return;
+  const hide = $("#updateHide");
+  if (hide) {
+    hide.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const title = $("#updateTitle").textContent || "";
+      const version = title.replace(/^[^\d]*/, "").trim();
+      if (version) localStorage.setItem("vcUpdateDismissed", version);
+      card.hidden = true;
+    });
+  }
+}
+
 window.addEventListener("hashchange", () => {
   const id = location.hash.replace("#", "");
   if (id && id !== state.current) {
@@ -1940,6 +1985,9 @@ window.addEventListener("hashchange", () => {
 });
 
 (async function boot() {
+  bindUpdateCard();
+  checkUpdates();
+  setInterval(checkUpdates, 30 * 60 * 1000);
   await checkHealth();
   await loadFontCatalog();
   await loadProjects();
