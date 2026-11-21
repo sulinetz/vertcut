@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import math
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -15,15 +17,41 @@ from .config import ASSETS_DIR
 _MODEL = ASSETS_DIR / "models" / "yunet.onnx"
 
 
+def _model_candidates() -> List[Path]:
+    """Пути к модели YuNet.
+
+    OpenCV на Windows не открывает ONNX, если в пути есть не-ASCII символы
+    (например, папка «Проект по умолчанию»). Поэтому при необходимости
+    кладём копию во временную папку и пробуем её тоже.
+    """
+    paths = [_MODEL]
+    try:
+        str(_MODEL).encode("ascii")
+    except UnicodeEncodeError:
+        try:
+            cache = Path(tempfile.gettempdir()) / "vertcut_models"
+            cache.mkdir(parents=True, exist_ok=True)
+            target = cache / "yunet.onnx"
+            if not target.exists() or target.stat().st_size != _MODEL.stat().st_size:
+                shutil.copy2(_MODEL, target)
+            paths.append(target)
+        except OSError:
+            pass
+    return paths
+
+
 def _make_detector():
     import cv2
 
     if _MODEL.exists():
-        try:
-            return "yunet", cv2.FaceDetectorYN.create(str(_MODEL), "", (320, 320), 0.6, 0.3, 5000)
-        except Exception:
-            pass
-    return "haar", None
+        for path in _model_candidates():
+            try:
+                return "yunet", cv2.FaceDetectorYN.create(str(path), "", (320, 320), 0.6, 0.3, 5000)
+            except Exception:  # noqa: BLE001 — модель может не подойти этой сборке OpenCV
+                continue
+    if hasattr(cv2, "CascadeClassifier"):
+        return "haar", None
+    return "none", None
 
 
 def _detect(detector: Tuple[str, Any], frame) -> List[Dict[str, float]]:
@@ -32,6 +60,8 @@ def _detect(detector: Tuple[str, Any], frame) -> List[Dict[str, float]]:
     kind, det = detector
     h, w = frame.shape[:2]
     out: List[Dict[str, float]] = []
+    if kind == "none":
+        return out
     if kind == "yunet" and det is not None:
         try:
             det.setInputSize((w, h))
@@ -48,6 +78,8 @@ def _detect(detector: Tuple[str, Any], frame) -> List[Dict[str, float]]:
         return out
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if not hasattr(cv2, "CascadeClassifier"):
+        return out
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
     for (x, y, fw, fh) in faces:
