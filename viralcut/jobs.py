@@ -21,14 +21,56 @@ _streams: Dict[str, threading.Thread] = {}
 _streams_lock = threading.Lock()
 
 
-def submit_project(pid: str) -> None:
+_running: Dict[str, int] = {}
+_pending: Dict[str, Any] = {}
+_running_lock = threading.Lock()
+
+
+def is_running(pid: str) -> bool:
+    """Идёт ли уже обработка этого проекта (защита от двойного запуска)."""
+    with _running_lock:
+        return bool(_running.get(pid))
+
+
+def _mark(pid: str, delta: int) -> None:
+    with _running_lock:
+        count = _running.get(pid, 0) + delta
+        if count <= 0:
+            _running.pop(pid, None)
+        else:
+            _running[pid] = count
+
+
+def _guarded(pid: str, target) -> None:
+    """Запускает задачу, если для проекта ещё нет активной обработки.
+
+    Если обработка уже идёт (например, пользователь нажал «повторить» во время
+    отмены), задача ставится в очередь на этот же проект и стартует сразу после
+    завершения текущей — вместо второй параллельной обработки.
+    """
+    with _running_lock:
+        if _running.get(pid):
+            _pending[pid] = target
+            return
+        _running[pid] = 1
+
     def work() -> None:
         try:
-            pipeline.run_project(pid)
+            target()
         except Exception as exc:  # noqa: BLE001
             db.update_project(pid, status="error", error=str(exc)[:600], stage="Ошибка")
+        finally:
+            with _running_lock:
+                _running.pop(pid, None)
+                nxt = _pending.pop(pid, None)
+            if nxt is not None:
+                _guarded(pid, nxt)
 
     _project_pool.submit(work)
+
+
+def submit_project(pid: str) -> None:
+    _guarded(pid, lambda: pipeline.run_project(pid))
 
 
 def submit_stream(pid: str, options: dict) -> None:
@@ -57,23 +99,11 @@ def submit_stream(pid: str, options: dict) -> None:
 
 
 def submit_prepare(pid: str) -> None:
-    def work() -> None:
-        try:
-            pipeline.prepare_project(pid)
-        except Exception as exc:  # noqa: BLE001
-            db.update_project(pid, status="error", error=str(exc)[:600], stage="Ошибка")
-
-    _project_pool.submit(work)
+    _guarded(pid, lambda: pipeline.prepare_project(pid))
 
 
 def submit_process(pid: str) -> None:
-    def work() -> None:
-        try:
-            pipeline.process_project(pid)
-        except Exception as exc:  # noqa: BLE001
-            db.update_project(pid, status="error", error=str(exc)[:600], stage="Ошибка")
-
-    _project_pool.submit(work)
+    _guarded(pid, lambda: pipeline.process_project(pid))
 
 
 def submit_rerender(clip_id: str, payload: Dict[str, Any]) -> None:

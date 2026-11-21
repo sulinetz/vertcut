@@ -3,4 +3,4 @@
 Версию читают `viralcut.__version__`, FastAPI-приложение, PyInstaller-spec и
 CI — чтобы они не расходились, меняем число только здесь.
 """
-__version__ = "1.3.0"
+__version__ = "1.4.0"

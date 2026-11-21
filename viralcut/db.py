@@ -66,14 +66,23 @@ def connect() -> sqlite3.Connection:
 
 # Точка входа миграций: первое изменение схемы не должно ломать базы
 # пользователей. Сейчас схема = версия 1, дальше добавляем шаги списком.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     current = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
     if current >= SCHEMA_VERSION:
         return
-    # Шаги будущих миграций добавляются здесь по возрастанию версии.
+    if current < 1:
+        pass  # версия 1 — базовая схема
+    if current < 2:
+        # Раньше ретрай во время отмены мог создать вторую партию клипов с теми
+        # же idx. Убираем дубли (оставляем последнюю запись) и запрещаем их схемой.
+        conn.execute(
+            "DELETE FROM clips WHERE rowid NOT IN ("
+            " SELECT MAX(rowid) FROM clips GROUP BY project_id, idx)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_clips_project_idx ON clips(project_id, idx)")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -195,6 +204,8 @@ def add_clip(project_id: str, idx: int, start: float, end: float, score: float,
              settings: Dict[str, Any], status: str = "rendering") -> Dict[str, Any]:
     cid = uuid.uuid4().hex[:12]
     with connect() as conn:
+        # повторный прогон того же проекта заменяет клип с этим номером
+        conn.execute("DELETE FROM clips WHERE project_id=? AND idx=?", (project_id, idx))
         conn.execute(
             "INSERT INTO clips (id, project_id, idx, start, end, score, title, hook, caption, status, words, settings, created_at, updated_at)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

@@ -57,6 +57,24 @@ is are was were be been being do does did have has had not no yes just very real
 to of in on at for with from by about as into over after before under again more most some
 """.split())
 
+# С каких слов нельзя начинать клип: без предыдущей фразы зритель не поймёт,
+# о чём речь. Главная жалоба на автонарезку — «клип начинается после завязки».
+CONTEXT_STARTERS = [
+    "потому что", "поэтому", "в итоге", "так вот", "и вот", "вот почему", "вот что",
+    "значит", "короче", "это", "этот", "эта", "эти", "такой", "такая", "такое",
+    "тогда", "но", "однако", "а", "и", "он", "она", "они", "его", "ее", "ему", "ей",
+    "им", "их", "там", "тут", "тоже", "также",
+    "because", "so", "this", "that", "these", "those", "it", "they", "them", "he",
+    "she", "his", "her", "but", "and", "then", "which", "there",
+]
+
+# Слова-связки в конце фразы: мысль не закончена, клип оборвётся.
+CONTINUATION_END = [
+    "потому что", "потому", "так что", "и", "а", "но", "или", "либо", "которые",
+    "который", "которая", "которое", "что", "чтобы", "если", "когда", "пока",
+    "because", "so", "and", "but", "or", "which", "that", "if", "when", "while",
+]
+
 _NUM_RE = re.compile(r"\d+[.,]?\d*|%|₽|\$|€|руб|тысяч|миллион|миллиард|процент", re.I)
 _SENT_END = re.compile(r"[.!?…]+[\"'»)]*\s*$")
 _WORD_RE = re.compile(r"[\w\-']+", re.U)
@@ -74,6 +92,72 @@ def _count_patterns(text: str, patterns: List[str]) -> int:
 def _has_filler_start(text: str) -> bool:
     low = _norm(text).strip(" «\"'—-")
     return any(low.startswith(f) for f in FILLER_START)
+
+
+def _starts_with_context(sent: Dict[str, Any]) -> bool:
+    """Фраза начинается с местоимения/связки — без предыдущей фразы непонятна."""
+    words = _norm(sent.get("text") or "").strip(" «\"'—-").split()
+    if not words:
+        return False
+    head = " ".join(words[:2])
+    first = words[0]
+    for marker in CONTEXT_STARTERS:
+        if " " in marker:
+            if head.startswith(marker):
+                return True
+        elif first == marker:
+            return True
+    return False
+
+
+def _ends_with_continuation(sent: Dict[str, Any]) -> bool:
+    """Фраза обрывается на связке — мысль продолжится в следующей."""
+    text = _norm(sent.get("text") or "").strip()
+    if not text:
+        return True
+    if text.endswith(("?", "!", "…")):
+        return False
+    if text.endswith((",", "—", "-", ":", ";", "–")):
+        return True  # фраза оборвана посреди мысли
+    text = text.rstrip(".,;:")
+    words = text.split()
+    if not words:
+        return True
+    tail1 = words[-1]
+    tail2 = " ".join(words[-2:])
+    if tail2 in ("потому что", "так что", "в том что"):
+        return True
+    return tail1 in CONTINUATION_END
+
+
+def _extend_window(sents: List[Dict[str, Any]], i: int, j: int,
+                   max_dur: float, max_back: int = 2, max_fwd: int = 2) -> Tuple[int, int]:
+    """Дотягивает окно до завязки слева и до вывода справа, если это укладывается в лимит.
+
+    Именно из-за этого автонарезка «начинается после завязки» и «обрывается за
+    секунду до главной фразы»: границы берутся по форме предложений, а не по смыслу.
+    """
+    span = lambda a, b: sents[b]["end"] - sents[a]["start"]
+    back = 0
+    while back < max_back and i > 0 and _starts_with_context(sents[i]) and span(i - 1, j) <= max_dur:
+        i -= 1
+        back += 1
+    fwd = 0
+    while fwd < max_fwd and j + 1 < len(sents):
+        nxt = sents[j + 1]
+        needs_tail = _ends_with_continuation(sents[j])
+        # короткий вопрос + короткий ответ — это завязка и развязка одной мысли
+        question_payoff = (
+            sents[j]["text"].strip().endswith("?")
+            and len(_WORD_RE.findall(sents[j]["text"])) <= 14
+            and len(_WORD_RE.findall(nxt["text"])) <= 22
+        )
+        short_conclusion = _starts_with_context(nxt) and len(_WORD_RE.findall(nxt["text"])) <= 14
+        if not (needs_tail or short_conclusion or question_payoff) or span(i, j + 1) > max_dur:
+            break
+        j += 1
+        fwd += 1
+    return i, j
 
 
 def build_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -219,6 +303,8 @@ def _score_window(sents: List[Dict[str, Any]], media_duration: float,
     completeness = 0.6
     if re.search(r"[.!?…]$", last):
         completeness = 0.85
+    if _ends_with_continuation(sents[-1]):
+        completeness -= 0.35
     if last.endswith("?") or re.search(r"\b(вот и все|итог|вывод|запомни|вывод)\b", _norm(last)):
         completeness = 1.0
     if len(_WORD_RE.findall(last)) < 3:
@@ -265,14 +351,37 @@ def _keywords(text: str, limit: int = 6) -> List[str]:
     return [w for w, _ in ranked[:limit]]
 
 
+def _title_score(text: str) -> float:
+    """Насколько фраза годится в заголовок клипа.
+
+    Короткие переходы («Что дальше?», «И вот итог.») в заголовок не идут: они
+    ничего не обещают зрителю, а в ленте выглядят мусором.
+    """
+    t = text.strip()
+    length = len(t)
+    score = 0.0
+    if 25 <= length <= 72:
+        score += 2.0
+    elif 18 <= length < 25:
+        score += 0.8
+    elif length < 18:
+        score -= 1.5
+    if "?" in t:
+        score += 1.2
+    if _NUM_RE.search(t):
+        score += 0.6
+    score += min(1.2, 0.4 * _count_patterns(t, HOOK_PATTERNS_RU + HOOK_PATTERNS_EN))
+    if _has_filler_start(t):
+        score -= 1.0
+    if len(_WORD_RE.findall(t)) < 4:
+        score -= 1.2
+    return score
+
+
 def _make_title(sents: List[Dict[str, Any]]) -> str:
-    """Короткий заголовок: самое «цепляющее» предложение в начале."""
-    best = sents[0]["text"]
-    for s in sents[:3]:
-        t = s["text"].strip()
-        if 18 <= len(t) <= 72 and (("?" in t) or _count_patterns(t, HOOK_PATTERNS_RU + HOOK_PATTERNS_EN) > 0):
-            best = t
-            break
+    """Короткий заголовок: самое «цепляющее» предложение в начале клипа."""
+    candidates = [s["text"].strip() for s in sents[:4] if s["text"].strip()]
+    best = max(candidates, key=_title_score) if candidates else sents[0]["text"]
     best = re.sub(r"\s+", " ", best).strip(" .,-—")
     if len(best) > 64:
         cut = best[:64]
@@ -305,24 +414,28 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
         start = sents[i]["start"]
         if start + min_dur > duration:
             break
-        acc_text = []
         for j in range(i, n):
             end = sents[j]["end"]
             dur = end - start
             if dur > max_dur:
                 break
-            acc_text.append(sents[j])
             if dur < min_dur:
                 continue
             # берём окно, близкое к целевому, и следующее за ним
             if dur >= target_dur or j == n - 1:
-                score, parts = _score_window(sents[i:j + 1], duration, curve, mean_db, hop)
-                text = " ".join(s["text"] for s in sents[i:j + 1])
+                bi, bj = _extend_window(sents, i, j, max_dur)
+                window = sents[bi:bj + 1]
+                w_start, w_end = window[0]["start"], window[-1]["end"]
+                if w_end - w_start > max_dur:  # перестраховка на длинных фразах
+                    window, w_start, w_end = sents[i:j + 1], start, end
+                score, parts = _score_window(window, duration, curve, mean_db, hop)
                 candidates.append({
-                    "start": round(start, 3), "end": round(end, 3), "duration": round(dur, 2),
-                    "score": score, "parts": parts, "text": text,
-                    "words": [w for s in sents[i:j + 1] for w in s["words"]],
-                    "title": _make_title(sents[i:j + 1]),
+                    "start": round(w_start, 3), "end": round(w_end, 3),
+                    "duration": round(w_end - w_start, 2),
+                    "score": score, "parts": parts,
+                    "text": " ".join(x["text"] for x in window),
+                    "words": [w for x in window for w in x["words"]],
+                    "title": _make_title(window),
                 })
                 break
 
@@ -346,14 +459,45 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
 
     # Разнообразие: не берём пересекающиеся окна
     candidates.sort(key=lambda c: c["score"], reverse=True)
+    limit = count if count > 0 else 999
+
+    # Разнообразие по таймлайну: без него топ-N собирается из одного «сильного»
+    # куска, а вторая половина видео не попадает в выдачу вовсе (жалоба на
+    # смещение к первым 10–15 минутам).
+    buckets = max(1, min(limit, 12))
+    span = max(1.0, duration / buckets)
+
+    def _bucket(cand: Dict[str, Any]) -> int:
+        middle = (cand["start"] + cand["end"]) / 2
+        return max(0, min(buckets - 1, int(middle // span)))
+
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+    for cand in candidates:
+        grouped.setdefault(_bucket(cand), []).append(cand)
+
+    best_score = candidates[0]["score"] if candidates else 0.0
+    seeded: List[Dict[str, Any]] = []
+    for key in sorted(grouped):
+        bucket_items = sorted(grouped[key], key=lambda c: c["score"], reverse=True)
+        # слабый «лучший в бакете» не должен вытеснять сильные клипы
+        if bucket_items and bucket_items[0]["score"] >= best_score * 0.55:
+            seeded.append(bucket_items[0])
+    seeded.sort(key=lambda c: c["score"], reverse=True)
+
+    leftovers: List[Dict[str, Any]] = []
+    seeded_ids = {id(c) for c in seeded}
+    for cand in candidates:
+        if id(cand) not in seeded_ids:
+            leftovers.append(cand)
+    ordered_candidates = seeded + leftovers
+
     import difflib
 
     def _norm_title(t: str) -> str:
         return re.sub(r"[^\w]+", " ", _norm(t)).strip()
 
     picked: List[Dict[str, Any]] = []
-    limit = count if count > 0 else 999
-    for cand in candidates:
+    for cand in ordered_candidates:
         if len(picked) >= limit:
             break
         overlap = False
@@ -362,7 +506,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
             inter = min(p["end"], cand["end"]) - max(p["start"], cand["start"])
             if inter > 0:
                 short = min(p["end"] - p["start"], cand["end"] - cand["start"])
-                if inter / short > 0.30:
+                if inter / short > 0.18:
                     overlap = True
                     break
             if difflib.SequenceMatcher(None, _norm_title(cand["title"]), _norm_title(p["title"])).ratio() > 0.82:
@@ -384,7 +528,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
         start = c["start"]
         end = c["end"]
         # аккуратные границы: отступаем в тишину
-        start = max(0.0, _nearest_quiet(curve, mean_db, start - 0.12, hop))
+        start = max(0.0, _nearest_quiet(curve, mean_db, start - 0.10, hop, window=0.30))
         end = min(duration, _nearest_quiet(curve, mean_db, end + 0.18, hop))
         words = [w for w in c["words"] if w["end"] > start + 0.05 and w["start"] < end - 0.05]
         clip_text = " ".join(w["word"] for w in words)

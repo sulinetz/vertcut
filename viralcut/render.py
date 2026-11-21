@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import subprocess
+import sys
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import ffmpeg
 from . import custom_fonts
@@ -54,6 +56,45 @@ def _auto_chain(w: int, h: int, crop_path: Dict[str, Any], sharpen: bool = False
         f"[0:v]crop={cw}:{ch}:x='{x_expr}':y='{y_expr}',"
         f"scale={w}:{h}:flags=lanczos,setsar=1{sharp},format=yuv420p[base]"
     )
+
+
+_HW_CACHE: Dict[str, Any] = {}
+
+
+def hw_encoder() -> Optional[str]:
+    """Аппаратный энкодер для быстрого рендера: videotoolbox / nvenc / qsv.
+
+    Проверяем один раз и только если ffmpeg его действительно знает; при ошибке
+    рендер сам откатится на libx264, поэтому «auto» безопасен.
+    """
+    if "value" in _HW_CACHE:
+        return _HW_CACHE["value"]
+    if os.environ.get("VIRALCUT_HW_ENCODE", "auto").strip().lower() in ("0", "false", "no", "off"):
+        _HW_CACHE["value"] = None
+        return None
+    preferred = {"darwin": ["h264_videotoolbox"], "win32": ["h264_nvenc", "h264_qsv"],
+                 "linux": ["h264_nvenc", "h264_qsv", "h264_vaapi"]}.get(sys.platform, [])
+    try:
+        proc = run([ffmpeg(), "-hide_banner", "-encoders"])
+        text = (proc.stdout or "") + (proc.stderr or "")
+    except Exception:
+        text = ""
+    found = next((name for name in preferred if name in text), None)
+    _HW_CACHE["value"] = found
+    return found
+
+
+def _hw_args(encoder: str, crf: int) -> List[str]:
+    if encoder == "h264_videotoolbox":
+        return ["-c:v", encoder, "-b:v", "9M", "-maxrate", "14M", "-bufsize", "14M",
+                "-profile:v", "high", "-pix_fmt", "yuv420p"]
+    if encoder == "h264_nvenc":
+        return ["-c:v", encoder, "-preset", "p5", "-rc", "vbr", "-cq", str(crf),
+                "-b:v", "0", "-pix_fmt", "yuv420p"]
+    if encoder == "h264_qsv":
+        return ["-c:v", encoder, "-global_quality", str(crf), "-pix_fmt", "nv12"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+            "-profile:v", "high", "-pix_fmt", "yuv420p"]
 
 
 def _measure_loudness(source: Path, start: float, duration: float) -> Optional[Dict[str, Any]]:
@@ -149,9 +190,11 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     else:
         cmd += ["-an"]
 
-    cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-            "-profile:v", "high", "-pix_fmt", "yuv420p", "-r", "30",
-            "-movflags", "+faststart", "-shortest", str(out_path)]
+    hw = hw_encoder()
+    video_args = _hw_args(hw, crf) if hw else ["-c:v", "libx264", "-preset", preset,
+                                               "-crf", str(crf), "-profile:v", "high",
+                                               "-pix_fmt", "yuv420p"]
+    cmd += video_args + ["-r", "30", "-movflags", "+faststart", "-shortest", str(out_path)]
 
     # -progress в cmd даёт машинно-читаемый прогресс: UI не «замирает» на минуту.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -203,6 +246,23 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     if killed["hit"]:
         out_path.unlink(missing_ok=True)
         raise MediaError(f"Рендер остановлен: {killed['reason']}. Попробуйте ещё раз.")
+    if hw and (proc.returncode != 0 or not out_path.exists()):
+        # аппаратный энкодер не завёлся (нет GPU/драйвера) — повторяем на libx264
+        idx = cmd.index("-c:v")
+        cmd[idx + 1:idx + 1 + len(_hw_args(hw, crf)) - 1] = []
+        cmd[idx:idx + len(_hw_args(hw, crf))] = ["-c:v", "libx264", "-preset", preset,
+                                                 "-crf", str(crf), "-profile:v", "high",
+                                                 "-pix_fmt", "yuv420p"]
+        out_path.unlink(missing_ok=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, errors="replace", bufsize=1, **subprocess_kwargs())
+        tail = []
+        if proc.stderr is not None:
+            for line in proc.stderr:
+                tail.append(line)
+                if len(tail) > 40:
+                    tail.pop(0)
+        proc.wait()
     if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 10000:
         raise MediaError("Не удалось отрендерить клип: " + "".join(tail)[-600:])
 

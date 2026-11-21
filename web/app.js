@@ -861,6 +861,12 @@ function clipsGridHTML() {
     const preview = c.has_preview ? `/media/${p}/previews/${c.id}.mp4?v=${Math.round(c.updated_at || 0)}` : url;
     const thumb = c.thumb ? `/media/${p}/thumbs/${c.id}.jpg` : "";
     const wide = (c.settings?.aspect || "9:16") === "16:9" ? " wide" : (c.settings?.aspect || "") === "1:1" ? " square" : "";
+    const sp = c.settings?.score_parts || null;
+    const partsLine = sp ? [
+      ["хук", sp.hook], ["подача", sp.retention], ["эмоции", sp.emotion],
+      ["конкретика", sp.specificity], ["завершённость", sp.completeness],
+    ].filter(([, v]) => typeof v === "number")
+      .map(([k, v]) => `<span>${k} ${Math.round(v * 100)}</span>`).join("") : "";
     if (c.status === "error") {
       return `<div class="clip-card${wide}">
         <div class="clip-media" style="display:grid;place-items:center;padding:16px;text-align:center">
@@ -879,7 +885,7 @@ function clipsGridHTML() {
       <div class="clip-media" data-action="edit">
         <video src="${preview}#t=0.1" ${thumb ? `poster="${thumb}"` : ""} muted loop playsinline preload="metadata"></video>
         <div class="play-hint">${ICONS.play}</div>
-        <div class="score-badge ${score >= 70 ? "hot" : ""}">⚡ ${score}</div>
+        <div class="score-badge ${score >= 70 ? "hot" : ""}" title="Оценка момента по структуре речи, а не прогноз просмотров">⚡ ${score}</div>
         <div class="dur-badge">${fmtDur(dur)}</div>
         <div class="clip-quick">
           <button class="glass-btn" data-action="copy" title="Копировать подпись">${ICONS.copy}</button>
@@ -888,6 +894,7 @@ function clipsGridHTML() {
       </div>
       <div class="clip-body">
         <div class="clip-title">${esc(c.title || "Без названия")}</div>
+        ${partsLine ? `<div class="clip-parts">${partsLine}</div>` : ""}
         <div class="clip-tools">
           <a class="download-btn" href="${url}" download="${esc(c.title || "clip")}.mp4" data-download-clip="${c.id}" title="Скачать MP4">
             ${ICONS.download}<span>Скачать MP4</span>

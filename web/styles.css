@@ -925,6 +925,22 @@ select option, select optgroup { background: #16161c; color: var(--text); }
   line-height: 1.38;
   color: rgba(245, 245, 247, 0.92);
 }
+.clip-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 2px 0 6px;
+  font-size: 10px;
+  color: var(--muted-2);
+}
+.clip-parts span {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--grouped-2);
+  border: 1px solid var(--separator);
+  white-space: nowrap;
+}
+
 .clip-tools { display: block; margin-top: auto; padding-top: 8px; }
 
 .download-btn {

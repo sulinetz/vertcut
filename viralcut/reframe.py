@@ -55,6 +55,47 @@ def _detect(detector: Tuple[str, Any], frame) -> List[Dict[str, float]]:
     return out
 
 
+def _mouth_patch(frame, face: Dict[str, float], size: int = 8):
+    """Мини-патч области рта: по нему ловим артикуляцию между кадрами."""
+    import cv2
+
+    h, w = frame.shape[:2]
+    cx, cy = face["cx"], face["cy"]
+    fw, fh = max(8.0, face["w"]), max(8.0, face["h"])
+    # рот — в нижней трети лица
+    mx0 = int(max(0, cx - fw * 0.22))
+    mx1 = int(min(w, cx + fw * 0.22))
+    my0 = int(max(0, cy + fh * 0.18))
+    my1 = int(min(h, cy + fh * 0.42))
+    if mx1 - mx0 < 4 or my1 - my0 < 3:
+        return None
+    patch = frame[my0:my1, mx0:mx1]
+    if patch.ndim == 3:
+        patch = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+    return cv2.resize(patch, (size, size)).astype("float32")
+
+
+def _mouth_motion(prev_faces, prev_patches, faces, patches) -> List[float]:
+    """Насколько сильно изменился рот каждого лица относительно прошлого кадра."""
+    scores: List[float] = []
+    for face, patch in zip(faces, patches):
+        if patch is None or not prev_faces:
+            scores.append(0.0)
+            continue
+        best, best_dist = 0.0, 1e9
+        for pface, ppatch in zip(prev_faces, prev_patches):
+            if ppatch is None:
+                continue
+            dist = abs(pface["cx"] - face["cx"]) + abs(pface["cy"] - face["cy"])
+            if dist > face["w"] * 1.2:
+                continue
+            if dist < best_dist:
+                best_dist = dist
+                best = float(abs(patch - ppatch).mean())
+        scores.append(best)
+    return scores
+
+
 def _median(values: Sequence[float], window: int = 5) -> List[float]:
     out: List[float] = []
     half = window // 2
@@ -136,7 +177,7 @@ def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16"
         cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000.0)
 
         detector = _make_detector()
-        samples: List[Tuple[float, List[Dict[str, float]]]] = []
+        samples: List[Tuple[float, List[Dict[str, float]], List[Any]]] = []
         frame_idx = 0
         while True:
             ok, frame = cap.read()
@@ -157,7 +198,8 @@ def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16"
                     for face in faces:
                         for key in ("cx", "cy", "w", "h"):
                             face[key] /= scale
-                samples.append((max(0.0, ts - start), faces))
+                mouth = [_mouth_patch(frame, face) for face in faces]
+                samples.append((max(0.0, ts - start), faces, mouth))
             frame_idx += 1
 
         if not samples:
@@ -168,18 +210,39 @@ def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16"
         ys: List[Optional[float]] = []
         prev_cx: Optional[float] = None
 
-        for _, faces in samples:
+        prev_faces: List[Dict[str, float]] = []
+        prev_mouth: List[Any] = []
+        speaker_idx: Optional[int] = None
+        last_switch = -99.0
+        for ts, faces, mouth in samples:
             if not faces:
                 xs.append(None)
                 ys.append(None)
+                prev_faces, prev_mouth = [], []
                 continue
-            faces = sorted(faces, key=lambda f: f["w"] * f["h"], reverse=True)
-            primary = faces[0]
-            if prev_cx is not None and len(faces) > 1:
-                # держимся за тем же человеком, а не прыгаем на самое крупное лицо
+            order = sorted(range(len(faces)), key=lambda k: faces[k]["w"] * faces[k]["h"], reverse=True)
+            faces = [faces[k] for k in order]
+            mouth = [mouth[k] for k in order]
+            motion = _mouth_motion(prev_faces, prev_mouth, faces, mouth)
+            if speaker_idx is None or speaker_idx >= len(faces):
+                speaker_idx = 0
+            elif len(faces) > 1 and len(motion) == len(faces):
+                best = max(range(len(motion)), key=lambda k: motion[k])
+                # смена говорящего только при явном перевесе и не чаще раза в 1.2 с:
+                # иначе окно дёргается между людьми на каждом кадре
+                current = motion[speaker_idx] if speaker_idx < len(motion) else 0.0
+                if (best != speaker_idx and motion[best] > max(1.2, current * 1.6)
+                        and ts - last_switch > 1.2):
+                    speaker_idx = best
+                    last_switch = ts
+            speaker = speaker_idx
+            primary = faces[speaker] if 0 <= speaker < len(faces) else faces[0]
+            if prev_cx is not None and len(faces) > 1 and speaker == 0:
+                # без явного говорящего держимся за тем же человеком, а не прыгаем
                 def cost(f: Dict[str, float]) -> float:
-                    return abs(f["cx"] - prev_cx) / max(1.0, src_w) + 0.35 * (1 - f["w"] / max(1.0, primary["w"]))
+                    return abs(f["cx"] - prev_cx) / max(1.0, src_w) + 0.35 * (1 - f["w"] / max(1.0, faces[0]["w"]))
                 primary = min(faces, key=cost)
+            prev_faces, prev_mouth = faces, mouth
             prev_cx = primary["cx"]
 
             # если два лица рядом и оба влезают в окно — центрируем между ними
@@ -207,14 +270,15 @@ def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16"
         times: List[float] = []
         path_x: List[float] = []
         path_y: List[float] = []
-        for (ts, _), cx, cy in zip(samples, smooth_x, smooth_y):
+        for (ts, _, _), cx, cy in zip(samples, smooth_x, smooth_y):
             x = max(0.0, min(max_x, cx - crop_w / 2))
-            y = max(0.0, min(max_y, cy - crop_h * 0.45))
+            # голова должна оставаться в кадре целиком: держим лицо по центру-верху
+            y = max(0.0, min(max_y, cy - crop_h * 0.42))
             times.append(round(ts, 3))
             path_x.append(round(x, 1))
             path_y.append(round(y, 1))
 
-        face_frames = sum(1 for _, f in samples if f)
+        face_frames = sum(1 for _, f, _ in samples if f)
         return {
             "times": times,
             "x": path_x,

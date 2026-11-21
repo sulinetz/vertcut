@@ -1,7 +1,9 @@
 """Оркестрация: скачивание → распознавание → поиск моментов → рендер клипов."""
 from __future__ import annotations
 
+import os
 import shutil
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -131,6 +133,22 @@ def _heartbeat(pid: str, label: str):
 def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                     workdir: Path, progress: Callable[[float, str], None]) -> Path:
     """Скачивает исходник, пишет метаданные и возвращает путь к файлу."""
+    # Повтор после отмены не должен заново качать часовое видео: исходник уже
+    # лежит в папке проекта. Единственное исключение — принудительное HD.
+    if not opts.get("force_hd"):
+        for name in ("source.mp4", "source.mkv", "source.webm", "source.mov", "source.m4a", "source.mp3"):
+            cached = workdir / name
+            if cached.exists() and cached.stat().st_size > 1024:
+                try:
+                    info = utils.probe(cached)
+                except Exception:  # noqa: BLE001
+                    break
+                if info.get("duration", 0) >= 5:
+                    progress(0.98, "Исходник уже скачан · пропускаю загрузку")
+                    _update(pid, source=str(cached), duration=round(info["duration"], 2))
+                    db.merge_meta(pid, {"width": info["width"], "height": info["height"],
+                                        "source_height": info["height"]})
+                    return cached
     if project["url"].startswith("local:"):
         source = Path(project.get("source") or (workdir / "source.mp4"))
         if not source.exists():
@@ -226,7 +244,8 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     db.clear_clips(pid)
     for i, cand in enumerate(found):
         db.add_clip(pid, i, cand["start"], cand["end"], cand["score"], cand["title"],
-                    cand["hook"], cand["caption"], cand["words"], settings, status="pending")
+                    cand["hook"], cand["caption"], cand["words"],
+                    {**settings, "score_parts": cand.get("parts") or {}}, status="pending")
 
     # короткий предпросмотр первого момента, чтобы окно шаблона было с видео
     first = found[0]
@@ -429,23 +448,59 @@ def process_project(pid: str) -> None:
             "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
             "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
         }
+        _check_cancel(pid)
         total = len(found)
-        rendered = 0
+        progress(0.60, f"Рендер {total} клипов")
+        clips = []
         for i, cand in enumerate(found):
-            _check_cancel(pid)
-            base = 0.60 + (i / max(1, total)) * 0.40
-            label = f"Рендер клипа {i + 1} из {total}"
-            progress(base, label)
             clip = db.add_clip(
                 pid, i, cand["start"], cand["end"], cand["score"], cand["title"],
-                cand["hook"], cand["caption"], cand["words"], clip_settings,
+                cand["hook"], cand["caption"], cand["words"],
+                {**clip_settings, "score_parts": cand.get("parts") or {}},
             )
+            clips.append(clip)
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        lock = threading.Lock()
+        state = {"done": 0, "failed": 0, "cancel": False}
+
+        def render_one(clip) -> bool:
+            if state["cancel"]:
+                return False
             try:
-                _render_one(source, workdir, clip, clip_settings,
-                            lambda p, lb=label: progress(base + p * (0.40 / max(1, total)), lb))
-                rendered += 1
+                _check_cancel(pid)
+            except Cancelled:
+                with lock:
+                    state["cancel"] = True
+                return False
+            try:
+                _render_one(source, workdir, clip, clip_settings, lambda p: None)
+            except Cancelled:
+                with lock:
+                    state["cancel"] = True
+                return False
             except Exception as exc:  # noqa: BLE001
                 db.update_clip(clip["id"], status="error", error=str(exc)[:400])
+                with lock:
+                    state["failed"] += 1
+                    state["done"] += 1
+                    done, failed = state["done"], state["failed"]
+                progress(0.60 + (done / max(1, total)) * 0.40,
+                         f"Рендер: {done} из {total} готово" + (f" · ошибок {failed}" if failed else ""))
+                return False
+            with lock:
+                state["done"] += 1
+                done = state["done"]
+            progress(0.60 + (done / max(1, total)) * 0.40, f"Рендер: {done} из {total} готово")
+            return True
+
+        workers = min(_render_workers(), max(1, total))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(render_one, clip) for clip in clips]
+            rendered = sum(1 for fut in as_completed(futures) if fut.result())
+        if state["cancel"]:
+            raise Cancelled()
 
         elapsed = round(time.time() - started, 1)
         if rendered == 0:
@@ -461,6 +516,22 @@ def process_project(pid: str) -> None:
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         _update(pid, status="error", error=str(exc)[:600], stage="Ошибка")
+
+
+def _render_workers() -> int:
+    """Сколько клипов рендерить параллельно.
+
+    Один ffmpeg занимает ~3 ядра, поэтому на 8–10 ядрах это 2–3 рендера: суммарно
+    в 1.5–2 раза быстрее, а машина остаётся отзывчивой.
+    """
+    raw = os.environ.get("VIRALCUT_RENDER_WORKERS")
+    if raw:
+        try:
+            return max(1, min(8, int(raw)))
+        except ValueError:
+            pass
+    cpu = os.cpu_count() or 4
+    return max(1, min(3, cpu // 3))
 
 
 def run_project(pid: str) -> None:

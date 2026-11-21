@@ -374,6 +374,8 @@ def project_start(pid: str, body: StartIn = StartIn()) -> Dict[str, Any]:
         raise HTTPException(404, "Проект не найден")
     if project.get("status") != "review":
         raise HTTPException(400, "Видео ещё не готово к настройке")
+    if jobs.is_running(pid):
+        raise HTTPException(409, "Обработка уже идёт — дождитесь окончания или отмените")
     options = pipeline.normalize_options(body.options or project.get("options"))
     pipeline.clear_cancel(pid)
     pending = [c for c in db.list_clips(pid) if c["status"] == "pending"]
@@ -400,6 +402,9 @@ def project_retry(pid: str, body: RetryIn = RetryIn()) -> Dict[str, Any]:
     project = db.get_project(pid)
     if not project:
         raise HTTPException(404, "Проект не найден")
+    if jobs.is_running(pid):
+        # текущая обработка ещё останавливается — поставим повтор в очередь
+        pipeline.request_cancel(pid)
     options = dict(project.get("options") or {})
     options["force_hd"] = bool(body.force_hd)
     pipeline.clear_cancel(pid)

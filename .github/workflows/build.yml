@@ -42,6 +42,9 @@ jobs:
           $v = python tools/version.py
           "value=$v" >> $env:GITHUB_OUTPUT
 
+      - name: Unit tests
+        run: python -m unittest tests.test_analyze -v
+
       - name: Build
         run: pyinstaller ViralCut.spec --noconfirm --clean
 
