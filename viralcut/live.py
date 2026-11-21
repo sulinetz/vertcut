@@ -246,10 +246,6 @@ class Recorder:
         if changed:
             db.merge_meta(self.pid, {"ad_intervals": self.ad_intervals[-200:]})
 
-    def _segment_time(self, sequence: int) -> float:
-        # время эфира, когда начинался сегмент — считаем по длительностям
-        return self.duration
-
     def _download_pending(self, pending: List[Tuple[int, Dict[str, Any]]]) -> List[Tuple[int, Dict[str, Any], bytes]]:
         """Скачивает пачку сегментов параллельно, порядок сохраняется."""
         workers = max(1, min(SEGMENT_WORKERS, len(pending)))

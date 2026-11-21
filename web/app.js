@@ -87,9 +87,9 @@ let FONT_OPTIONS = BUNDLED_FONT_OPTIONS.slice();
 function fontOptionsHTML(selected) {
   const groups = [];
   FONT_OPTIONS.forEach((f) => { if (!groups.includes(f.group)) groups.push(f.group); });
-  return groups.map((g) => `<optgroup label="${g}">` + FONT_OPTIONS
+  return groups.map((g) => `<optgroup label="${esc(g)}">` + FONT_OPTIONS
     .filter((f) => f.group === g)
-    .map((f) => `<option value="${f.key}" ${selected === f.key ? "selected" : ""}>${f.label}</option>`)
+    .map((f) => `<option value="${esc(f.key)}" ${selected === f.key ? "selected" : ""}>${esc(f.label)}</option>`)
     .join("") + "</optgroup>").join("");
 }
 
@@ -1127,7 +1127,8 @@ $("#main").addEventListener("click", async (e) => {
       e.preventDefault();
       try {
         const res = await window.pywebview.api.save_clip(dlClip.dataset.downloadClip);
-        if (res && res.ok) toast("Сохранено в Загрузки/ViralCut");
+        if (res && res.ok) toast(`Сохранено: ${res.path || res.folder || "файл"}`);
+        else if (res && res.cancelled) { /* диалог закрыт — ничего не говорим */ }
         else toast((res && res.error) || "Не удалось сохранить", "err");
       } catch (err) { toast(err.message || "Не удалось сохранить", "err"); }
     }
@@ -1141,7 +1142,8 @@ $("#main").addEventListener("click", async (e) => {
       e.preventDefault();
       try {
         const res = await window.pywebview.api.save_zip(dlZip.dataset.downloadZip);
-        if (res && res.ok) toast("Архив сохранён в Загрузки/ViralCut");
+        if (res && res.ok) toast(`Архив сохранён: ${res.path || res.folder || "файл"}`);
+        else if (res && res.cancelled) { /* диалог закрыт */ }
         else toast((res && res.error) || "Не удалось сохранить архив", "err");
       } catch (err) { toast(err.message || "Не удалось сохранить архив", "err"); }
     }

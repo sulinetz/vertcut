@@ -64,9 +64,43 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+# Точка входа миграций: первое изменение схемы не должно ломать базы
+# пользователей. Сейчас схема = версия 1, дальше добавляем шаги списком.
+SCHEMA_VERSION = 1
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    current = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+    if current >= SCHEMA_VERSION:
+        return
+    # Шаги будущих миграций добавляются здесь по возрастанию версии.
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def count_projects() -> int:
+    """Дешёвый счётчик для /api/health: без чтения и парсинга meta."""
+    with connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()
+    return int(row["n"] if row else 0)
+
+
+def set_stage_if_active(pid: str, stage: str) -> None:
+    """Обновляет этап только у проекта, который ещё не в терминальном статусе.
+
+    Фоновый heartbeat не должен «оживлять» завершённый/упавший проект.
+    """
+    with connect() as conn:
+        conn.execute(
+            "UPDATE projects SET stage=?, updated_at=? WHERE id=?"
+            " AND status NOT IN ('done', 'error', 'cancelled')",
+            (stage, time.time(), pid),
+        )
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:

@@ -5,6 +5,7 @@ import json
 import math
 import re
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -63,6 +64,7 @@ def _measure_loudness(source: Path, start: float, duration: float) -> Optional[D
              "-i", str(source), "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
              "-f", "null", "-"],
             capture_output=True, text=True, errors="replace",
+            timeout=max(30.0, duration * 2.5),
             **subprocess_kwargs(),
         )
         text = proc.stderr or ""
@@ -125,6 +127,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [ffmpeg(), "-y", "-hide_banner", "-v", "error", "-nostats",
+           "-progress", "pipe:1",
            "-ss", f"{clip_start:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
 
     cmd += ["-filter_complex", filter_complex, "-map", vlabel]
@@ -150,15 +153,56 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             "-profile:v", "high", "-pix_fmt", "yuv420p", "-r", "30",
             "-movflags", "+faststart", "-shortest", str(out_path)]
 
+    # -progress в cmd даёт машинно-читаемый прогресс: UI не «замирает» на минуту.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             errors="replace", bufsize=1, **subprocess_kwargs())
-    assert proc.stderr is not None
-    tail = []
-    for line in proc.stderr:
-        tail.append(line)
-        if len(tail) > 40:
-            tail.pop(0)
-    proc.wait()
+    assert proc.stdout is not None and proc.stderr is not None
+
+    tail: list = []
+    killed = {"hit": False, "reason": ""}
+
+    def _drain_stderr() -> None:
+        for line in proc.stderr:  # type: ignore[union-attr]
+            tail.append(line)
+            if len(tail) > 40:
+                tail.pop(0)
+
+    reader = threading.Thread(target=_drain_stderr, daemon=True)
+    reader.start()
+
+    # Щедрый, но конечный предел: зависший ffmpeg не должен держать клип вечно.
+    limit = max(180.0, duration * 8.0)
+
+    def _watchdog() -> None:
+        if proc.poll() is not None:
+            return
+        killed["hit"] = True
+        killed["reason"] = f"нет прогресса больше {limit:.0f} с"
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    timer = threading.Timer(limit, _watchdog)
+    timer.daemon = True
+    timer.start()
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("out_time_us=") and on_progress:
+                try:
+                    done = int(line.split("=", 1)[1]) / 1_000_000
+                except ValueError:
+                    continue
+                on_progress(round(min(0.99, done / duration), 3))
+        proc.wait()
+    finally:
+        timer.cancel()
+        reader.join(timeout=2)
+
+    if killed["hit"]:
+        out_path.unlink(missing_ok=True)
+        raise MediaError(f"Рендер остановлен: {killed['reason']}. Попробуйте ещё раз.")
     if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 10000:
         raise MediaError("Не удалось отрендерить клип: " + "".join(tail)[-600:])
 
@@ -186,41 +230,3 @@ def make_thumb(clip_path: Path, out_path: Path, at: float = 0.6) -> Optional[Pat
     return out_path if proc.returncode == 0 and out_path.exists() else None
 
 
-def make_cover(clip_path: Path, out_path: Path, hook: str, at: float = 0.6) -> Optional[Path]:
-    """Обложка: кадр из клипа + крупный заголовок (для превью в интерфейсе)."""
-    thumb = make_thumb(clip_path, out_path.with_suffix(".base.jpg"), at)
-    if not thumb:
-        return None
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception:
-        return thumb
-    try:
-        img = Image.open(thumb).convert("RGB")
-        draw = ImageDraw.Draw(img, "RGBA")
-        font_path = FONTS_DIR / "Montserrat-ExtraBold.ttf"
-        font = ImageFont.truetype(str(font_path), 52)
-        # затемнение сверху
-        shade = Image.new("RGBA", (img.width, 380), (0, 0, 0, 110))
-        img.paste(shade, (0, 0), shade)
-        words = hook.upper().split()
-        lines, cur = [], ""
-        for word in words:
-            if len(cur) + len(word) + 1 <= 18:
-                cur = (cur + " " + word).strip()
-            else:
-                lines.append(cur)
-                cur = word
-        if cur:
-            lines.append(cur)
-        y = 40
-        for line in lines[:3]:
-            bbox = draw.textbbox((0, 0), line, font=font)
-            x = (img.width - (bbox[2] - bbox[0])) // 2
-            draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 200))
-            draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-            y += 62
-        img.save(out_path, "JPEG", quality=86)
-        return out_path
-    except Exception:
-        return thumb

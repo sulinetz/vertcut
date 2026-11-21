@@ -71,8 +71,16 @@ def _fmt_err(exc: Exception) -> str:
     if "needs to be reloaded" in low:
         return ("YouTube запросил повторную загрузку страницы (антибот-проверка). "
                 "Нажмите «Повторить обработку»; если не помогает — включите cookies из браузера.")
+    if "requested format is not available" in low:
+        return ("Источник не отдал выбранное качество. Перезапустите загрузку — "
+                "Вайралкат подберёт формат заново.")
+    if "no video formats found" in low:
+        return "Источник не отдал ни одного видеоформата. Попробуйте другую ссылку или файл."
     if "private" in low:
         return "Видео приватное — доступ запрещён."
+    if "age" in low and ("confirm" in low or "restricted" in low):
+        return ("Видео с возрастным ограничением: включите «Cookies из браузера» "
+                "или загрузите файл вручную.")
     if "unavailable" in low or "not available" in low:
         return "Видео недоступно: удалено, скрыто или заблокировано по региону."
     if "unsupported url" in low:
@@ -112,7 +120,7 @@ def _pot_enabled() -> bool:
 
 def _attempt(url: str, dest_dir: Path, fmt: str, clients: Optional[List[str]],
              browser: Optional[str], progress: ProgressCb,
-             pot: bool = False) -> Dict[str, Any]:
+             pot: bool = False, extractor_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     import yt_dlp
 
     ensure_path()
@@ -183,15 +191,19 @@ def _attempt(url: str, dest_dir: Path, fmt: str, clients: Optional[List[str]],
         "ffmpeg_location": str(ffmpeg_bin_dir()),
         "socket_timeout": 30,
     }
-    if clients:
+    if extractor_args:
+        opts["extractor_args"] = {k: (list(v) if isinstance(v, list) else v)
+                                  for k, v in extractor_args.items()}
+    elif clients:
         youtube_args: Dict[str, Any] = {"player_client": clients}
         if pot:
             youtube_args["fetch_pot"] = ["always"]
         opts["extractor_args"] = {"youtube": youtube_args}
-    if pot:
-        opts["extractor_args"]["youtubepot-bgutilhttp"] = {
+    if pot and os.environ.get("VIRALCUT_POT_URL"):
+        opts.setdefault("extractor_args", {})["youtubepot-bgutilhttp"] = {
             "base_url": [os.environ["VIRALCUT_POT_URL"]]}
-        opts["js_runtimes"] = {"node": {"path": os.environ["VIRALCUT_NODE"]}}
+        if os.environ.get("VIRALCUT_NODE"):
+            opts["js_runtimes"] = {"node": {"path": os.environ["VIRALCUT_NODE"]}}
     opts.update(_cookie_opts(browser))
 
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -267,6 +279,107 @@ def _attempt(url: str, dest_dir: Path, fmt: str, clients: Optional[List[str]],
     }
 
 
+
+# --- YouTube: подбор рабочего клиента ---------------------------------------
+
+def _youtube_candidates(pot: bool) -> List[tuple[str, Dict[str, Any]]]:
+    """Наборы клиентов YouTube в порядке проверки.
+
+    Клиенты YouTube ломаются и чинятся каждые пару недель: «web» требует
+    PO-token, «android_vr» отдаёт урезанный список форматов, «tv» иногда просит
+    перезагрузить страницу. Поэтому формат спрашиваем у нескольких наборов и
+    качаем тем, который реально ответил, — а не угадываем один на всех.
+    """
+    sets: List[tuple[str, Dict[str, Any]]] = [
+        ("по умолчанию", {}),
+        ("android", {"youtube": {"player_client": ["android_vr", "android"]}}),
+    ]
+    if pot:
+        sets.append(("PO-token", {"youtube": {"player_client": ["mweb", "web"],
+                                              "fetch_pot": ["always"]}}))
+    sets.append(("tv/ios", {"youtube": {"player_client": ["tv", "ios"]}}))
+    return sets
+
+
+def _youtube_info(url: str, browser: Optional[str], pot: bool,
+                  progress: ProgressCb = None) -> tuple[Dict[str, Any], Dict[str, Any], str]:
+    """Метаданные от первого набора клиентов, который отдал форматы."""
+    import yt_dlp
+
+    ensure_path()
+    errors: List[str] = []
+    for label, args in _youtube_candidates(pot):
+        opts: Dict[str, Any] = {
+            "quiet": True, "no_warnings": True, "skip_download": True,
+            "noplaylist": True, "socket_timeout": 30,
+        }
+        if args:
+            opts["extractor_args"] = {k: dict(v) for k, v in args.items()}
+        if pot and os.environ.get("VIRALCUT_POT_URL"):
+            opts.setdefault("extractor_args", {})["youtubepot-bgutilhttp"] = {
+                "base_url": [os.environ["VIRALCUT_POT_URL"]]}
+            if os.environ.get("VIRALCUT_NODE"):
+                opts["js_runtimes"] = {"node": {"path": os.environ["VIRALCUT_NODE"]}}
+        opts.update(_cookie_opts(browser))
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{label}: {str(exc)[-160:]}")
+            print(f"[youtube] клиент «{label}» не сработал: {exc}", file=sys.stderr)
+            continue
+        if not info:
+            errors.append(f"{label}: пустой ответ")
+            continue
+        if "entries" in info:
+            entries = [e for e in info["entries"] if e]
+            info = entries[0] if entries else info
+        formats = info.get("formats") or []
+        if not formats:
+            errors.append(f"{label}: нет форматов")
+            continue
+        if progress:
+            progress(0.02, f"Источник ответил ({label})")
+        print(f"[youtube] клиент «{label}»: {len(formats)} форматов", file=sys.stderr)
+        return info, args, label
+    detail = " | ".join(errors[-2:])
+    raise DownloadError("YouTube не отдал видео ни одному клиенту. " + detail[-350:])
+
+
+def _pick_format(info: Dict[str, Any], max_height: int) -> tuple[str, int]:
+    """Формат из фактически доступных — вместо «слепой» строки селектора.
+
+    Возвращает (селектор, реальная высота): подпись в интерфейсе должна
+    показывать то качество, которое источник действительно отдал.
+    """
+    formats = [f for f in (info.get("formats") or []) if f.get("format_id")]
+    videos = [f for f in formats if (f.get("vcodec") or "none") != "none" and f.get("height")]
+    if not videos:
+        return (FORMAT_HD if max_height > 360 else FORMAT_SD), 0
+    fitting = [f for f in videos if int(f.get("height") or 0) <= max_height] or videos
+
+    def rank(f: Dict[str, Any]) -> tuple:
+        codec = f.get("vcodec") or ""
+        return (
+            1 if codec.startswith("avc1") else 0,
+            1 if f.get("ext") == "mp4" else 0,
+            1 if (f.get("acodec") or "none") != "none" else 0,
+            int(f.get("height") or 0),
+        )
+
+    video = max(fitting, key=rank)
+    height = int(video.get("height") or 0)
+    if (video.get("acodec") or "none") != "none":
+        return str(video["format_id"]), height
+    audios = [f for f in formats
+              if (f.get("vcodec") or "none") == "none" and (f.get("acodec") or "none") != "none"]
+    if audios:
+        audio = max(audios, key=lambda f: (1 if f.get("ext") == "m4a" else 0,
+                                           float(f.get("abr") or f.get("tbr") or 0)))
+        return f"{video['format_id']}+{audio['format_id']}", height
+    return str(video["format_id"]), height
+
+
 def download(url: str, dest_dir: Path, progress: ProgressCb = None,
              browser: Optional[str] = None, max_height: int = 1080,
              force_hd: bool = False) -> Dict[str, Any]:
@@ -292,28 +405,39 @@ def download(url: str, dest_dir: Path, progress: ProgressCb = None,
         # Twitter/VK/TikTok: сначала пробуем прямой HTTPS-файл — он качается одним
         # потоком и не требует склейки HLS-фрагментов (в разы быстрее).
         direct = f"b[width<={max_height}]/b[height<={max_height}]/b"
-        attempts.append((f"{max_height}p", None, direct + "/" + hd_format, False))
+        attempts.append((f"{max_height}p", None, direct + "/" + hd_format, False, None))
         if not force_hd:
-            attempts.append(("SD", None, FORMAT_SD, False))
+            attempts.append(("SD", None, FORMAT_SD, False, None))
     else:
-        if _pot_enabled():
-            attempts.append((f"{max_height}p", ["mweb", "web"], hd_format, True))
+        pot = _pot_enabled()
+        # Сначала спрашиваем форматы у нескольких клиентов и качаем выбранным.
+        picked = None
+        try:
+            info, args, client_label = _youtube_info(url, browser, pot, progress)
+            picked = (_pick_format(info, max_height), args, client_label)
+        except DownloadError as exc:
+            print(f"[youtube] метаданные не получены: {exc}", file=sys.stderr)
+        if picked is not None:
+            (fmt, real_height), args, client_label = picked
+            pot_args = bool(args and "fetch_pot" in str(args))
+            label_height = real_height or max_height
+            attempts.append((f"{label_height}p · {client_label}", None, fmt,
+                             pot_args and pot, args))
         if force_hd:
             if not attempts:
                 raise DownloadError(
-                    "HD-загрузка недоступна: не запущен PO-token провайдер. "
-                    "Перезапустите приложение и попробуйте снова.")
+                    "YouTube не отдал HD-форматы. Перезапустите загрузку; "
+                    "если повторяется — включите «Cookies из браузера».")
             attempts = attempts[:1]
         else:
             attempts += [
-                ("HD", CLIENTS_HD, hd_format, False),
-                ("SD", CLIENTS_SD, FORMAT_SD, False),
-                ("HD без обходных клиентов", None, hd_format, False),
+                ("SD", None, FORMAT_SD, False, None),
+                ("резервный клиент", None, hd_format, False, None),
             ]
 
     last_error: Optional[Exception] = None
     failed_reasons: List[str] = []
-    for idx, (label, clients, fmt, pot) in enumerate(attempts):
+    for idx, (label, clients, fmt, pot, extra_args) in enumerate(attempts):
         if idx > 0:
             _clean_partials(dest_dir)
         try:
@@ -322,7 +446,8 @@ def download(url: str, dest_dir: Path, progress: ProgressCb = None,
             meta = None
             for reconnect in range(2):
                 try:
-                    meta = _attempt(url, dest_dir, fmt, clients, browser, progress, pot=pot)
+                    meta = _attempt(url, dest_dir, fmt, clients, browser, progress,
+                                    pot=pot, extractor_args=extra_args)
                     break
                 except StalledDownload as exc:
                     print(f"download stalled ({exc}); reconnecting", file=sys.stderr)
@@ -394,16 +519,21 @@ def fetch_subtitles(url: str, dest_dir: Path, browser: Optional[str] = None) -> 
         "outtmpl": str(dest_dir / "subs.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"player_client": CLIENTS_HD}},
     }
     opts.update(_cookie_opts(browser))
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception:
-        return None
-    files = sorted(dest_dir.glob("subs*.vtt"))
-    return str(files[0]) if files else None
+    for client in (None, ["android_vr", "android"]):
+        attempt = dict(opts)
+        if client:
+            attempt["extractor_args"] = {"youtube": {"player_client": client}}
+        try:
+            with yt_dlp.YoutubeDL(attempt) as ydl:
+                ydl.download([url])
+        except Exception:  # noqa: BLE001
+            continue
+        files = sorted(dest_dir.glob("subs*.vtt"))
+        if files:
+            return str(files[0])
+    return None
 
 
 def is_direct_media(url: str) -> bool:
@@ -441,25 +571,18 @@ def probe(url: str, browser: Optional[str] = None) -> Dict[str, Any]:
         "socket_timeout": 30,
         "extractor_args": {},
     }
-    youtube = is_youtube(url)
-    token = _pot_token("") if youtube else None
-    node = os.environ.get("VIRALCUT_NODE")
-    if token:
-        opts["extractor_args"] = {"youtube": {
-            "player_client": ["android_vr"],
-            "po_token": [f"android_vr.gvs+{token}"],
-        }}
-    elif youtube and os.environ.get("VIRALCUT_POT_URL"):
-        opts["extractor_args"] = {"youtube": {
-            "player_client": ["mweb", "web"], "fetch_pot": ["always"]}}
-        opts["extractor_args"]["youtubepot-bgutilhttp"] = {
-            "base_url": [os.environ["VIRALCUT_POT_URL"]]}
-    if node:
-        opts["js_runtimes"] = {"node": {"path": node}}
-    opts.update(_cookie_opts(browser))
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    if is_youtube(url):
+        # Раньше здесь жёстко включался PO-token-клиент; когда он перестаёт
+        # отвечать, «недоступно» показывалось на любую ссылку. Теперь идём тем же
+        # перебором клиентов, что и загрузка.
+        info, _args, _label = _youtube_info(url, browser, _pot_enabled())
+    else:
+        node = os.environ.get("VIRALCUT_NODE")
+        if node:
+            opts["js_runtimes"] = {"node": {"path": node}}
+        opts.update(_cookie_opts(browser))
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
 
     if info and "entries" in info:
         entries = [e for e in info["entries"] if e]
@@ -485,8 +608,15 @@ def probe(url: str, browser: Optional[str] = None) -> Dict[str, Any]:
 
         return part(video) + part(audio)
 
+    # Предлагаем только те ступени, которые источник реально отдаёт: иначе для
+    # ролика 240p интерфейс обещал 1080p и подставлял размер 240p.
+    video_heights = [int(f["height"]) for f in formats
+                     if f.get("height") and (f.get("vcodec") or "none") != "none"]
+    max_available = max(video_heights) if video_heights else 0
+    steps = [h for h in (1080, 720, 360) if h <= max_available] or ([max_available] if max_available else [])
+
     options = []
-    for height in (1080, 720, 360):
+    for height in steps:
         vids = [f for f in formats if f.get("height") and int(f["height"]) <= height]
         if not vids:
             continue

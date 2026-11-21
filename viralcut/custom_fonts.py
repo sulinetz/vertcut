@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -85,6 +86,19 @@ def libass_dir() -> Path:
     return sync()
 
 
+_FAMILY_SAFE = re.compile(r"[^A-Za-z0-9 _-]+")
+
+
+def _clean_family(name: str | None) -> str:
+    """Имя семейства из файла шрифта идёт в CSS, ASS и HTML — только белый список.
+
+    Шрифт может объявить `family` вида `X"; } body{...}` или `<img onerror=...>`,
+    и это попало бы в @font-face, ASS-стиль и подпись в интерфейсе.
+    """
+    cleaned = _FAMILY_SAFE.sub(" ", str(name or "")).strip(" -_")
+    return (cleaned[:48] or "Custom Font")
+
+
 def _metrics(data: bytes) -> Dict[str, Any]:
     from fontTools.ttLib import TTFont
 
@@ -113,7 +127,7 @@ def _metrics(data: bytes) -> Dict[str, Any]:
     raw = (sum(widths) / len(widths) / upem) if widths else 0.6
     cyrillic = all(ord(ch) in cmap for ch in "АЯая")
     return {
-        "family": family or "Custom Font",
+        "family": _clean_family(family),
         "cap": round(max(0.3, min(1.4, cap)), 3),
         "avg": round(max(0.3, min(2.4, raw * 1.75)), 3),
         "has_cyrillic": bool(cyrillic),

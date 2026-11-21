@@ -10,7 +10,8 @@ build_tools/
 .pycache/
 .pyinstaller*/
 *.log
-release/v1.0.0/*.zip
+release/*/*.zip
+release/*/*.dmg
 desktop/vendor.tar.gz
 desktop/vendor/
 .venv-win/
@@ -21,3 +22,9 @@ docs/github/readme-rendered.html
 tools/bin/
 docs/promo/*.mp4
 docs/profile/
+
+# Артефакты промо-сборки: видео и кадры не храним в git
+docs/promo/**/out*/
+docs/promo/**/slides*/
+docs/promo/**/*.mp4
+docs/promo/**/*.jpg

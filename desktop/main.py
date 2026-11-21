@@ -19,6 +19,7 @@ import time
 import traceback
 import urllib.request
 from pathlib import Path
+from typing import Any, Dict
 
 APP_NAME = "ViralCut"
 
@@ -37,6 +38,57 @@ else:
     import fcntl  # type: ignore[import-not-found]
 
 
+def _windows_downloads() -> Path | None:
+    """Системная папка «Загрузки» на Windows (учитывает OneDrive-редирект)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                        ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+        folder_id = GUID(0x374DE290, 0x123F, 0x4565,
+                         (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B))
+        path_ptr = ctypes.c_wchar_p()
+        if ctypes.windll.shell32.SHGetKnownFolderPath(
+                ctypes.byref(folder_id), 0, None, ctypes.byref(path_ptr)) == 0 and path_ptr.value:
+            value = path_ptr.value
+            ctypes.windll.ole32.CoTaskMemFree(path_ptr)
+            return Path(value)
+    except Exception:
+        return None
+    return None
+
+
+def _linux_downloads() -> Path | None:
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "user-dirs.dirs"
+    try:
+        for line in config.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.strip().startswith("XDG_DOWNLOAD_DIR"):
+                raw = line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(Path.home()))
+                if raw:
+                    return Path(raw)
+    except Exception:
+        return None
+    return None
+
+
+def downloads_dir() -> Path:
+    """Папка «Загрузки» по правилам ОС, а не догадка про ~/Downloads."""
+    found = None
+    if IS_WINDOWS:
+        found = _windows_downloads()
+    elif IS_LINUX:
+        found = _linux_downloads()
+    folder = found or (Path.home() / "Downloads")
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        folder = Path.home()
+    return folder
+
+
 class DesktopApi:
     """Нативные действия для окна: сохранение файлов и Finder."""
 
@@ -44,9 +96,39 @@ class DesktopApi:
         self.data_dir = data_dir
 
     def _downloads(self) -> Path:
-        folder = Path.home() / "Downloads" / "ViralCut"
+        folder = downloads_dir() / "ViralCut"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    @staticmethod
+    def _ask_enabled() -> bool:
+        return os.environ.get("VIRALCUT_ASK_SAVE", "1") != "0"
+
+    def _ask_target(self, suggested: str):
+        """Диалог «Сохранить как»: сразу в системной папке «Загрузки».
+
+        Возвращает Path, None (пользователь закрыл диалог) или "unavailable",
+        когда окно ещё не готово/платформа не умеет диалог — тогда сохраняем
+        в Загрузки/ViralCut без вопроса.
+        """
+        try:
+            import webview
+
+            windows = getattr(webview, "windows", None) or []
+            if not windows:
+                return "unavailable"
+            chosen = windows[0].create_file_dialog(
+                webview.SAVE_DIALOG,
+                directory=str(self._downloads()),
+                save_filename=suggested,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"save dialog failed: {exc}", flush=True)
+            return "unavailable"
+        if not chosen:
+            return None
+        value = chosen[0] if isinstance(chosen, (list, tuple)) else chosen
+        return Path(str(value))
 
     @staticmethod
     def _safe(name: str) -> str:
@@ -86,10 +168,19 @@ class DesktopApi:
         if not src.exists():
             return {"ok": False, "error": "Файл клипа не найден на диске"}
         name = f"{clip.get('idx', 0) + 1:02d}_{self._safe(clip.get('title') or 'clip')}.mp4"
-        dest = self._unique(self._downloads() / name)
+        # VIRALCUT_ASK_SAVE=0 — сохранять молча в Загрузки/ViralCut (пакетный экспорт).
+        target = self._ask_target(name) if self._ask_enabled() else "unavailable"
+        if target is None:
+            return {"ok": False, "cancelled": True}
+        if target == "unavailable":
+            dest = self._unique(self._downloads() / name)
+        else:
+            dest = target if target.suffix.lower() == ".mp4" else target.with_suffix(".mp4")
+            dest = self._unique(dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
         self._reveal(dest)
-        return {"ok": True, "path": str(dest)}
+        return {"ok": True, "path": str(dest), "folder": str(dest.parent)}
 
     def save_zip(self, project_id: str) -> Dict[str, Any]:
         from viralcut import db, pipeline
@@ -103,10 +194,19 @@ class DesktopApi:
             pipeline.export_zip(project_id, archive)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)[:300]}
-        dest = self._unique(self._downloads() / f"viralcut_{self._safe(project.get('title') or 'clips')}.zip")
+        name = f"viralcut_{self._safe(project.get('title') or 'clips')}.zip"
+        target = self._ask_target(name) if self._ask_enabled() else "unavailable"
+        if target is None:
+            return {"ok": False, "cancelled": True}
+        if target == "unavailable":
+            dest = self._unique(self._downloads() / name)
+        else:
+            dest = target if target.suffix.lower() == ".zip" else target.with_suffix(".zip")
+            dest = self._unique(dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(archive, dest)
         self._reveal(dest)
-        return {"ok": True, "path": str(dest)}
+        return {"ok": True, "path": str(dest), "folder": str(dest.parent)}
 
     def open_url(self, url: str) -> Dict[str, Any]:
         """Открывает внешнюю ссылку в системном браузере (Telegram-канал и т.п.)."""

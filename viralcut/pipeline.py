@@ -118,11 +118,8 @@ def _heartbeat(pid: str, label: str):
     def run() -> None:
         while not stop.wait(5):
             try:
-                project = db.get_project(pid) or {}
-                pct = int(project.get("progress") or 0)
-                _update(pid, stage=f"{label} · {int(time.time() - started)} с",
-                        status=project.get("status") or "running",
-                        progress=pct)
+                # Только этап: статус и прогресс остаются за рабочим потоком.
+                db.set_stage_if_active(pid, f"{label} · {int(time.time() - started)} с")
             except Exception:
                 pass
 
@@ -250,8 +247,8 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
         traceback.print_exc()
 
     _update(pid, status="review", progress=100, error=None,
-            stage=f"Найдено {len(found)} моментов · настройте субтитры",
-            meta={**(db.get_project(pid) or {}).get("meta", {}), "pending": len(found)})
+            stage=f"Найдено {len(found)} моментов · настройте субтитры")
+    db.merge_meta(pid, {"pending": len(found)})
 
 
 def _process_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
@@ -308,7 +305,8 @@ def _process_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     if rendered == 0:
         raise RuntimeError("Не удалось скачать и отрендерить ни одного момента.")
     _update(pid, status="done", progress=100, stage=f"Готово: {rendered} клипов",
-            error=None, meta={**(db.get_project(pid) or {}).get("meta", {}), "clips": rendered})
+            error=None)
+    db.merge_meta(pid, {"clips": rendered})
 
 
 def prepare_project(pid: str) -> None:
@@ -408,10 +406,11 @@ def process_project(pid: str) -> None:
             if transcript is None:
                 raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
 
-        _update(pid, language=transcript.get("language"),
-                meta={**(db.get_project(pid) or {}).get("meta", {}),
-                      "engine": transcript.get("engine"),
-                      "segments": len(transcript.get("segments") or [])})
+        _update(pid, language=transcript.get("language"))
+        db.merge_meta(pid, {
+            "engine": transcript.get("engine"),
+            "segments": len(transcript.get("segments") or []),
+        })
 
         progress(0.55, "Поиск вирусных моментов")
         found = analyze.find_segments(
@@ -454,9 +453,8 @@ def process_project(pid: str) -> None:
         word = "клип" if rendered % 10 == 1 and rendered % 100 != 11 else (
             "клипа" if 2 <= rendered % 10 <= 4 and not 12 <= rendered % 100 <= 14 else "клипов")
         _update(pid, status="done", progress=100, error=None,
-                stage=f"Готово: {rendered} {word} за {elapsed:.0f} с",
-                meta={**(db.get_project(pid) or {}).get("meta", {}), "elapsed": elapsed,
-                      "clips": rendered})
+                stage=f"Готово: {rendered} {word} за {elapsed:.0f} с")
+        db.merge_meta(pid, {"elapsed": elapsed, "clips": rendered})
 
     except Cancelled:
         _update(pid, status="cancelled", stage="Обработка отменена", error=None)

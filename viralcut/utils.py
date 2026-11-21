@@ -81,6 +81,30 @@ def extract_audio(src: Path, dst: Path, sample_rate: int = 16000) -> Path:
     return dst
 
 
+def extract_asr_audio(src: Path, dst: Path, sample_rate: int = 16000) -> Path:
+    """Аудио для распознавания речи: без гула, шипения и перепадов громкости.
+
+    Распознавание ошибается в первую очередь на «грязном» звуке: низкочастотный
+    гул, шипение и тихие реплики. Поэтому перед Whisper прогоняем:
+    срез ниже 70 Гц и выше 7.8 кГц (речь живёт между ними), мягкое
+    шумоподавление и выравнивание громкости по фразам.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    base = [ffmpeg(), "-y", "-v", "error", "-i", str(src), "-vn",
+            "-ac", "1", "-ar", str(sample_rate)]
+    filters = "highpass=f=70,lowpass=f=7800,afftdn=nr=10:nf=-40,dynaudnorm=f=200:g=10"
+    proc = run(base + ["-af", filters, "-c:a", "pcm_s16le", str(dst)])
+    if proc.returncode != 0 or not dst.exists():
+        # старые сборки ffmpeg без afftdn/dynaudnorm — хотя бы срезы и моно
+        proc = run(base + ["-af", "highpass=f=70,lowpass=f=7800",
+                           "-c:a", "pcm_s16le", str(dst)])
+    if proc.returncode != 0 or not dst.exists():
+        proc = run(base + ["-c:a", "pcm_s16le", str(dst)])
+    if proc.returncode != 0 or not dst.exists():
+        raise MediaError(f"Не удалось извлечь аудиодорожку: {(proc.stderr or '')[-300:]}")
+    return dst
+
+
 def read_audio_mono(src: Path, sample_rate: int = 16000) -> Any:
     """Возвращает numpy-массив float32 [-1, 1] с аудио."""
     import numpy as np

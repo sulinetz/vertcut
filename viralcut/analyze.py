@@ -5,10 +5,9 @@
 """
 from __future__ import annotations
 
-import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from . import utils
 
@@ -176,7 +175,6 @@ def _score_window(sents: List[Dict[str, Any]], media_duration: float,
     n_words = max(1, len(words))
     dur = sents[-1]["end"] - sents[0]["start"]
     first = sents[0]["text"]
-    head = " ".join(s["text"] for s in sents[:2])
     low = _norm(text)
 
     # 1. Хук в первые секунды

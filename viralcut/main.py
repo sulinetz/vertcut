@@ -4,16 +4,17 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import custom_fonts, db, jobs, pipeline, transcribe
+from ._version import __version__
 from .config import ASSETS_DIR, DATA_DIR, PROJECTS_DIR, WEB_DIR, ffmpeg
 
 
@@ -61,19 +62,76 @@ class ClipEdit(BaseModel):
     sub_speed: Optional[str] = None
 
 
-app = FastAPI(title="ViralCut", version="1.2.1")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Лимиты загрузки: интерфейс проверяет 4 ГБ, но сервер обязан проверять сам.
+ALLOWED_UPLOAD_SUFFIXES = {
+    ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".ts", ".mts", ".m2ts",
+    ".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac",
+}
+MAX_UPLOAD_BYTES = int(float(os.environ.get("VIRALCUT_MAX_UPLOAD_GB", "4")) * 1024 ** 3)
+MAX_FONT_BYTES = 24 * 1024 * 1024
 
 
-@app.on_event("startup")
-def _startup() -> None:
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Побочные эффекты старта — здесь, а не на импорте модуля."""
     db.init_db()
     db.reset_stale_jobs()
+    custom_fonts.sync()
+    yield
+
+
+# CORS не нужен: страница отдаётся с того же origin, что и API. Без него чужая
+# вкладка в браузере не может дёргать локальный сервер (SSRF/забивка диска).
+app = FastAPI(title="ViralCut", version=__version__, lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def _static_cache_headers(request, call_next):
+    """Шрифты и статика неизменяемы в пределах сессии — не перекачиваем их каждым опросом."""
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith(("/fonts/", "/userfonts/", "/static/")):
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+    return response
+
+
+def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
+    """Проверяет правку клипа до постановки в очередь: 400 вместо «клип упал».
+
+    Раньше значения уезжали в фоновую задачу, и клип молча переходил в error.
+    """
+    from . import render, subtitles
+
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "aspect" in data and data["aspect"] not in render.ASPECTS:
+        raise HTTPException(400, "Неизвестный формат кадра")
+    if "mode" in data and data["mode"] not in ("auto", "blur", "crop"):
+        raise HTTPException(400, "Неизвестный режим кадрирования")
+    if "accent" in data and data["accent"] not in subtitles.ACCENTS:
+        raise HTTPException(400, "Неизвестный цвет акцента")
+    if "sub_position" in data and data["sub_position"] not in subtitles.POSITIONS:
+        raise HTTPException(400, "Неизвестное положение субтитров")
+    if "sub_speed" in data and data["sub_speed"] not in subtitles.SPEEDS:
+        raise HTTPException(400, "Неизвестная скорость субтитров")
+    if "sub_font" in data and not subtitles.font_exists(data["sub_font"]):
+        raise HTTPException(400, "Шрифт не найден")
+    if "sub_size" in data:
+        try:
+            data["sub_size"] = max(70, min(180, int(data["sub_size"])))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Некорректный размер субтитров") from None
+    if "sub_offset" in data:
+        try:
+            data["sub_offset"] = max(-120, min(180, int(data["sub_offset"])))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Некорректное смещение субтитров") from None
+    for key in ("start", "end"):
+        if key in data:
+            try:
+                data[key] = max(0.0, float(data[key]))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Некорректные границы клипа") from None
+    return data
 
 
 @app.get("/api/health")
@@ -88,7 +146,7 @@ def health() -> Dict[str, Any]:
         "ffmpeg": ok_ffmpeg,
         "whisper": transcribe.model_available(),
         "model": transcribe.model_cached(),
-        "projects": len(db.list_projects(200)),
+        "projects": db.count_projects(),
     }
 
 
@@ -102,6 +160,8 @@ def fonts() -> List[Dict[str, Any]]:
 @app.post("/api/fonts")
 async def font_upload(file: UploadFile = File(...)) -> Dict[str, Any]:
     data = await file.read()
+    if len(data) > MAX_FONT_BYTES:
+        raise HTTPException(413, "Файл шрифта больше 24 МБ")
     try:
         return custom_fonts.save(file.filename or "font.ttf", data)
     except ValueError as exc:
@@ -121,7 +181,7 @@ def font_delete(key: str) -> Dict[str, Any]:
 def fonts_css() -> Response:
     lines = []
     for font in custom_fonts.list_custom():
-        family = font.get("css") or f"VCCustom_{font['key']}"
+        family = custom_fonts._clean_family(font.get("css") or f"VCCustom_{font['key']}").replace(" ", "_")
         lines.append(
             f'@font-face {{ font-family: "{family}"; '
             f'src: url("/userfonts/{font["file"]}"); font-display: swap; }}'
@@ -212,21 +272,51 @@ async def upload(file: UploadFile = File(...)) -> Dict[str, Any]:
     if not file.filename:
         raise HTTPException(400, "Файл не выбран")
     suffix = Path(file.filename).suffix.lower() or ".mp4"
+    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+        raise HTTPException(400, f"Формат {suffix} не поддерживается — загрузите видео или аудио")
     project = db.create_project("local:source", pipeline.normalize_options({}),
                                 title=file.filename)
     workdir = PROJECTS_DIR / project["id"]
     workdir.mkdir(parents=True, exist_ok=True)
     target = workdir / f"source{suffix}"
-    with open(target, "wb") as fh:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            fh.write(chunk)
+    written = 0
+    try:
+        with open(target, "wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    size_hint = (f"{MAX_UPLOAD_BYTES / 1024 ** 3:.1f} ГБ"
+                                 if MAX_UPLOAD_BYTES >= 1024 ** 3
+                                 else f"{MAX_UPLOAD_BYTES / 1024 ** 2:.0f} МБ")
+                    raise HTTPException(
+                        413,
+                        f"Файл больше {size_hint} — загрузите фрагмент короче "
+                        "или поднимите VIRALCUT_MAX_UPLOAD_GB",
+                    )
+                fh.write(chunk)
+    except HTTPException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        db.delete_project(project["id"])
+        raise
     if target.stat().st_size < 1024:
         shutil.rmtree(workdir, ignore_errors=True)
         db.delete_project(project["id"])
         raise HTTPException(400, "Файл пустой или повреждён")
+    # Проверяем, что это действительно медиа: иначе в списке появлялся бы
+    # проект, который сразу уходит в error.
+    try:
+        from . import utils
+
+        probed = utils.probe(target)
+        if not probed.get("duration"):
+            raise ValueError("нет длительности")
+    except Exception:  # noqa: BLE001
+        shutil.rmtree(workdir, ignore_errors=True)
+        db.delete_project(project["id"])
+        raise HTTPException(400, "Файл не похож на видео или аудио — проверьте содержимое") from None
     db.update_project(project["id"], source=str(target), title=file.filename)
     jobs.submit_prepare(project["id"])
     return db.get_project(project["id"]) or project
@@ -305,6 +395,12 @@ def project_retry(pid: str, body: RetryIn = RetryIn()) -> Dict[str, Any]:
 def project_delete(pid: str) -> Dict[str, Any]:
     if not db.get_project(pid):
         raise HTTPException(404, "Проект не найден")
+    from . import live
+
+    # Сначала гасим запись/рендер и даём потокам увидеть отмену: иначе ffmpeg
+    # продолжает писать в папку, которую мы сейчас удаляем.
+    live.stop_stream(pid)
+    pipeline.request_cancel(pid)
     db.delete_project(pid)
     pipeline.delete_project_files(pid)
     return {"ok": True}
@@ -323,7 +419,7 @@ def clip_rerender(cid: str, body: ClipEdit) -> Dict[str, Any]:
         recorded = float((project.get("meta") or {}).get("live_duration") or 0)
         if body.end and recorded and body.end > recorded + 0.5:
             raise HTTPException(400, "Конец клипа выходит за пределы записанной части эфира")
-    payload = {k: v for k, v in body.dict().items() if v is not None}
+    payload = _clean_clip_edit(body)
     jobs.submit_rerender(cid, payload)
     return {"ok": True, "clip": db.get_clip(cid)}
 
@@ -347,7 +443,6 @@ def index() -> FileResponse:
 
 
 custom_fonts.CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
-custom_fonts.sync()
 app.mount("/fonts", StaticFiles(directory=str(ASSETS_DIR / "fonts")), name="fonts")
 app.mount("/userfonts", StaticFiles(directory=str(custom_fonts.CUSTOM_DIR)), name="userfonts")
 app.mount("/media", StaticFiles(directory=str(PROJECTS_DIR)), name="media")

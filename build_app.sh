@@ -14,6 +14,10 @@ else
   PY=".venv/bin/python"
 fi
 
+# Кэш PyInstaller держим внутри проекта: сборка не пишет в ~/Library
+# и остаётся воспроизводимой на любой машине и в CI.
+export PYINSTALLER_CONFIG_DIR="$PWD/build/pyinstaller-config"
+mkdir -p "$PYINSTALLER_CONFIG_DIR"
 PYTHONPYCACHEPREFIX="$PWD/.pycache" "$PY" -m PyInstaller ViralCut.spec --noconfirm --clean
 
 APP="dist/ViralCut.app"

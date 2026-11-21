@@ -265,7 +265,7 @@ def _pos_tag(position: str, offset: int) -> str:
 def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               hook: str = "", accent: str = "yellow", uppercase: bool = True,
               show_hook: bool = True, sub_size: int = 118, hook_size: int = 96,
-              margin_v: int = 320, font: str = "montserrat",
+              font: str = "montserrat",
               position: str = "bottom", offset: int = 0,
               speed: str = "calm") -> str:
     """Собирает ASS-файл для фрагмента. Тайминги слов абсолютные (от начала видео)."""

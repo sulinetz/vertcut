@@ -1,7 +1,7 @@
 # Сборка ViralCut для Windows 10/11 (x64) в один exe-каталог + ZIP.
 # Запуск:  powershell -ExecutionPolicy Bypass -File build_windows.ps1
 param(
-    [string]$Version = "1.2.1",
+    [string]$Version = "1.2.2",
     [switch]$SkipModel
 )
 
