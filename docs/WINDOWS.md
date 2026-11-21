@@ -54,8 +54,10 @@ powershell -ExecutionPolicy Bypass -File build_windows.ps1
 В репозитории уже есть `.github/workflows/build.yml`:
 
 - **Windows** — собирает exe, запускает headless-проверку `/api/health` и загружает ZIP.
-- **macOS** — собирает `.app` для Apple Silicon.
-- **Release** — при пуше тега `v*` прикрепляет оба ZIP к GitHub Release.
+- **Release** — при пуше тега `v*` прикрепляет Windows ZIP к GitHub Release.
+
+macOS-архив для Apple Silicon собирается локально (`./build_app.sh`) и загружается
+в релиз вручную.
 
 Первый пуш:
 

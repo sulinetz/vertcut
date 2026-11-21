@@ -186,8 +186,9 @@
 | **Любая ОС** | `./run.sh` | сервер на `http://127.0.0.1:8765` |
 
 Сборка воспроизводится в **GitHub Actions** ([workflow](.github/workflows/build.yml)):
-Windows и macOS собираются параллельно, проверяется `/api/health`, а по тегу `v*`
-ZIP-архивы автоматически прикрепляются к GitHub Release.
+Windows-сборка собирается в GitHub Actions, проверяется `/api/health`, а по тегу `v*`
+ZIP автоматически прикрепляется к GitHub Release. macOS-архив для Apple Silicon
+собирается локально (`build_app.sh`) и загружается в релиз.
 
 ```bash
 git tag v1.2.0
