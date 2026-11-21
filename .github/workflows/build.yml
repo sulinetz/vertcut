@@ -70,10 +70,20 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist\ViralCut -DestinationPath "ViralCut-${{ steps.version.outputs.value }}-windows-x64.zip"
 
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem "ViralCut-*-windows-x64.zip"
+          $hash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($zip.Name)" | Out-File -Encoding ascii SHA256SUMS-windows.txt
+          Get-Content SHA256SUMS-windows.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-zip
-          path: ViralCut-*-windows-x64.zip
+          path: |
+            ViralCut-*-windows-x64.zip
+            SHA256SUMS-windows.txt
 
   release:
     name: GitHub Release
@@ -92,6 +102,6 @@ jobs:
           path: artifacts
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/windows-zip/*.zip
+          files: artifacts/windows-zip/*
           body_path: release/v${{ steps.version.outputs.value }}/RELEASE_NOTES.md
           fail_on_unmatched_files: true
