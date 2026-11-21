@@ -1333,7 +1333,8 @@ function templateDefaults(project) {
     speed: o.sub_speed || "calm",
     accent: o.accent || "yellow",
     uppercase: o.uppercase !== false,
-    showHook: o.show_hook !== false
+    showHook: o.show_hook !== false,
+    subtitles: o.subtitles !== false
   };
 }
 
@@ -1346,6 +1347,7 @@ function templateOptions() {
     sub_position: $("#tpPos").value,
     sub_offset: Number($("#tpOffset").value),
     sub_speed: ($("#tpSpeed .active") || {}).dataset?.val || "calm",
+    subtitles: $("#tpSubs").checked,
     accent: state.tmplAccent,
     uppercase: $("#tpUpper").checked,
     show_hook: $("#tpHook").checked
@@ -1508,6 +1510,7 @@ function openTemplate(pid) {
           <div class="field">
             <label>Оформление</label>
             <div style="display:flex;gap:14px;flex-wrap:wrap">
+              <label class="toggle"><input type="checkbox" id="tpSubs" checked/><span class="track"></span><span>Субтитры</span></label>
               <label class="toggle"><input type="checkbox" id="tpUpper" checked/><span class="track"></span><span>КАПСОМ</span></label>
               <label class="toggle"><input type="checkbox" id="tpHook" checked/><span class="track"></span><span>Хук сверху</span></label>
             </div>
@@ -1540,6 +1543,13 @@ function openTemplate(pid) {
   $("#tpPos").addEventListener("change", updateTemplatePreview);
   $("#tpOffset").addEventListener("input", updateTemplatePreview);
   $("#tpUpper").addEventListener("change", updateTemplatePreview);
+  const tpSubs = $("#tpSubs");
+  if (tpSubs) tpSubs.addEventListener("change", () => {
+    document.querySelectorAll(".tmpl-sub-control").forEach((el) => {
+      el.style.opacity = tpSubs.checked ? "1" : "0.45";
+    });
+    updateTemplatePreview();
+  });
   $("#tpAccents").addEventListener("click", (e) => {
     const b = e.target.closest(".swatch");
     if (!b) return;
@@ -1589,7 +1599,8 @@ async function tmplPoll() {
       $("#tpSize").value = defaults.size;
       $("#tpPos").value = defaults.pos;
       $("#tpOffset").value = defaults.offset;
-      $("#tpUpper").checked = defaults.uppercase;
+      $("#tpSubs").checked = defaults.subtitles !== false;
+  $("#tpUpper").checked = defaults.uppercase;
       $("#tpHook").checked = defaults.showHook;
       $$("#tpSpeed button").forEach((b) => b.classList.toggle("active", b.dataset.val === defaults.speed));
       state.tmplAccent = defaults.accent;
