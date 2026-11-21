@@ -230,27 +230,46 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     if duration < 5:
         raise RuntimeError("Видео слишком короткое для нарезки.")
 
-    progress(0.32, "Распознавание речи")
-    stop_hb, hb_thread = _heartbeat(pid, "Распознавание речи")
-    try:
-        transcript = transcribe.transcribe(
-            audio["path"], workdir, language=opts.get("language") or None,
-            on_progress=lambda p, st: progress(0.32 + p * 0.38, f"{st} {int(p*100)}%"),
-        )
-    finally:
-        stop_hb.set(); hb_thread.join(timeout=1)
-    _update(pid, title=audio.get("title") or project["title"], duration=round(duration, 2),
-            source=str(audio["path"]), language=transcript.get("language"),
-            meta={"width": 0, "height": 0, "segments_mode": True,
-                  "audio_size": audio.get("size"), "engine": transcript.get("engine"),
-                  "segments": len(transcript.get("segments") or [])})
+    select = opts.get("select") or "smart"
+    transcript: Optional[Dict[str, Any]] = None
+    no_speech = False
+    if select == "even" and not opts.get("subtitles"):
+        progress(0.55, "Нарезка на равные части")
+    else:
+        progress(0.32, "Распознавание речи")
+        stop_hb, hb_thread = _heartbeat(pid, "Распознавание речи")
+        try:
+            transcript = transcribe.transcribe(
+                audio["path"], workdir, language=opts.get("language") or None,
+                on_progress=lambda p, st: progress(0.32 + p * 0.38, f"{st} {int(p*100)}%"),
+            )
+        except transcribe.TranscriptionError:
+            # музыку и клипы без речи режем на равные части вместо ошибки
+            traceback.print_exc()
+            no_speech = True
+        finally:
+            stop_hb.set(); hb_thread.join(timeout=1)
 
-    progress(0.72, "Поиск вирусных моментов")
-    found = analyze.find_segments(
-        transcript["segments"], audio["path"], duration,
-        count=opts["count"] or 0, min_dur=opts["min_dur"],
-        max_dur=opts["max_dur"], target_dur=opts["target_dur"],
-    )
+    engine = (transcript or {}).get("engine")
+    if engine is None and (no_speech or select == "even"):
+        engine = "even-split"
+    _update(pid, title=audio.get("title") or project["title"], duration=round(duration, 2),
+            source=str(audio["path"]), language=(transcript or {}).get("language"),
+            meta={"width": 0, "height": 0, "segments_mode": True,
+                  "audio_size": audio.get("size"), "engine": engine,
+                  "no_speech": bool(no_speech),
+                  "segments": len((transcript or {}).get("segments") or [])})
+
+    if select == "even" or no_speech:
+        progress(0.72, "Нарезка на равные части")
+        found = _even_segments(duration, opts, transcript)
+    else:
+        progress(0.72, "Поиск вирусных моментов")
+        found = analyze.find_segments(
+            transcript["segments"], audio["path"], duration,
+            count=opts["count"] or 0, min_dur=opts["min_dur"],
+            max_dur=opts["max_dur"], target_dur=opts["target_dur"],
+        )
     if not found:
         raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")
 
@@ -493,6 +512,7 @@ def process_project(pid: str) -> None:
         need_text = select != "even" or bool(opts.get("subtitles"))
         hook_ok = False
         prepared = None
+        no_speech = False
         if need_text and opts.get("subtitle_source", "auto") != "whisper":
             try:
                 prepared = _existing_subtitles(source, workdir)
@@ -527,7 +547,9 @@ def process_project(pid: str) -> None:
                     if segs:
                         transcript = {"language": "ru", "duration": duration, "segments": segs,
                                       "engine": "source-subtitles"}
-                if transcript is None:
+                if transcript is None and isinstance(exc, transcribe.TranscriptionError):
+                    no_speech = True
+                elif transcript is None:
                     raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
 
             _update(pid, language=transcript.get("language"))
@@ -540,6 +562,11 @@ def process_project(pid: str) -> None:
             _update(pid, language=None)
             db.merge_meta(pid, {"engine": "even-split"})
 
+        if select == "smart" and no_speech:
+            # речи нет (музыка, клип) — не падаем, а режем на равные части
+            select = "even"
+            progress(0.55, "Речи не нашлось — режу на равные части")
+            db.merge_meta(pid, {"engine": "even-split", "no_speech": True})
         if select == "even":
             progress(0.55, "Нарезка на равные части")
             found = _even_segments(duration, opts, transcript)

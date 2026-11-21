@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import threading
@@ -58,6 +59,18 @@ ASR_PROMPT = os.environ.get("VERTCUT_WHISPER_PROMPT", (
 
 class TranscriptionError(Exception):
     pass
+
+
+_PROMPT_WORDS = set(re.findall(r"[a-zа-яё0-9]+", ASR_PROMPT.lower()))
+
+
+def _prompt_echo(text: str) -> bool:
+    """Модель на музыке иногда выдаёт подсказку-промпт вместо текста."""
+    words = re.findall(r"[a-zа-яё0-9]+", str(text).lower())
+    if len(words) < 3:
+        return False
+    hits = sum(1 for w in words if w in _PROMPT_WORDS)
+    return hits / len(words) >= 0.7
 
 
 def model_cached() -> bool:
@@ -285,7 +298,7 @@ def _decode(model, audio: Path, language: Optional[str], vad: bool,
         no_repeat_ngram_size=3,
         condition_on_previous_text=condition,
         prompt_reset_on_temperature=0.5,
-        initial_prompt=(prompt or ASR_PROMPT),
+        initial_prompt=ASR_PROMPT if prompt is None else prompt,
         vad_filter=vad,
         vad_parameters={"min_silence_duration_ms": 300, "speech_pad_ms": 200} if vad else None,
         word_timestamps=True,
@@ -297,7 +310,8 @@ def _decode(model, audio: Path, language: Optional[str], vad: bool,
     )
 
 
-def _decode_batched(model, audio: Path, language: Optional[str], vad: bool):
+def _decode_batched(model, audio: Path, language: Optional[str], vad: bool,
+                    prompt: Optional[str] = None):
     """Пачечное декодирование (faster-whisper BatchedInferencePipeline)."""
     from faster_whisper import BatchedInferencePipeline
 
@@ -307,7 +321,7 @@ def _decode_batched(model, audio: Path, language: Optional[str], vad: bool):
         task="transcribe",
         beam_size=BEAM_SIZE,
         condition_on_previous_text=True,
-        initial_prompt=ASR_PROMPT,
+        initial_prompt=ASR_PROMPT if prompt is None else prompt,
         vad_filter=vad,
         word_timestamps=True,
         batch_size=BATCH_SIZE,
@@ -355,15 +369,16 @@ def _segment_payload(seg, offset: float) -> Dict[str, Any]:
 
 def _consume(model, path: Path, language: Optional[str], use_vad: bool,
              offset: float, total_duration: float,
-             on_progress: ProgressCb, batched: bool = False) -> Tuple[List[Dict[str, Any]], Any]:
+             on_progress: ProgressCb, batched: bool = False,
+             prompt: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Any]:
     if batched:
         try:
-            segments, tinfo = _decode_batched(model, path, language, use_vad)
+            segments, tinfo = _decode_batched(model, path, language, use_vad, prompt)
         except Exception as exc:  # noqa: BLE001 — пачечный режим не должен ломать распознавание
             print(f"[whisper] пачечный режим не сработал: {str(exc)[:160]}", file=sys.stderr, flush=True)
-            segments, tinfo = _decode(model, path, language, use_vad)
+            segments, tinfo = _decode(model, path, language, use_vad, prompt=prompt)
     else:
-        segments, tinfo = _decode(model, path, language, use_vad)
+        segments, tinfo = _decode(model, path, language, use_vad, prompt=prompt)
     out: List[Dict[str, Any]] = []
     for seg in segments:
         payload = _segment_payload(seg, offset)
@@ -378,9 +393,14 @@ def _consume(model, path: Path, language: Optional[str], use_vad: bool,
 
 def _transcribe_span(model, path: Path, language: Optional[str], offset: float,
                      total_duration: float, on_progress: ProgressCb, batched: bool = False):
-    """Пробует с VAD, при ошибке ONNX повторяет без VAD."""
+    """Пробует с VAD; если он ничего не нашёл или сломан — без VAD.
+
+    VAD обучен на речи и часто отбрасывает пение: песня с вокалом выглядит
+    как «тишина». Поэтому пустой результат — повод повторить без фильтра.
+    """
     try:
-        return _consume(model, path, language, True, offset, total_duration, on_progress, batched)
+        parts, info = _consume(model, path, language, True, offset, total_duration,
+                               on_progress, batched)
     except Exception as exc:  # noqa: BLE001
         low = str(exc).lower()
         if "onnxruntime" not in low and "vad" not in low and "fusedconv" not in low:
@@ -389,7 +409,17 @@ def _transcribe_span(model, path: Path, language: Optional[str], offset: float,
         if on_progress:
             on_progress(min(0.99, offset / max(1.0, total_duration)),
                         "VAD недоступен · распознавание без фильтра тишины")
-        return _consume(model, path, language, False, offset, total_duration, on_progress, batched)
+        return _consume(model, path, language, False, offset, total_duration,
+                        on_progress, batched, prompt="")
+
+    if not parts:
+        print("[whisper] VAD не нашёл речи — повторяю без VAD", file=sys.stderr, flush=True)
+        if on_progress:
+            on_progress(min(0.99, offset / max(1.0, total_duration)),
+                        "Похоже на пение · распознаю без фильтра тишины")
+        parts, info = _consume(model, path, language, False, offset, total_duration,
+                               on_progress, batched, prompt="")
+    return parts, info
 
 
 def _cut_window(src: Path, dst: Path, start: float, end: float) -> bool:
@@ -568,7 +598,9 @@ def transcribe(media: Path, workdir: Path, language: Optional[str] = None,
     if chunks_folder is not None:
         shutil.rmtree(chunks_folder, ignore_errors=True)
     if not out:
-        raise TranscriptionError("Речь не распознана: возможно, в видео нет голоса.")
+        raise TranscriptionError(
+            "Речь не распознана: возможно, в видео только музыка без вокала. "
+            "Для такого ролика выберите режим «Просто порезать».")
 
     # Второй проход по спорным местам — только когда аудио не разрезано на части.
     fixed = 0
@@ -580,6 +612,7 @@ def transcribe(media: Path, workdir: Path, language: Optional[str] = None,
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
+    out = [s for s in out if not _prompt_echo(s.get("text"))]
     out.sort(key=lambda s: s["start"])
     logprobs = [s.get("quality", {}).get("avg_logprob", 0.0) for s in out]
     weak = sum(1 for value in logprobs if value < WEAK_LOGPROB)
