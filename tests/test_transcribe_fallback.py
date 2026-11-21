@@ -56,5 +56,15 @@ class VadFallbackTest(unittest.TestCase):
         self.assertEqual(parts[0]["text"], "ok")
 
 
+class PromptEchoTest(unittest.TestCase):
+    def test_prompt_text_is_detected(self):
+        self.assertTrue(transcribe._prompt_echo(
+            "Субтитры, вертикальные клипы, подкаст, интервью"))
+
+    def test_real_lyrics_are_kept(self):
+        self.assertFalse(transcribe._prompt_echo("Girls, big girls, if we do what we want"))
+        self.assertFalse(transcribe._prompt_echo("Почему люди боятся начать своё дело"))
+
+
 if __name__ == "__main__":
     unittest.main()
