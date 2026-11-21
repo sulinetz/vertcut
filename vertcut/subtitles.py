@@ -169,6 +169,7 @@ _EMOJI_RE = re.compile(
 _RENDER_FACTOR = 0.45
 _WIDTH_FACTOR = 0.62
 _SAFE_WIDTH = 940.0
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
 
 def font_exists(key: str) -> bool:
@@ -206,9 +207,11 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _chars_per_line(font: Dict[str, Any], size: int) -> int:
+def _chars_per_line(font: Dict[str, Any], size: int, cjk: bool = False) -> int:
     advance = max(0.3, float(font["avg"])) * max(20, size) * _WIDTH_FACTOR
-    return max(8, min(24, int(_SAFE_WIDTH / advance)))
+    if cjk:
+        advance *= 1.6
+    return max(6, min(24, int(_SAFE_WIDTH / advance)))
 
 
 def _wrap(text: str, max_chars: int, max_lines: int = 2) -> List[str]:
@@ -373,7 +376,8 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
     scale = 0.700 / float(info["cap"])
     size = max(40, min(240, int(round(sub_size * scale))))
     hook_size_eff = max(30, int(round(hook_size * scale)))
-    chars = _chars_per_line(info, size)
+    cjk = any(_CJK_RE.search(str(w.get("word") or "")) for w in words)
+    chars = _chars_per_line(info, size, cjk)
     if position not in POSITIONS:
         position = "bottom"
 

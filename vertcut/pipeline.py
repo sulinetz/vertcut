@@ -433,6 +433,8 @@ def process_project(pid: str) -> None:
                 raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
 
         _update(pid, language=transcript.get("language"))
+        lang = str(transcript.get("language") or "").lower()[:2]
+        hook_ok = lang in ("ru", "en") or not lang
         db.merge_meta(pid, {
             "engine": transcript.get("engine"),
             "segments": len(transcript.get("segments") or []),
@@ -451,7 +453,8 @@ def process_project(pid: str) -> None:
         clip_settings = {
             "aspect": opts["aspect"], "mode": opts["mode"], "subtitles": opts["subtitles"],
             "accent": opts["accent"], "uppercase": opts["uppercase"],
-            "show_hook": opts["show_hook"], "focus_x": 0.5, "sub_size": opts["sub_size"],
+            "show_hook": bool(opts["show_hook"]) and hook_ok,
+            "focus_x": 0.5, "sub_size": opts["sub_size"],
             "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
             "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
             "platform": opts["platform"], "layout": opts["layout"],
@@ -489,6 +492,7 @@ def process_project(pid: str) -> None:
                     state["cancel"] = True
                 return False
             except Exception as exc:  # noqa: BLE001
+                traceback.print_exc()
                 db.update_clip(clip["id"], status="error", error=str(exc)[:400])
                 with lock:
                     state["failed"] += 1

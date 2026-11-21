@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,37 +53,56 @@ def payload() -> List[Dict[str, Any]]:
              "has_cyrillic": bool(f.get("has_cyrillic", True))} for f in list_custom()]
 
 
-def sync() -> Path:
-    """Собирает папку со всеми шрифтами (симлинки) для libass."""
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    expected: Dict[str, Path] = {}
-    for path in sorted(FONTS_DIR.glob("*.ttf")):
-        expected[path.name] = path
-    for font in list_custom():
-        expected[font["file"]] = CUSTOM_DIR / font["file"]
-    for existing in RUNTIME_DIR.iterdir():
-        if existing.name not in expected:
+_SYNC_LOCK = threading.Lock()
+_SYNCED = False
+
+
+def sync(force: bool = False) -> Path:
+    """Собирает папку со всеми шрифтами (симлинки) для libass.
+
+    Вызывается из нескольких потоков рендера одновременно, поэтому под замком:
+    иначе два потока одновременно создают один и тот же симлинк и получают
+    WinError 32. Повторный вызов без изменений ничего не делает.
+    """
+    global _SYNCED
+    with _SYNC_LOCK:
+        if _SYNCED and not force:
+            return RUNTIME_DIR
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        expected: Dict[str, Path] = {}
+        for path in sorted(FONTS_DIR.glob("*.ttf")):
+            expected[path.name] = path
+        for font in list_custom():
+            expected[font["file"]] = CUSTOM_DIR / font["file"]
+        for existing in RUNTIME_DIR.iterdir():
+            if existing.name not in expected:
+                try:
+                    existing.unlink()
+                except OSError:
+                    pass
+        for name, src in expected.items():
+            link = RUNTIME_DIR / name
             try:
-                existing.unlink()
+                if link.is_symlink() and Path(os.readlink(link)) == src:
+                    continue
+                if link.exists() or link.is_symlink():
+                    link.unlink()
             except OSError:
                 pass
-    for name, src in expected.items():
-        link = RUNTIME_DIR / name
-        try:
-            if link.is_symlink() and Path(os.readlink(link)) == src:
-                continue
-            if link.exists() or link.is_symlink():
-                link.unlink()
-        except OSError:
-            pass
-        try:
-            link.symlink_to(src)
-        except OSError:
-            shutil.copy2(src, link)
-    return RUNTIME_DIR
+            try:
+                link.symlink_to(src)
+            except OSError:
+                try:
+                    shutil.copy2(src, link)
+                except OSError:
+                    # файл уже создан параллельно — не повод падать
+                    pass
+        _SYNCED = True
+        return RUNTIME_DIR
 
 
 def libass_dir() -> Path:
+    """Папка шрифтов для libass. Синхронизируется один раз за процесс."""
     return sync()
 
 
@@ -174,7 +194,7 @@ def save(filename: str, data: bytes) -> Dict[str, Any]:
     }
     items.append(entry)
     _write_meta(items)
-    sync()
+    sync(force=True)
     return entry
 
 
@@ -194,5 +214,5 @@ def delete(key: str) -> bool:
     except OSError:
         pass
     _write_meta(kept)
-    sync()
+    sync(force=True)
     return True
