@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import utils
-from .config import (DATA_DIR, MODELS_DIR, WHISPER_COMPUTE, WHISPER_DEVICE,
-                     WHISPER_LOCAL_DIR, WHISPER_MODEL, ffmpeg)
+from .config import (DATA_DIR, MODELS_DIR, WHISPER_COMPUTE, WHISPER_CUDA_COMPUTE,
+                     WHISPER_DEVICE, WHISPER_LOCAL_DIR, WHISPER_MODEL, ffmpeg)
 
 # Всё, что качает HuggingFace, держим внутри папки проекта.
 os.environ.setdefault("HF_HOME", str(DATA_DIR / "hf"))
@@ -82,6 +82,140 @@ def model_available() -> bool:
         return False
 
 
+_DEVICE_LOCK = threading.Lock()
+_ACTIVE = {"device": None, "compute": None, "reason": ""}
+_CUDA_STATE: Dict[str, Any] = {}
+
+
+def _setup_cuda_dlls() -> None:
+    """Windows: библиотеки cuBLAS/cuDNN ставятся pip-пакетами и лежат вне PATH.
+
+    Без этого ctranslate2 падает на «cublas64_12.dll not found» и молча уходит
+    на CPU. Ищем их в установленных пакетах и добавляем каталоги в поиск DLL.
+    Пользователю не нужно ставить CUDA Toolkit.
+    """
+    if not sys.platform.startswith("win") or _CUDA_STATE.get("dlls"):
+        return
+    _CUDA_STATE["dlls"] = True
+    added = []
+    roots = []
+    try:
+        import site
+
+        roots.extend(site.getsitepackages())
+    except Exception:
+        pass
+    try:
+        import sysconfig
+
+        purelib = sysconfig.get_paths().get("purelib")
+        if purelib:
+            roots.append(purelib)
+    except Exception:
+        pass
+    for root in roots:
+        base = Path(root) / "nvidia"
+        if not base.is_dir():
+            continue
+        for pkg in base.iterdir():
+            for sub in ("bin", "lib"):
+                candidate = pkg / sub
+                if candidate.is_dir():
+                    try:
+                        os.add_dll_directory(str(candidate))
+                        added.append(str(candidate))
+                    except (OSError, AttributeError):
+                        pass
+    if added:
+        os.environ["PATH"] = os.pathsep.join(added + [os.environ.get("PATH", "")])
+
+
+def _nvidia_gpu_present() -> bool:
+    """Есть ли в системе карта NVIDIA (даже если CUDA-библиотеки не стоят)."""
+    if "present" in _CUDA_STATE:
+        return bool(_CUDA_STATE["present"])
+    present = False
+    try:
+        import shutil as _shutil
+        import subprocess as _sub
+
+        exe = _shutil.which("nvidia-smi")
+        if exe:
+            proc = _sub.run([exe, "-L"], capture_output=True, text=True, timeout=10,
+                            **utils.subprocess_kwargs())
+            present = proc.returncode == 0 and "GPU" in (proc.stdout or "")
+    except Exception:  # noqa: BLE001
+        present = False
+    _CUDA_STATE["present"] = present
+    return present
+
+
+def _cuda_available() -> bool:
+    """Есть ли рабочая CUDA. Проверяем один раз, ошибки не всплывают наружу."""
+    if "cuda" in _CUDA_STATE:
+        return bool(_CUDA_STATE["cuda"])
+    ok = False
+    reason = ""
+    try:
+        _setup_cuda_dlls()
+        import ctranslate2
+
+        count = int(ctranslate2.get_cuda_device_count())
+        if count <= 0:
+            if _nvidia_gpu_present():
+                reason = ("видеокарта NVIDIA найдена, но CUDA-библиотеки не установлены. "
+                          "Запустите: python tools/enable_cuda.py")
+            else:
+                reason = "видеокарта NVIDIA не найдена"
+        else:
+            types = ctranslate2.get_supported_compute_types("cuda")
+            if "float16" in types:
+                ok = True
+            else:
+                ok = bool(types)
+                reason = f"нет float16, доступно: {sorted(types)}"
+    except Exception as exc:  # noqa: BLE001 — отсутствие CUDA это норма
+        reason = str(exc)[:200]
+    _CUDA_STATE["cuda"] = ok
+    _CUDA_STATE["reason"] = reason
+    return ok
+
+
+def device_info() -> Dict[str, Any]:
+    """Что реально используется — для /api/health и настроек."""
+    with _DEVICE_LOCK:
+        cuda = _cuda_available()
+        return {
+            "device": _ACTIVE["device"] or ("cuda" if cuda else "cpu"),
+            "compute": _ACTIVE["compute"] or (WHISPER_CUDA_COMPUTE if cuda else WHISPER_COMPUTE),
+            "gpu": cuda,
+            "gpu_present": _nvidia_gpu_present(),
+            "note": _ACTIVE["reason"] or _CUDA_STATE.get("reason") or "",
+        }
+
+
+def _device_candidates(long_audio: bool) -> List[Tuple[str, str]]:
+    """Порядок попыток: GPU → CPU. Одна сборка работает везде."""
+    if WHISPER_DEVICE != "auto":
+        device = WHISPER_DEVICE
+        compute = WHISPER_CUDA_COMPUTE if "cuda" in device else WHISPER_COMPUTE
+        return [(device, compute)]
+
+    if sys.platform == "darwin":
+        # Metal на длинных файлах ctranslate2 иногда зависает — только короткие.
+        if long_audio:
+            return [("cpu", WHISPER_COMPUTE)]
+        return [("mps", "float16"), ("cpu", WHISPER_COMPUTE)]
+
+    if _cuda_available():
+        # float16 — основной режим; int8_float16 — если видеокарта старая.
+        primary = WHISPER_CUDA_COMPUTE
+        rest = [c for c in ("float16", "int8_float16", "int8") if c != primary]
+        return [("cuda", primary)] + [("cuda", c) for c in rest] + [("cpu", WHISPER_COMPUTE)]
+
+    return [("cpu", WHISPER_COMPUTE)]
+
+
 def _reset_model(long_audio: bool = False) -> None:
     global _MODEL, _MODEL_LONG
     with _MODEL_LOCK:
@@ -102,19 +236,9 @@ def _get_model(long_audio: bool = False):
 
         local_dir = Path(WHISPER_LOCAL_DIR) if WHISPER_LOCAL_DIR else None
         model_ref = str(local_dir) if local_dir and (local_dir / "model.bin").is_file() else WHISPER_MODEL
-        # Для длинных аудио не используем экспериментальный MPS — на нём
-        # ctranslate2 может «зависнуть» на середине многочасового файла.
-        if WHISPER_DEVICE == "auto":
-            # Apple Metal доступен только на macOS; на Windows/Linux сразу CPU.
-            if long_audio or sys.platform != "darwin":
-                candidates = [("cpu", WHISPER_COMPUTE)]
-            else:
-                candidates = [("mps", "float16"), ("cpu", WHISPER_COMPUTE)]
-        else:
-            candidates = [(WHISPER_DEVICE, WHISPER_COMPUTE)]
         last_exc = None
         model = None
-        for device, compute in candidates:
+        for device, compute in _device_candidates(long_audio):
             try:
                 model = WhisperModel(
                     model_ref,
@@ -123,12 +247,16 @@ def _get_model(long_audio: bool = False):
                     download_root=str(MODELS_DIR),
                 )
                 model._vc_device = device  # type: ignore[attr-defined]
+                with _DEVICE_LOCK:
+                    _ACTIVE.update({"device": device, "compute": compute, "reason": ""})
                 break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 model = None
                 print(f"[whisper] {device}/{compute} недоступен: {str(exc)[:200]}",
                       file=sys.stderr, flush=True)
+                with _DEVICE_LOCK:
+                    _ACTIVE["reason"] = f"{device}/{compute}: {str(exc)[:120]}"
         if model is None:
             raise TranscriptionError(
                 "Локальная модель распознавания речи недоступна. "

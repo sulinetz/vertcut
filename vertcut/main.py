@@ -82,6 +82,9 @@ async def _lifespan(_app: FastAPI):
     db.init_db()
     db.reset_stale_jobs()
     custom_fonts.sync()
+    info = transcribe.device_info()
+    print(f"[whisper] устройство: {info['device']}/{info['compute']}"
+          + (f" ({info['note']})" if info.get("note") else ""), flush=True)
     yield
 
 
@@ -153,6 +156,7 @@ def health() -> Dict[str, Any]:
         "ffmpeg": ok_ffmpeg,
         "whisper": transcribe.model_available(),
         "model": transcribe.model_cached(),
+        "device": transcribe.device_info(),
         "projects": db.count_projects(),
     }
 

@@ -30,7 +30,11 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 WHISPER_MODEL = os.environ.get("VERTCUT_WHISPER", "small")
 WHISPER_LOCAL_DIR = os.environ.get("VERTCUT_WHISPER_DIR", "")
 WHISPER_DEVICE = os.environ.get("VERTCUT_DEVICE", "auto")
+# CPU: int8 — самый быстрый вариант без видеокарты.
 WHISPER_COMPUTE = os.environ.get("VERTCUT_COMPUTE", "int8")
+# GPU: float16 по умолчанию. Явный VERTCUT_COMPUTE имеет приоритет.
+WHISPER_CUDA_COMPUTE = os.environ.get(
+    "VERTCUT_CUDA_COMPUTE", os.environ.get("VERTCUT_COMPUTE") or "float16")
 
 MAX_WORKERS = int(os.environ.get("VERTCUT_WORKERS", "1"))
 
