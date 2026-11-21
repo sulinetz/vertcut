@@ -155,3 +155,49 @@ class FindSegmentsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class RetimeWordsTest(unittest.TestCase):
+    def _words(self):
+        return [
+            {"word": "мы", "start": 0.0, "end": 0.3},
+            {"word": "нашли", "start": 0.4, "end": 0.9},
+            {"word": "бак", "start": 1.0, "end": 1.4},
+            {"word": "в", "start": 1.5, "end": 1.6},
+            {"word": "экспорте", "start": 1.7, "end": 2.2},
+        ]
+
+    def test_fixes_word_and_keeps_timing(self):
+        from viralcut import subtitles
+
+        out = subtitles.retime_words(self._words(), "мы нашли баг в экспорте")
+        self.assertEqual([w["word"] for w in out], ["мы", "нашли", "баг", "в", "экспорте"])
+        self.assertAlmostEqual(out[2]["start"], 1.0, places=2)
+        self.assertAlmostEqual(out[2]["end"], 1.4, places=2)
+
+    def test_inserted_words_get_time_slice(self):
+        from viralcut import subtitles
+
+        out = subtitles.retime_words(self._words(), "мы нашли баг в новом экспорте")
+        self.assertEqual(len(out), 6)
+        self.assertEqual(out[4]["word"], "новом")
+        self.assertGreaterEqual(out[4]["start"], out[3]["start"])
+
+    def test_empty_text_means_no_subtitles(self):
+        from viralcut import subtitles
+
+        self.assertEqual(subtitles.retime_words(self._words(), "   "), [])
+
+
+class SrtExportTest(unittest.TestCase):
+    def test_srt_has_timing_lines(self):
+        from viralcut import subtitles
+
+        words = [{"word": "Привет", "start": 1.0, "end": 1.4},
+                 {"word": "мир.", "start": 1.5, "end": 2.0},
+                 {"word": "Второй", "start": 2.6, "end": 3.0},
+                 {"word": "ряд.", "start": 3.1, "end": 3.6}]
+        srt = subtitles.to_srt(words, 1.0, 4.0)
+        self.assertIn(" --> ", srt)
+        self.assertIn("00:00:00,000 --> 00:00:01,000", srt)
+        self.assertEqual(srt.count(" --> "), 2)

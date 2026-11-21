@@ -899,6 +899,7 @@ function clipsGridHTML() {
           <a class="download-btn" href="${url}" download="${esc(c.title || "clip")}.mp4" data-download-clip="${c.id}" title="Скачать MP4">
             ${ICONS.download}<span>Скачать MP4</span>
           </a>
+          <a class="srt-btn" href="/api/clips/${c.id}/subtitles.srt" download title="Скачать субтитры (SRT)">SRT</a>
         </div>
       </div>
     </div>`;
@@ -1659,6 +1660,10 @@ function openEditor(clipId) {
             <label>Заголовок на видео (хук)</label>
             <input type="text" id="edHook" maxlength="90" value="${esc(clip.hook || clip.title || "")}" />
           </div>
+          <div class="field">
+            <label>Текст субтитров <span style="color:var(--muted-2);font-weight:400">— правьте имена и термины, тайминги сохранятся</span></label>
+            <textarea id="edText" rows="3" style="width:100%;resize:vertical">${esc((clip.words || []).map((w) => w.word).join(" "))}</textarea>
+          </div>
           <div class="row2">
             <div class="field">
               <label>Начало</label>
@@ -1807,6 +1812,11 @@ function openEditor(clipId) {
       end: Number(end.value),
       hook: $("#edHook").value,
       caption: $("#edCaption").value,
+      text: (() => {
+        const box = $("#edText");
+        const before = (clip.words || []).map((w) => w.word).join(" ");
+        return box && box.value.trim() !== before.trim() ? box.value.trim() : undefined;
+      })(),
       aspect: $("#edAspect").value,
       mode: $("#edMode").value,
       subtitles: $("#edSubs").checked,

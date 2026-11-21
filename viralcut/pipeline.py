@@ -623,6 +623,9 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
         words = live._absolute_words(words, float(clip["start"]))
     if start != clip["start"] or end != clip["end"]:
         words = [w for w in words if float(w["end"]) > start and float(w["start"]) < end]
+    # правка текста субтитров: сохраняем тайминги, меняем только слова
+    if payload.get("text") is not None and str(payload.get("text")).strip():
+        words = subtitles.retime_words(words, str(payload["text"]))
     db.update_clip(clip_id, status="rendering", start=start, end=end, words=words,
                    hook=payload.get("hook", clip["hook"]), title=payload.get("title", clip["title"]),
                    caption=payload.get("caption", clip["caption"]),

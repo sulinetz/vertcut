@@ -48,6 +48,7 @@ class StreamIn(BaseModel):
 
 
 class ClipEdit(BaseModel):
+    text: Optional[str] = None
     start: Optional[float] = None
     end: Optional[float] = None
     hook: Optional[str] = None
@@ -129,6 +130,8 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
             data["sub_offset"] = max(-120, min(180, int(data["sub_offset"])))
         except (TypeError, ValueError):
             raise HTTPException(400, "Некорректное смещение субтитров") from None
+    if "text" in data:
+        data["text"] = str(data["text"] or "").strip()[:4000]
     for key in ("start", "end"):
         if key in data:
             try:
@@ -431,6 +434,27 @@ def project_delete(pid: str) -> Dict[str, Any]:
     db.delete_project(pid)
     pipeline.delete_project_files(pid)
     return {"ok": True}
+
+
+@app.get("/api/clips/{cid}/subtitles.srt")
+def clip_srt(cid: str) -> Response:
+    """SRT для монтажа в своём редакторе: правленый текст уже внутри."""
+    clip = db.get_clip(cid)
+    if not clip:
+        raise HTTPException(404, "Клип не найден")
+    from . import subtitles
+
+    body = subtitles.to_srt(clip.get("words") or [], float(clip["start"]), float(clip["end"]))
+    if not body.strip():
+        raise HTTPException(400, "В клипе нет субтитров")
+    title = (clip.get("title") or "clip").replace("/", " ").replace('"', "").strip()[:60] or "clip"
+    # кириллица в заголовке не влезает в latin-1 — отдаём имя по RFC 5987
+    from urllib.parse import quote
+
+    disposition = (f"attachment; filename=\"clip.srt\"; "
+                   f"filename*=UTF-8''{quote(title + '.srt')}")
+    return Response(content=body, media_type="application/x-subrip",
+                    headers={"Content-Disposition": disposition})
 
 
 @app.post("/api/clips/{cid}/rerender")

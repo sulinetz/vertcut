@@ -925,6 +925,22 @@ select option, select optgroup { background: #16161c; color: var(--text); }
   line-height: 1.38;
   color: rgba(245, 245, 247, 0.92);
 }
+.srt-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  color: var(--muted);
+  background: var(--grouped-2);
+  border: 1px solid var(--separator);
+}
+.srt-btn:hover { color: var(--text); border-color: var(--hairline); }
+
 .clip-parts {
   display: flex;
   flex-wrap: wrap;

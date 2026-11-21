@@ -262,6 +262,99 @@ def _pos_tag(position: str, offset: int) -> str:
     return f"\\an2\\pos({PLAY_W // 2},{y})"
 
 
+def _plain(token: str) -> str:
+    return re.sub(r"[^\w]+", "", str(token or "").lower().replace("ё", "е"))
+
+
+def to_srt(words: List[Dict[str, Any]], start: float, end: float,
+           max_words: int = 6) -> str:
+    """SRT для тех, кто монтирует сам: слова собираются в короткие реплики."""
+    def stamp(seconds: float) -> str:
+        seconds = max(0.0, float(seconds) - start)
+        hours, rest = divmod(int(seconds), 3600)
+        minutes, secs = divmod(rest, 60)
+        millis = int(round((seconds - int(seconds)) * 1000))
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+    cues: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    for w in words or []:
+        if float(w.get("end", 0)) <= start or float(w.get("start", 0)) >= end:
+            continue
+        current.append(w)
+        text = " ".join(x["word"] for x in current)
+        if len(current) >= max_words or text.rstrip().endswith((".", "!", "?", "…")):
+            cues.append(current)
+            current = []
+    if current:
+        cues.append(current)
+
+    lines: List[str] = []
+    for index, cue in enumerate(cues, start=1):
+        text = " ".join(w["word"] for w in cue).strip()
+        if not text:
+            continue
+        lines.append(f"{index}\n{stamp(max(start, float(cue[0]['start'])))} --> "
+                     f"{stamp(min(end, float(cue[-1]['end'])))}\n{text}\n")
+    return "\n".join(lines)
+
+
+def retime_words(words: List[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
+    """Переносит правленый текст обратно на тайминги слов.
+
+    Пользователь исправляет «бак» на «баг» или имя бренда, а субтитры должны
+    остаться синхронными: неизменённые слова сохраняют свои тайминги, новые
+    распределяются по времени заменённого куска. Так правка текста не требует
+    ручной расстановки времени по словам.
+    """
+    import difflib
+
+    clean = (text or "").strip()
+    if not clean:
+        return []
+    original = [dict(w) for w in (words or [])]
+    if not original:
+        return []
+    new_tokens = clean.split()
+    ref = [_plain(w.get("word")) for w in original]
+    hyp = [_plain(t) for t in new_tokens]
+
+    matcher = difflib.SequenceMatcher(a=ref, b=hyp, autojunk=False)
+    out: List[Dict[str, Any]] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for k in range(i2 - i1):
+                item = dict(original[i1 + k])
+                item["word"] = new_tokens[j1 + k]
+                out.append(item)
+            continue
+        if tag == "delete":
+            continue
+        # replace / insert: растягиваем новые слова на время исходного куска
+        if i1 < i2:
+            t0 = float(original[i1]["start"])
+            t1 = float(original[i2 - 1]["end"])
+        else:
+            if i1 < len(original):
+                t0 = float(original[i1].get("start", 0.0))
+                t1 = t0 + 0.4
+            else:
+                t0 = float(original[-1].get("end", 0.0))
+                t1 = t0 + 0.4
+        if j2 - j1 == 1 and i2 > i1:
+            # одно слово вместо куска — оставляем ровно исходный интервал
+            out.append({"word": new_tokens[j1], "start": round(t0, 3), "end": round(t1, 3)})
+            continue
+        count = max(1, j2 - j1)
+        step = max(0.06, (t1 - t0) / count)
+        for k in range(j2 - j1):
+            start = t0 + k * step
+            out.append({"word": new_tokens[j1 + k], "start": round(start, 3),
+                        "end": round(start + step * 0.95, 3)})
+    out.sort(key=lambda w: float(w.get("start", 0.0)))
+    return out
+
+
 def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               hook: str = "", accent: str = "yellow", uppercase: bool = True,
               show_hook: bool = True, sub_size: int = 118, hook_size: int = 96,
