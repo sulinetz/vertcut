@@ -289,6 +289,7 @@ const state = {
     subPos: "bottom",
     subOffset: 0,
     subSpeed: "calm",
+    lineGap: 0,
     platform: "universal",
     layout: "",
     cookies: "",
@@ -514,6 +515,10 @@ function heroHTML() {
             <span>Сдвиг <b id="offsetVal">${o.subOffset}</b></span>
             <input type="range" id="offsetRange" min="-120" max="180" step="5" value="${o.subOffset}" />
           </label>
+          <label class="mini-field grow">
+            <span>Межстрочный интервал <b id="lineGapVal">${o.lineGap}</b></span>
+            <input type="range" id="lineGapRange" min="0" max="80" step="2" value="${o.lineGap}" />
+          </label>
           <label class="mini-field">
             <span>Темп</span>
             <div class="seg" data-group="subSpeed">
@@ -588,6 +593,13 @@ function bindHero() {
   const posSelect = $("#posSelect");
   if (posSelect) posSelect.addEventListener("change", () => { state.opts.subPos = posSelect.value; });
 
+  const lineGapRange = $("#lineGapRange");
+  if (lineGapRange) lineGapRange.addEventListener("input", () => {
+    state.opts.lineGap = Number(lineGapRange.value);
+    const label = $("#lineGapVal");
+    if (label) label.textContent = lineGapRange.value;
+  });
+
   const offsetRange = $("#offsetRange");
   if (offsetRange) offsetRange.addEventListener("input", () => {
     state.opts.subOffset = Number(offsetRange.value);
@@ -641,6 +653,7 @@ function heroOptions() {
     sub_position: state.opts.subPos,
     sub_offset: state.opts.subOffset,
     sub_speed: state.opts.subSpeed,
+    line_gap: state.opts.lineGap,
     platform: state.opts.platform,
     layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
@@ -2011,6 +2024,10 @@ function openEditor(clipId) {
               <label>Сдвиг <b id="edOffVal">${fontOffset}</b></label>
               <input type="range" id="edOffset" min="-120" max="180" step="5" value="${fontOffset}" />
             </div>
+            <div class="field">
+              <label>Межстрочный интервал <b id="edLineGapVal">${Number(s.line_gap || 0)}</b></label>
+              <input type="range" id="edLineGap" min="0" max="80" step="2" value="${Number(s.line_gap || 0)}" />
+            </div>
           </div>
           <div class="field">
             <label>Темп субтитров</label>
@@ -2092,6 +2109,7 @@ function openEditor(clipId) {
     const size = Number($("#edSize") ? $("#edSize").value : 118) * 0.45 * k;
     const position = $("#edPos") ? $("#edPos").value : "bottom";
     const offset = Number($("#edOffset") ? $("#edOffset").value : 0);
+  const lineGap = Number($("#edLineGap") ? $("#edLineGap").value : 0);
     const upper = $("#edUpper") ? $("#edUpper").checked : true;
     const showSubs = $("#edSubs") ? $("#edSubs").checked : true;
     const showHook = $("#edShowHook") ? $("#edShowHook").checked : true;
@@ -2104,6 +2122,7 @@ function openEditor(clipId) {
     subView.style.fontSize = size + "px";
     subView.innerHTML = line;
     subView.style.display = showSubs && words.length ? "block" : "none";
+    subView.style.lineHeight = (1.15 + lineGap / 90).toFixed(2);
     subView.style.top = "";
     subView.style.bottom = "";
     subView.style.transform = "";
@@ -2124,10 +2143,11 @@ function openEditor(clipId) {
       hookView.style.fontSize = Math.max(9, size * 0.8) + "px";
       hookView.style.top = Math.max(6, (zone.top + 40) * k) + "px";
       hookView.style.display = showHook && showSubs && hookText ? "block" : "none";
+      hookView.style.lineHeight = (1.1 + lineGap / 110).toFixed(2);
     }
   };
 
-  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edUpper", "edSubs", "edShowHook", "edPlatform"]
+  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edLineGap", "edUpper", "edSubs", "edShowHook", "edPlatform"]
     .forEach((id) => {
       const el = $("#" + id);
       if (!el) return;
@@ -2153,6 +2173,7 @@ function openEditor(clipId) {
     $$("#edSpeed button").forEach((b) => b.classList.toggle("active", b === btn));
   });
   $("#edOffset").addEventListener("input", (e) => { $("#edOffVal").textContent = e.target.value; });
+  $("#edLineGap").addEventListener("input", (e) => { $("#edLineGapVal").textContent = e.target.value; });
 
   const start = $("#edStart"), end = $("#edEnd");
   const startNum = $("#edStartNum"), endNum = $("#edEndNum");
@@ -2226,6 +2247,7 @@ function openEditor(clipId) {
       sub_size: Number($("#edSize").value),
       sub_position: $("#edPos").value,
       sub_offset: Number($("#edOffset").value),
+    line_gap: Number($("#edLineGap").value),
       sub_speed: ($("#edSpeed .active") || {}).dataset?.val || "calm"
     };
     try {

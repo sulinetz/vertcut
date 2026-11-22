@@ -72,6 +72,7 @@ class ClipEdit(BaseModel):
     sub_position: Optional[str] = None
     sub_offset: Optional[int] = None
     sub_speed: Optional[str] = None
+    line_gap: Optional[int] = None
     platform: Optional[str] = None
     layout: Optional[str] = None
 
@@ -147,6 +148,11 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
             data["sub_size"] = max(70, min(180, int(data["sub_size"])))
         except (TypeError, ValueError):
             raise HTTPException(400, "Некорректный размер субтитров") from None
+    if "line_gap" in data:
+        try:
+            data["line_gap"] = max(0, min(120, int(data["line_gap"])))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Некорректный межстрочный интервал") from None
     if "sub_offset" in data:
         try:
             data["sub_offset"] = max(-120, min(180, int(data["sub_offset"])))

@@ -32,6 +32,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "sub_position": "bottom",
     "sub_offset": 0,
     "sub_speed": "calm",
+    "line_gap": 0,
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
@@ -78,6 +79,10 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["sub_position"] = "bottom"
     if opts.get("sub_speed") not in subtitles.SPEEDS:
         opts["sub_speed"] = "calm"
+    try:
+        opts["line_gap"] = max(0, min(120, int(opts.get("line_gap", 0))))
+    except (TypeError, ValueError):
+        opts["line_gap"] = 0
     if not platforms.is_known(opts.get("platform")):
         opts["platform"] = platforms.DEFAULT_PLATFORM
     if opts.get("layout") not in ("", *render.STREAM_LAYOUTS):
@@ -213,6 +218,7 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "show_hook": opts["show_hook"], "focus_x": 0.5, "sub_size": opts["sub_size"],
         "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
         "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
+        "line_gap": opts["line_gap"],
         "platform": opts["platform"], "layout": opts["layout"],
         "segments": bool(opts.get("segments")),
     }
@@ -588,6 +594,7 @@ def process_project(pid: str) -> None:
             "focus_x": 0.5, "sub_size": opts["sub_size"],
             "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
             "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
+            "line_gap": opts["line_gap"],
             "platform": opts["platform"], "layout": opts["layout"],
         }
         _check_cancel(pid)
@@ -706,6 +713,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             position=settings.get("sub_position", "bottom"),
             offset=int(settings.get("sub_offset", 0)),
             speed=settings.get("sub_speed", "calm"),
+            line_gap=int(settings.get("line_gap", 0) or 0),
             platform=settings.get("platform", platforms.DEFAULT_PLATFORM),
             bottom_reserve=(render.BAND_H if settings.get("layout") == "band" else 0),
         )
@@ -777,7 +785,7 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
     if settings.get("segments"):
         raise RuntimeError("Клип собран в экономном режиме из фрагмента. Шаблон меняется до запуска нарезки.")
     for key in ("aspect", "mode", "subtitles", "accent", "uppercase", "show_hook", "focus_x",
-                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "platform", "layout"):
+                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "line_gap", "platform", "layout"):
         if key in payload and payload[key] is not None:
             settings[key] = payload[key]
     start = float(payload.get("start", clip["start"]))

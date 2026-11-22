@@ -253,22 +253,56 @@ def _cues(words: List[Dict[str, Any]], max_chars: int = 32, max_words: int = 6,
     return cues
 
 
-def _pos_tag(position: str, offset: int, platform: str = "", reserve: int = 0) -> str:
-    """Возвращает override-тег положения с учётом интерфейса площадки."""
+def _pos_parts(position: str, offset: int, platform: str = "",
+               reserve: int = 0) -> Tuple[int, int, int]:
+    """(выравнивание, x, y) с учётом интерфейса площадки."""
     from . import platforms
 
     if position == "top":
         y = max(60, platforms.top_text_y(platform) + 120 - offset)
         y = platforms.clamp_y(y, platform, anchor="top")
-        return f"\\an8\\pos({PLAY_W // 2},{int(y)})"
+        return 8, PLAY_W // 2, int(y)
     if position == "middle":
         mid = 960 - offset
-        x0, y0, _, y1 = platforms.safe_rect(platform)
+        _x0, y0, _x1, y1 = platforms.safe_rect(platform)
         y = max(y0 + 120, min(y1 - 120, mid))
-        return f"\\an5\\pos({PLAY_W // 2},{int(y)})"
+        return 5, PLAY_W // 2, int(y)
     y = platforms.bottom_text_y(platform, reserve=reserve) - offset
     y = platforms.clamp_y(y, platform, anchor="bottom")
-    return f"\\an2\\pos({PLAY_W // 2},{int(y)})"
+    return 2, PLAY_W // 2, int(y)
+
+
+def _pos_tag(position: str, offset: int, platform: str = "", reserve: int = 0) -> str:
+    anchor, x, y = _pos_parts(position, offset, platform, reserve)
+    return f"\\an{anchor}\\pos({x},{y})"
+
+
+def _line_events(lines: List[str], layer: int, style: str, start: float, end: float,
+                 anchor: int, x: int, y: int, line_h: float, gap: float,
+                 tags: str) -> List[str]:
+    """Одно событие на реплику или отдельные события на каждую строку.
+
+    В ASS нет межстрочного интервала, поэтому при gap > 0 строки выводятся
+    раздельно и раздвигаются вручную.
+    """
+    if gap <= 0.5 or len(lines) <= 1:
+        body = "\\N".join(lines)
+        return [f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style},,0,0,0,,"
+                f"{{\\an{anchor}\\pos({x},{y}){tags}}}{body}"]
+
+    out: List[str] = []
+    total = len(lines)
+    step = line_h + gap
+    for i, line in enumerate(lines):
+        if anchor in (1, 2, 3):
+            ly = y - (total - 1 - i) * step
+        elif anchor in (7, 8, 9):
+            ly = y + i * step
+        else:
+            ly = y + (i - (total - 1) / 2) * step
+        out.append(f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style},,0,0,0,,"
+                   f"{{\\an{anchor}\\pos({x},{int(ly)}){tags}}}{line}")
+    return out
 
 
 def _plain(token: str) -> str:
@@ -369,7 +403,8 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               show_hook: bool = True, sub_size: int = 118, hook_size: int = 96,
               font: str = "montserrat",
               position: str = "bottom", offset: int = 0,
-              speed: str = "calm", platform: str = "", bottom_reserve: int = 0) -> str:
+              speed: str = "calm", platform: str = "", bottom_reserve: int = 0,
+              line_gap: int = 0) -> str:
     """Собирает ASS-файл для фрагмента. Тайминги слов абсолютные (от начала видео)."""
     accent_color = ACCENTS.get(accent, ACCENTS["yellow"])
     info = font_info(font)
@@ -388,7 +423,8 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
     )
     events: List[str] = []
     clip_len = max(0.1, clip_end - clip_start)
-    pos = _pos_tag(position, int(offset), platform, int(bottom_reserve))
+    anchor, pos_x, pos_y = _pos_parts(position, int(offset), platform, int(bottom_reserve))
+    gap = max(0, min(120, int(line_gap or 0)))
 
     local = []
     for w in words:
@@ -417,24 +453,22 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
         if len(hook_text) > 50:
             hook_text = hook_text[:49].rsplit(" ", 1)[0].rstrip(" ,.-—") + "…"
         hook_lines = _wrap(hook_text, max(10, int(chars * 1.15)), 3)
-        body = "\\N".join(hook_lines)
         start, end = 0.15, min(clip_len - 0.1, max(1.8, min(4.2, clip_len * 0.3)))
-        # если субтитры сверху — хук уводим вниз, чтобы не перекрывались
         # Хук ставим с противоположной стороны от субтитров, тоже внутри
         # безопасной области площадки.
         from . import platforms
 
         if position == "top":
             hook_y = platforms.bottom_text_y(platform) - 20
-            hook_pos = f"\\an2\\pos({PLAY_W // 2},{int(hook_y)})"
+            hook_anchor = 2
         else:
             hook_y = platforms.top_text_y(platform)
-            hook_pos = f"\\an8\\pos({PLAY_W // 2},{int(hook_y)})"
-        events.append(
-            f"Dialogue: 1,{ass_time(start)},{ass_time(end)},Hook,,0,0,0,,"
-            f"{{{hook_pos}\\fad(180,220)\\fscx104\\fscy104}}"
-            f"{body}"
-        )
+            hook_anchor = 8
+        events.extend(_line_events(
+            hook_lines, 1, "Hook", start, end, hook_anchor, PLAY_W // 2, int(hook_y),
+            float(hook_size_eff) * 1.2, float(gap),
+            "\\fad(180,220)\\fscx104\\fscy104",
+        ))
 
     # Короткие реплики + караоке-подсветка: текст не «мигает» на каждом слове,
     # а плавно закрашивается цветом акцента и висит ещё немного после речи.
@@ -487,12 +521,11 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
             rendered.append(" ".join(
                 f"{{\\k{karaoke[ti]}}}{tokens[ti]}" for ti in group
             ))
-        body = "\\N".join(rendered)
         tags = (f"\\fad({int(fade_in)},{int(fade_out)})"
                 f"\\fscx104\\fscy104\\t(0,170,\\fscx100\\fscy100)")
-        events.append(
-            f"Dialogue: 0,{ass_time(cue_start)},{ass_time(cue_end)},Sub,,0,0,0,,"
-            f"{{{pos}{tags}}}{body}"
-        )
+        events.extend(_line_events(
+            rendered, 0, "Sub", cue_start, cue_end, anchor, pos_x, pos_y,
+            float(size) * 1.2, float(gap), tags,
+        ))
 
     return header + "\n".join(events) + "\n"
