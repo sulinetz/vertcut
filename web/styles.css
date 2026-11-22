@@ -1443,3 +1443,59 @@ input[type="range"]::-webkit-slider-thumb {
   background: linear-gradient(90deg, #3b82f6, #22d3ee);
   transition: width 0.4s ease;
 }
+
+/* Плашка «идёт обработка» поверх любого экрана */
+.active-bar {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(18, 22, 32, 0.92);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+}
+.active-bar.hidden { display: none; }
+.active-bar .ab-text {
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.active-bar .ab-open {
+  font-size: 12px;
+  color: #93c5fd;
+  flex: none;
+}
+.active-bar:hover { border-color: rgba(59, 130, 246, 0.8); }
+
+/* Кнопки подстройки границ в редакторе */
+.nudge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.mini-btn {
+  padding: 4px 9px;
+  font-size: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--separator);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  cursor: pointer;
+}
+.mini-btn:hover { color: var(--text); border-color: rgba(59, 130, 246, 0.5); }
+.ed-dur {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted-2);
+}

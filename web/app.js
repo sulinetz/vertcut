@@ -316,6 +316,23 @@ function toast(text, kind) {
 
 /* ---------------- Sidebar ---------------- */
 
+function updateActiveBar() {
+  const bar = $("#activeBar");
+  if (!bar) return;
+  const active = state.projects.find((p) =>
+    ["queued", "preparing", "running", "processing"].includes(p.status));
+  if (!active) {
+    bar.classList.add("hidden");
+    bar.innerHTML = "";
+    return;
+  }
+  bar.classList.remove("hidden");
+  bar.dataset.project = active.id;
+  bar.innerHTML = `<span class="spinner"></span>
+    <span class="ab-text">${esc(active.title || "Проект")} · ${esc(active.stage || "обработка")} · ${Math.round(active.progress || 0)}%</span>
+    <span class="ab-open">открыть</span>`;
+}
+
 function renderSidebar() {
   const list = $("#projectList");
   if (!state.projects.length) {
@@ -342,6 +359,7 @@ function renderSidebar() {
       </span>
     </button>`;
   }).join("");
+  updateActiveBar();
 }
 
 async function loadProjects() {
@@ -1551,6 +1569,7 @@ function applyPreset(key) {
 }
 
 function closeTemplate(keepProject) {
+  const pid = state.tmplPid;
   clearTimeout(state.tmplTimer);
   clearInterval(state.tmplAnim);
   state.tmplTimer = null;
@@ -1559,7 +1578,11 @@ function closeTemplate(keepProject) {
   state.tmplDetail = null;
   $("#modal").classList.add("hidden");
   $("#modal").innerHTML = "";
-  if (!keepProject) renderSidebar();
+  if (!keepProject) {
+    // после закрытия окна возвращаем к проекту: там есть кнопка настроек
+    if (pid) openProject(pid);
+    else renderSidebar();
+  }
 }
 
 function openTemplate(pid) {
@@ -1881,6 +1904,13 @@ function openEditor(clipId) {
                 <input type="range" id="edStart" min="0" max="${maxT}" step="0.1" value="${clip.start}" />
                 <input type="number" id="edStartNum" min="0" max="${maxT}" step="0.1" value="${clip.start.toFixed(1)}" />
               </div>
+              <div class="nudge-row">
+                <button type="button" class="mini-btn" data-nudge="start:-1">−1 с</button>
+                <button type="button" class="mini-btn" data-nudge="start:-0.2">−0.2</button>
+                <button type="button" class="mini-btn" data-nudge="start:0.2">+0.2</button>
+                <button type="button" class="mini-btn" data-nudge="start:1">+1 с</button>
+                <button type="button" class="mini-btn" data-nudge="start:word">к слову</button>
+              </div>
             </div>
             <div class="field">
               <label>Конец</label>
@@ -1888,6 +1918,14 @@ function openEditor(clipId) {
                 <input type="range" id="edEnd" min="0" max="${maxT}" step="0.1" value="${clip.end}" />
                 <input type="number" id="edEndNum" min="0" max="${maxT}" step="0.1" value="${clip.end.toFixed(1)}" />
               </div>
+              <div class="nudge-row">
+                <button type="button" class="mini-btn" data-nudge="end:-1">−1 с</button>
+                <button type="button" class="mini-btn" data-nudge="end:-0.2">−0.2</button>
+                <button type="button" class="mini-btn" data-nudge="end:0.2">+0.2</button>
+                <button type="button" class="mini-btn" data-nudge="end:1">+1 с</button>
+                <button type="button" class="mini-btn" data-nudge="end:word">к слову</button>
+              </div>
+              <div class="ed-dur" id="edDur"></div>
             </div>
           </div>
           <div class="row2">
@@ -2012,10 +2050,36 @@ function openEditor(clipId) {
   const startNum = $("#edStartNum"), endNum = $("#edEndNum");
   const video = $("#edVideo");
 
+  const durLabel = $("#edDur");
   const syncNumbers = () => {
     startNum.value = Number(start.value).toFixed(1);
     endNum.value = Number(end.value).toFixed(1);
+    if (durLabel) {
+      const dur = Math.max(0, Number(end.value) - Number(start.value));
+      durLabel.textContent = `Длительность: ${dur.toFixed(1)} с`;
+    }
   };
+
+  const words = clip.words || [];
+  const snapToWord = (value, edge) => {
+    let best = value, bestDist = Infinity;
+    for (const w of words) {
+      const candidate = edge === "start" ? Number(w.start) : Number(w.end);
+      const dist = Math.abs(candidate - value);
+      if (dist < bestDist) { bestDist = dist; best = candidate; }
+    }
+    return bestDist < 2.0 ? best : value;
+  };
+
+  $$("#modal .nudge-row button").forEach((btn) => btn.addEventListener("click", () => {
+    const [field, kind] = btn.dataset.nudge.split(":");
+    const el = field === "start" ? start : end;
+    let value = Number(el.value);
+    value = kind === "word" ? snapToWord(value, field) : value + Number(kind);
+    value = Math.max(0, Math.min(maxT, value));
+    el.value = value;
+    el.dispatchEvent(new Event("input"));
+  }));
   start.addEventListener("input", () => {
     if (Number(start.value) > Number(end.value) - 3) start.value = Math.max(0, Number(end.value) - 3);
     syncNumbers();
