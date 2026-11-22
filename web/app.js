@@ -224,7 +224,8 @@ const DUR_PRESETS = {
   "30-60": { min: 30, max: 60, target: 42, label: "30–60 сек" },
   "30-90": { min: 30, max: 90, target: 55, label: "30–90 сек" },
   "60-120": { min: 60, max: 120, target: 90, label: "1–2 мин" },
-  "120-180": { min: 120, max: 180, target: 150, label: "2–3 мин" }
+  "120-180": { min: 120, max: 180, target: 150, label: "2–3 мин" },
+  "61-90": { min: 61, max: 90, target: 75, label: "61–90 сек" }
 };
 
 const PLATFORM_ZONES = {
