@@ -174,7 +174,11 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 crf: int = 21, preset: str = "veryfast",
                 crop_path: Optional[Dict[str, Any]] = None,
                 layout: str = "", facecam: Optional[Dict[str, Any]] = None,
-                platform: str = "", fps: Optional[float] = None) -> Dict[str, Any]:
+                platform: str = "", fps: Optional[float] = None,
+                look: str = "none", vignette: bool = False, grain: bool = False,
+                zoom: int = 100, bitrate: int = 0,
+                music_path: Optional[Path] = None,
+                music_volume: float = 0.08) -> Dict[str, Any]:
     w, h = ASPECTS.get(aspect, ASPECTS["9:16"])
     if layout in STREAM_LAYOUTS and facecam:
         w, h = ASPECTS["9:16"]
@@ -194,14 +198,34 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         parts = [_bg_chain(w, h, focus_x, sharpen)]
     else:
         parts = [_crop_chain(w, h, focus_x, sharpen=sharpen)]
+    style: List[str] = []
+    z = max(100, min(120, int(zoom or 100)))
+    if z > 100:
+        factor = z / 100.0
+        style.append(f"scale=iw*{factor:.3f}:ih*{factor:.3f},crop={w}:{h}")
+    looks = {
+        "warm": "eq=saturation=1.10:gamma_r=1.04:gamma_b=0.96",
+        "cool": "eq=saturation=1.06:gamma_b=1.05:gamma_r=0.96",
+        "contrast": "eq=contrast=1.12:saturation=1.10",
+        "cinematic": "eq=contrast=1.08:saturation=0.92:gamma=0.98",
+        "soft": "eq=contrast=0.96:saturation=1.04:brightness=0.02",
+    }
+    if look in looks:
+        style.append(looks[look])
+    if vignette:
+        style.append("vignette=PI/5")
+    if grain:
+        style.append("noise=alls=8:allf=t+u")
+    prefix = "[base]" + (",".join(style) + "," if style else "")
+
     if ass_path is not None:
         parts.append(
-            f"[base]ass=filename='{_esc(ass_path)}':fontsdir='{_esc(custom_fonts.libass_dir())}':alpha=1,"
+            f"{prefix}ass=filename='{_esc(ass_path)}':fontsdir='{_esc(custom_fonts.libass_dir())}':alpha=1,"
             f"format=yuv420p[v]"
         )
         vlabel = "[v]"
     else:
-        parts.append("[base]scale=in_range=auto:out_range=tv,format=yuv420p[v]")
+        parts.append(f"{prefix}scale=in_range=auto:out_range=tv,format=yuv420p[v]")
         vlabel = "[v]"
 
     filter_complex = ";".join(parts)
@@ -210,8 +234,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     cmd = [ffmpeg(), "-y", "-hide_banner", "-v", "error", "-nostats",
            "-progress", "pipe:1",
            "-ss", f"{clip_start:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
+    if music_path is not None:
+        cmd += ["-stream_loop", "-1", "-i", str(music_path)]
 
-    cmd += ["-filter_complex", filter_complex, "-map", vlabel]
     if info["has_audio"]:
         measured = _measure_loudness(source, clip_start, duration)
         if measured:
@@ -225,15 +250,32 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             audio_filter = "loudnorm=I=-14:TP=-1.5:LRA=11"
         fade_out = max(0.0, duration - 0.06)
         audio_filter += f",afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out:.3f}:d=0.05"
-        cmd += ["-map", "0:a:0", "-af", audio_filter,
-                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
+        if music_path is not None:
+            level = max(0.0, min(0.5, float(music_volume or 0.0)))
+            end_fade = max(0.0, duration - 1.6)
+            filter_complex += (
+                f";[0:a]{audio_filter}[a0];"
+                f"[1:a]volume={level:.3f},afade=t=in:st=0:d=1.2,"
+                f"afade=t=out:st={end_fade:.3f}:d=1.6[m];"
+                f"[a0][m]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+            )
+            cmd += ["-filter_complex", filter_complex, "-map", vlabel,
+                    "-map", "[aout]",
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
+        else:
+            cmd += ["-filter_complex", filter_complex, "-map", vlabel,
+                    "-map", "0:a:0", "-af", audio_filter,
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
     else:
-        cmd += ["-an"]
+        cmd += ["-filter_complex", filter_complex, "-map", vlabel, "-an"]
 
     hw = hw_encoder()
     video_args = _hw_args(hw, crf) if hw else ["-c:v", "libx264", "-preset", preset,
                                                "-crf", str(crf), "-profile:v", "high",
                                                "-pix_fmt", "yuv420p"]
+    if bitrate and not hw:
+        mbps = max(2, min(40, int(bitrate)))
+        video_args += ["-maxrate", f"{mbps}M", "-bufsize", f"{mbps * 2}M"]
     out_fps = 30.0
     if fps:
         out_fps = round(float(fps), 2)

@@ -33,5 +33,19 @@ class ExportFpsOptionsTest(unittest.TestCase):
         self.assertTrue(opts["export_subs"])
 
 
+class StyleOptionsTest(unittest.TestCase):
+    def test_defaults(self):
+        opts = pipeline.normalize_options({})
+        self.assertEqual(opts["look"], "none")
+        self.assertEqual(opts["zoom"], 100)
+        self.assertFalse(opts["vignette"])
+
+    def test_clamps(self):
+        self.assertEqual(pipeline.normalize_options({"zoom": 500})["zoom"], 120)
+        self.assertEqual(pipeline.normalize_options({"zoom": 50})["zoom"], 100)
+        self.assertEqual(pipeline.normalize_options({"music_volume": 99})["music_volume"], 50)
+        self.assertEqual(pipeline.normalize_options({"look": "bogus"})["look"], "none")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,12 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "line_gap": 0,
     "keep_fps": True,
     "export_subs": False,
+    "look": "none",
+    "vignette": False,
+    "grain": False,
+    "zoom": 100,
+    "bitrate": 0,
+    "music_volume": 8,
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
@@ -83,6 +89,22 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["sub_speed"] = "calm"
     opts["keep_fps"] = bool(opts.get("keep_fps", True))
     opts["export_subs"] = bool(opts.get("export_subs", False))
+    if opts.get("look") not in ("none", "warm", "cool", "contrast", "cinematic", "soft"):
+        opts["look"] = "none"
+    opts["vignette"] = bool(opts.get("vignette", False))
+    opts["grain"] = bool(opts.get("grain", False))
+    try:
+        opts["zoom"] = max(100, min(120, int(opts.get("zoom", 100))))
+    except (TypeError, ValueError):
+        opts["zoom"] = 100
+    try:
+        opts["bitrate"] = max(0, min(40, int(opts.get("bitrate", 0))))
+    except (TypeError, ValueError):
+        opts["bitrate"] = 0
+    try:
+        opts["music_volume"] = max(0, min(50, int(opts.get("music_volume", 8))))
+    except (TypeError, ValueError):
+        opts["music_volume"] = 8
     try:
         opts["line_gap"] = max(0, min(120, int(opts.get("line_gap", 0))))
     except (TypeError, ValueError):
@@ -226,6 +248,9 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "platform": opts["platform"], "layout": opts["layout"],
         "fps": None if opts.get("keep_fps", True) else 30.0,
         "export_subs": bool(opts.get("export_subs", False)),
+        "look": opts["look"], "vignette": opts["vignette"], "grain": opts["grain"],
+        "zoom": opts["zoom"], "bitrate": opts["bitrate"],
+        "music_volume": opts["music_volume"],
         "segments": bool(opts.get("segments")),
     }
 
@@ -609,6 +634,9 @@ def process_project(pid: str) -> None:
             "platform": opts["platform"], "layout": opts["layout"],
             "fps": None if opts.get("keep_fps", True) else 30.0,
             "export_subs": bool(opts.get("export_subs", False)),
+            "look": opts["look"], "vignette": opts["vignette"], "grain": opts["grain"],
+            "zoom": opts["zoom"], "bitrate": opts["bitrate"],
+            "music_volume": opts["music_volume"],
         }
         _check_cancel(pid)
         total = len(found)
@@ -706,6 +734,18 @@ def run_project(pid: str) -> None:
     process_project(pid)
 
 
+MUSIC_SUFFIXES = (".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac", ".opus")
+
+
+def _music_file(workdir: Path) -> Optional[Path]:
+    """Приложенная музыка: первый файл music.* в папке проекта."""
+    for suffix in MUSIC_SUFFIXES:
+        path = workdir / f"music{suffix}"
+        if path.exists() and path.stat().st_size > 1024:
+            return path
+    return None
+
+
 def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
                 settings: Dict[str, Any], on_progress: Optional[Callable[[float], None]] = None) -> None:
     out_dir = workdir / "clips"
@@ -785,6 +825,13 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         aspect=settings.get("aspect", "9:16"), mode=mode,
         focus_x=float(settings.get("focus_x", 0.5)), on_progress=on_progress,
         crop_path=crop_path, layout=layout, facecam=facecam, platform=platform,
+        look=settings.get("look", "none"),
+        vignette=bool(settings.get("vignette")),
+        grain=bool(settings.get("grain")),
+        zoom=int(settings.get("zoom", 100) or 100),
+        bitrate=int(settings.get("bitrate", 0) or 0),
+        music_path=_music_file(workdir),
+        music_volume=float(settings.get("music_volume", 8) or 0) / 100.0,
     )
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"
     render.make_thumb(out_path, thumb_path, at=min(1.2, max(0.2, (clip["end"] - clip["start"]) * 0.15)))

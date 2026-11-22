@@ -293,6 +293,12 @@ const state = {
     lineGap: 0,
     keepFps: true,
     exportSubs: false,
+    look: "none",
+    vignette: false,
+    grain: false,
+    zoom: 100,
+    bitrate: 0,
+    musicVolume: 8,
     platform: "universal",
     layout: "",
     cookies: "",
@@ -538,6 +544,43 @@ function heroHTML() {
           <div class="font-sample" id="fontSample" style="font-family:${FONT_CSS[o.subFont] || "VCMontserrat"}">ПРИМЕР СУБТИТРОВ</div>
         </div>
       </div>
+      <div class="opt wide">
+        <span class="opt-head">${optIcon("style", "ico-pink")}<span class="opt-label">Стиль и звук</span></span>
+        <div class="substyle">
+          <label class="mini-field">
+            <span>Цвет</span>
+            <select id="lookSelect">
+              <option value="none">Без обработки</option>
+              <option value="warm">Тёплый</option>
+              <option value="cool">Холодный</option>
+              <option value="contrast">Контрастный</option>
+              <option value="cinematic">Кинематографичный</option>
+              <option value="soft">Мягкий</option>
+            </select>
+          </label>
+          <label class="mini-field grow">
+            <span>Зум <b id="zoomVal">100</b>%</span>
+            <input type="range" id="zoomRange" min="100" max="115" step="1" value="100" />
+          </label>
+          <label class="mini-field">
+            <span>Битрейт</span>
+            <select id="bitrateSelect">
+              <option value="0">Авто</option>
+              <option value="8">8 Мбит/с</option>
+              <option value="12">12 Мбит/с</option>
+              <option value="16">16 Мбит/с</option>
+            </select>
+          </label>
+          <label class="toggle"><input type="checkbox" id="vignetteToggle" /><span class="track"></span><span>Виньетка</span></label>
+          <label class="toggle"><input type="checkbox" id="grainToggle" /><span class="track"></span><span>Зерно</span></label>
+          <label class="mini-field grow">
+            <span>Музыка <b id="musicVal">8</b>%</span>
+            <input type="range" id="musicRange" min="0" max="30" step="1" value="8" />
+          </label>
+          <button type="button" class="link-btn" id="musicBtn">приложить музыку</button>
+          <span id="pendingMusic" class="pending-file hidden"></span>
+        </div>
+      </div>
       <div class="opt">
         ${optIcon("access", "ico-gray")}
         <span class="opt-label">Доступ к источнику</span>
@@ -607,6 +650,35 @@ function bindHero() {
   const posSelect = $("#posSelect");
   if (posSelect) posSelect.addEventListener("change", () => { state.opts.subPos = posSelect.value; });
 
+  const lookSelect = $("#lookSelect");
+  if (lookSelect) lookSelect.addEventListener("change", () => { state.opts.look = lookSelect.value; });
+  const zoomRange = $("#zoomRange");
+  if (zoomRange) zoomRange.addEventListener("input", () => {
+    state.opts.zoom = Number(zoomRange.value);
+    const label = $("#zoomVal");
+    if (label) label.textContent = zoomRange.value;
+  });
+  const bitrateSelect = $("#bitrateSelect");
+  if (bitrateSelect) bitrateSelect.addEventListener("change", () => {
+    state.opts.bitrate = Number(bitrateSelect.value);
+  });
+  const vignetteToggle = $("#vignetteToggle");
+  if (vignetteToggle) vignetteToggle.addEventListener("change", () => {
+    state.opts.vignette = vignetteToggle.checked;
+  });
+  const grainToggle = $("#grainToggle");
+  if (grainToggle) grainToggle.addEventListener("change", () => {
+    state.opts.grain = grainToggle.checked;
+  });
+  const musicRange = $("#musicRange");
+  if (musicRange) musicRange.addEventListener("input", () => {
+    state.opts.musicVolume = Number(musicRange.value);
+    const label = $("#musicVal");
+    if (label) label.textContent = musicRange.value;
+  });
+  const musicBtn = $("#musicBtn");
+  if (musicBtn) musicBtn.addEventListener("click", () => $("#musicInput").click());
+
   const fpsSelect = $("#fpsSelect");
   if (fpsSelect) fpsSelect.addEventListener("change", () => {
     state.opts.keepFps = fpsSelect.value === "source";
@@ -675,6 +747,12 @@ function heroOptions() {
     line_gap: state.opts.lineGap,
     keep_fps: state.opts.keepFps,
     export_subs: state.opts.exportSubs,
+    look: state.opts.look,
+    vignette: state.opts.vignette,
+    grain: state.opts.grain,
+    zoom: state.opts.zoom,
+    bitrate: state.opts.bitrate,
+    music_volume: state.opts.musicVolume,
     platform: state.opts.platform,
     layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
@@ -838,6 +916,7 @@ function uploadFile(file) {
 
 async function startLocalFile() {
   const file = state.pendingFile;
+  if (!file) return;
   const btn = $("#startBtn");
   const label = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Загружаю'; }
@@ -846,6 +925,18 @@ async function startLocalFile() {
       method: "POST",
       body: JSON.stringify({ title: file.name, options: heroOptions() })
     });
+    if (state.pendingMusic) {
+      const musicForm = new FormData();
+      musicForm.append("file", state.pendingMusic);
+      try {
+        await api(`/api/projects/${project.id}/music`, { method: "POST", body: musicForm });
+      } catch (err) {
+        toast("Музыка не принята: " + err.message, "err");
+      }
+      state.pendingMusic = null;
+      const mchip = $("#pendingMusic");
+      if (mchip) mchip.classList.add("hidden");
+    }
     if (state.pendingSubs) {
       const subsForm = new FormData();
       subsForm.append("file", state.pendingSubs);
@@ -2398,6 +2489,24 @@ $("#main").addEventListener("click", async (e) => {
 setInterval(() => {
   if (!state.current) loadProjects();
 }, 2500);
+
+$("#musicInput").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (!/\.(mp3|m4a|aac|wav|ogg|flac|opus)$/i.test(file.name)) {
+    toast("Нужен аудиофайл: mp3, m4a, wav, ogg", "err");
+    return;
+  }
+  state.pendingMusic = file;
+  const chip = $("#pendingMusic");
+  if (chip) {
+    chip.textContent = `${file.name} · убрать`;
+    chip.classList.remove("hidden");
+    chip.onclick = () => { state.pendingMusic = null; chip.classList.add("hidden"); };
+  }
+  toast("Музыка приложена — подмешается тихо под голос");
+});
 
 $("#subsInput").addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];

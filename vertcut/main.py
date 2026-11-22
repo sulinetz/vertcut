@@ -73,6 +73,12 @@ class ClipEdit(BaseModel):
     sub_offset: Optional[int] = None
     sub_speed: Optional[str] = None
     line_gap: Optional[int] = None
+    look: Optional[str] = None
+    vignette: Optional[bool] = None
+    grain: Optional[bool] = None
+    zoom: Optional[int] = None
+    bitrate: Optional[int] = None
+    music_volume: Optional[int] = None
     platform: Optional[str] = None
     layout: Optional[str] = None
 
@@ -148,6 +154,14 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
             data["sub_size"] = max(70, min(180, int(data["sub_size"])))
         except (TypeError, ValueError):
             raise HTTPException(400, "Некорректный размер субтитров") from None
+    if "look" in data and data["look"] not in ("none", "warm", "cool", "contrast", "cinematic", "soft"):
+        raise HTTPException(400, "Неизвестный цветовой пресет")
+    for key, low, high in (("zoom", 100, 120), ("bitrate", 0, 40), ("music_volume", 0, 50)):
+        if key in data:
+            try:
+                data[key] = max(low, min(high, int(data[key])))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Некорректное значение") from None
     if "line_gap" in data:
         try:
             data["line_gap"] = max(0, min(120, int(data["line_gap"])))
@@ -578,6 +592,41 @@ def clip_srt(cid: str) -> Response:
                    f"filename*=UTF-8''{quote(title + '.srt')}")
     return Response(content=body, media_type="application/x-subrip",
                     headers={"Content-Disposition": disposition})
+
+
+MUSIC_SUFFIXES = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac", ".opus"}
+
+
+@app.post("/api/projects/{pid}/music")
+async def upload_music(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Фоновая музыка: тихо подмешивается к оригинальной дорожке."""
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in MUSIC_SUFFIXES:
+        raise HTTPException(400, "Нужен аудиофайл: mp3, m4a, wav, ogg, flac")
+    data = await file.read()
+    if len(data) > 60 * 1024 * 1024:
+        raise HTTPException(413, "Файл больше 60 МБ")
+    workdir = PROJECTS_DIR / pid
+    workdir.mkdir(parents=True, exist_ok=True)
+    for old in MUSIC_SUFFIXES:
+        (workdir / f"music{old}").unlink(missing_ok=True)
+    (workdir / f"music{suffix}").write_bytes(data)
+    db.merge_meta(pid, {"music": True})
+    return {"ok": True, "size": len(data)}
+
+
+@app.delete("/api/projects/{pid}/music")
+def delete_music(pid: str) -> Dict[str, Any]:
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    for old in MUSIC_SUFFIXES:
+        (PROJECTS_DIR / pid / f"music{old}").unlink(missing_ok=True)
+    db.merge_meta(pid, {"music": False})
+    return {"ok": True}
 
 
 @app.get("/api/clips/{cid}/subtitles.ass")
