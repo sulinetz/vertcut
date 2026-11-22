@@ -299,6 +299,14 @@ const state = {
     zoom: 100,
     bitrate: 0,
     musicVolume: 8,
+    hflip: false,
+    tilt: 0,
+    speed: 1,
+    pitch: 1,
+    jumpCuts: false,
+    cutZoom: false,
+    bgVideo: "random",
+    splitRatio: 0.5,
     platform: "universal",
     layout: "",
     cookies: "",
@@ -479,12 +487,13 @@ function heroHTML() {
         ${optIcon("frame", "ico-purple")}
         <div>
           <span class="opt-label">Пресет стрима</span>
-          <span class="opt-hint">Для видео с маленькой врезкой лица (стримы, реакции). Лицо выносится поверх кадра.</span>
+          <span class="opt-hint">Для видео с маленькой врезкой лица (стримы, реакции). «Сплит-скрин» делит кадр: сверху видео, снизу фоновый ролик.</span>
         </div>
         <div class="seg" data-group="layout">
           <button data-val="" class="${!o.layout ? "active" : ""}">Выкл</button>
           <button data-val="band" class="${o.layout === "band" ? "active" : ""}">Лицо снизу</button>
           <button data-val="band_top" class="${o.layout === "band_top" ? "active" : ""}">Лицо сверху</button>
+          <button data-val="adhd" class="${o.layout === "adhd" ? "active" : ""}">Сплит-скрин</button>
         </div>
       </div>
       <div class="opt">
@@ -581,6 +590,33 @@ function heroHTML() {
           <span id="pendingMusic" class="pending-file hidden"></span>
         </div>
       </div>
+      <div class="opt wide">
+        <span class="opt-head">${optIcon("style", "ico-pink")}<span class="opt-label">Уникализация</span>
+          <button type="button" class="mini-btn" id="uniPreset">Динамичный монтаж</button>
+        </span>
+        <div class="substyle">
+          <label class="toggle"><input type="checkbox" id="hflipToggle" /><span class="track"></span><span>Зеркало</span></label>
+          <label class="toggle"><input type="checkbox" id="jumpCutsToggle" /><span class="track"></span><span>Склейки пауз</span></label>
+          <label class="toggle"><input type="checkbox" id="cutZoomToggle" /><span class="track"></span><span>Зум на склейках</span></label>
+          <label class="mini-field"><span>Наклон <b id="tiltVal">0</b>°</span>
+            <input type="range" id="tiltRange" min="0" max="3" step="0.5" value="0" />
+          </label>
+          <label class="mini-field"><span>Скорость <b id="speedVal">1.00</b>×</span>
+            <input type="range" id="speedRange" min="1" max="1.1" step="0.01" value="1" />
+          </label>
+          <label class="mini-field"><span>Питч <b id="pitchVal">1.00</b>×</span>
+            <input type="range" id="pitchRange" min="0.95" max="1.05" step="0.01" value="1" />
+          </label>
+          <label class="mini-field"><span>Доля сплита <b id="splitVal">50</b>%</span>
+            <input type="range" id="splitRange" min="30" max="70" step="1" value="50" />
+          </label>
+          <label class="mini-field"><span>Фон сплита</span>
+            <select id="bgSelect"><option value="random">Случайный</option></select>
+          </label>
+          <button type="button" class="link-btn" id="bgUploadBtn">добавить фон</button>
+          <span class="opt-hint">Склейки вырезают паузы длиннее 0.5 с и пересчитывают субтитры. Скорость и питч меняют темп; наклон 0–3° без чёрных углов. Всё по умолчанию выключено.</span>
+        </div>
+      </div>
       <div class="opt">
         ${optIcon("access", "ico-gray")}
         <span class="opt-label">Доступ к источнику</span>
@@ -594,6 +630,20 @@ function heroHTML() {
       </div>
     </div>
   </section>`;
+}
+
+async function loadAdhdBgs() {
+  const select = $("#bgSelect");
+  if (!select) return;
+  try {
+    const data = await api("/api/adhd-bg");
+    const files = data.files || [];
+    const current = state.opts.bgVideo || "random";
+    select.innerHTML = '<option value="random">Случайный</option>' +
+      files.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join("");
+    select.value = files.some((f) => f.name === current) ? current : "random";
+    state.opts.bgVideo = select.value;
+  } catch (_) {}
 }
 
 function bindHero() {
@@ -679,6 +729,69 @@ function bindHero() {
   const musicBtn = $("#musicBtn");
   if (musicBtn) musicBtn.addEventListener("click", () => $("#musicInput").click());
 
+  const hflipToggle = $("#hflipToggle");
+  if (hflipToggle) hflipToggle.addEventListener("change", () => { state.opts.hflip = hflipToggle.checked; });
+  const jumpCutsToggle = $("#jumpCutsToggle");
+  if (jumpCutsToggle) jumpCutsToggle.addEventListener("change", () => {
+    state.opts.jumpCuts = jumpCutsToggle.checked;
+  });
+  const cutZoomToggle = $("#cutZoomToggle");
+  if (cutZoomToggle) cutZoomToggle.addEventListener("change", () => {
+    state.opts.cutZoom = cutZoomToggle.checked;
+  });
+  const tiltRange = $("#tiltRange");
+  if (tiltRange) tiltRange.addEventListener("input", () => {
+    state.opts.tilt = Number(tiltRange.value);
+    const label = $("#tiltVal");
+    if (label) label.textContent = tiltRange.value;
+  });
+  const speedRange = $("#speedRange");
+  if (speedRange) speedRange.addEventListener("input", () => {
+    state.opts.speed = Number(speedRange.value);
+    const label = $("#speedVal");
+    if (label) label.textContent = Number(speedRange.value).toFixed(2);
+  });
+  const pitchRange = $("#pitchRange");
+  if (pitchRange) pitchRange.addEventListener("input", () => {
+    state.opts.pitch = Number(pitchRange.value);
+    const label = $("#pitchVal");
+    if (label) label.textContent = Number(pitchRange.value).toFixed(2);
+  });
+  const splitRange = $("#splitRange");
+  if (splitRange) splitRange.addEventListener("input", () => {
+    state.opts.splitRatio = Number(splitRange.value) / 100;
+    const label = $("#splitVal");
+    if (label) label.textContent = splitRange.value;
+  });
+  const bgSelect = $("#bgSelect");
+  if (bgSelect) bgSelect.addEventListener("change", () => { state.opts.bgVideo = bgSelect.value; });
+  const bgUploadBtn = $("#bgUploadBtn");
+  if (bgUploadBtn) bgUploadBtn.addEventListener("click", () => $("#adhdBgInput").click());
+  const uniPreset = $("#uniPreset");
+  if (uniPreset) uniPreset.addEventListener("click", () => {
+    state.opts.hflip = true;
+    state.opts.tilt = 0.5;
+    state.opts.speed = 1.03;
+    state.opts.pitch = 1;
+    state.opts.jumpCuts = true;
+    state.opts.cutZoom = true;
+    const setCheck = (id, val) => { const el = $("#" + id); if (el) el.checked = val; };
+    const setRange = (id, val, labelId, digits) => {
+      const el = $("#" + id);
+      if (el) el.value = val;
+      const label = $("#" + labelId);
+      if (label) label.textContent = digits ? Number(val).toFixed(digits) : val;
+    };
+    setCheck("hflipToggle", true);
+    setCheck("jumpCutsToggle", true);
+    setCheck("cutZoomToggle", true);
+    setRange("tiltRange", 0.5, "tiltVal", 0);
+    setRange("speedRange", 1.03, "speedVal", 2);
+    setRange("pitchRange", 1, "pitchVal", 2);
+    toast("Динамичный монтаж включён. Проверьте первый клип — склейки заметны на слух.");
+  });
+  loadAdhdBgs();
+
   const fpsSelect = $("#fpsSelect");
   if (fpsSelect) fpsSelect.addEventListener("change", () => {
     state.opts.keepFps = fpsSelect.value === "source";
@@ -753,6 +866,14 @@ function heroOptions() {
     zoom: state.opts.zoom,
     bitrate: state.opts.bitrate,
     music_volume: state.opts.musicVolume,
+    hflip: state.opts.hflip,
+    tilt: state.opts.tilt,
+    speed: state.opts.speed,
+    pitch: state.opts.pitch,
+    jump_cuts: state.opts.jumpCuts,
+    cut_zoom: state.opts.cutZoom,
+    bg_video: state.opts.bgVideo,
+    split_ratio: state.opts.splitRatio,
     platform: state.opts.platform,
     layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
@@ -2084,6 +2205,7 @@ function openEditor(clipId) {
                 <option value="" ${!s.layout ? "selected" : ""}>Выключен</option>
                 <option value="band" ${s.layout === "band" ? "selected" : ""}>Лицо крупно снизу</option>
                 <option value="band_top" ${s.layout === "band_top" ? "selected" : ""}>Лицо крупно сверху</option>
+                <option value="adhd" ${s.layout === "adhd" ? "selected" : ""}>Сплит-скрин (СДВГ)</option>
               </select>
             </div>
             <div class="field">
@@ -2151,6 +2273,28 @@ function openEditor(clipId) {
             <label>Цвет подсветки</label>
             <div class="swatches" id="edAccents">
               ${swatchesHTML(accent)}
+            </div>
+          </div>
+          <div class="field">
+            <label>Уникализация</label>
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+              <label class="toggle"><input type="checkbox" id="edHflip" ${s.hflip ? "checked" : ""}/><span class="track"></span><span>Зеркало</span></label>
+              <label class="toggle"><input type="checkbox" id="edJumpCuts" ${s.jump_cuts ? "checked" : ""}/><span class="track"></span><span>Склейки пауз</span></label>
+              <label class="toggle"><input type="checkbox" id="edCutZoom" ${s.cut_zoom ? "checked" : ""}/><span class="track"></span><span>Зум на склейках</span></label>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label>Наклон <b id="edTiltVal">${Number(s.tilt || 0)}</b>°</label>
+              <input type="range" id="edTilt" min="0" max="3" step="0.5" value="${Number(s.tilt || 0)}" />
+            </div>
+            <div class="field">
+              <label>Скорость <b id="edSpeedRVal">${Number(s.speed || 1).toFixed(2)}</b>×</label>
+              <input type="range" id="edSpeedR" min="1" max="1.1" step="0.01" value="${Number(s.speed || 1)}" />
+            </div>
+            <div class="field">
+              <label>Питч <b id="edPitchVal">${Number(s.pitch || 1).toFixed(2)}</b>×</label>
+              <input type="range" id="edPitch" min="0.95" max="1.05" step="0.01" value="${Number(s.pitch || 1)}" />
             </div>
           </div>
           <div class="field">
@@ -2222,6 +2366,12 @@ function openEditor(clipId) {
     const w = Math.max(1, Math.round(stage.clientWidth * dpr));
     const h = Math.max(1, Math.round(stage.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const mirror = $("#edHflip") ? $("#edHflip").checked : false;
+    const tiltDeg = $("#edTilt") ? Number($("#edTilt").value) : 0;
+    const parts = [];
+    if (tiltDeg > 0) parts.push("scale(1.06)", `rotate(${tiltDeg}deg)`);
+    if (mirror) parts.push("scaleX(-1)");
+    canvas.style.transform = parts.join(" ");
     const ctx = canvas.getContext("2d");
     const layout = $("#edLayout") ? $("#edLayout").value : "";
     const fc = (s && s.facecam) || null;
@@ -2237,6 +2387,18 @@ function openEditor(clipId) {
       const bandH = Math.round(h * 640 / 1920);
       drawFacecam(ctx, fc, 0, 0, w, bandH, false);
       drawCover(ctx, srcVideo, 0, bandH, w, h - bandH);
+    } else if (layout === "adhd") {
+      const ratio = Number((s && s.split_ratio) || 0.5);
+      const topH = Math.round(h * ratio);
+      drawCover(ctx, srcVideo, 0, 0, w, topH);
+      ctx.fillStyle = "#101116";
+      ctx.fillRect(0, topH, w, h - topH);
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = Math.max(1, Math.round(2 * k));
+      ctx.beginPath();
+      ctx.moveTo(0, topH);
+      ctx.lineTo(w, topH);
+      ctx.stroke();
     } else {
       drawCover(ctx, srcVideo, 0, 0, w, h);
     }
@@ -2307,7 +2469,7 @@ function openEditor(clipId) {
     }
   };
 
-  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edLineGap", "edUpper", "edSubs", "edShowHook", "edPlatform", "edLayout"]
+  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edLineGap", "edUpper", "edSubs", "edShowHook", "edPlatform", "edLayout", "edHflip", "edTilt"]
     .forEach((id) => {
       const el = $("#" + id);
       if (!el) return;
@@ -2333,6 +2495,13 @@ function openEditor(clipId) {
     $$("#edSpeed button").forEach((b) => b.classList.toggle("active", b === btn));
   });
   $("#edOffset").addEventListener("input", (e) => { $("#edOffVal").textContent = e.target.value; });
+  $("#edTilt").addEventListener("input", (e) => { $("#edTiltVal").textContent = e.target.value; });
+  $("#edSpeedR").addEventListener("input", (e) => {
+    $("#edSpeedRVal").textContent = Number(e.target.value).toFixed(2);
+  });
+  $("#edPitch").addEventListener("input", (e) => {
+    $("#edPitchVal").textContent = Number(e.target.value).toFixed(2);
+  });
   $("#edLineGap").addEventListener("input", (e) => { $("#edLineGapVal").textContent = e.target.value; });
 
   const start = $("#edStart"), end = $("#edEnd");
@@ -2411,8 +2580,14 @@ function openEditor(clipId) {
       sub_size: Number($("#edSize").value),
       sub_position: $("#edPos").value,
       sub_offset: Number($("#edOffset").value),
-    line_gap: Number($("#edLineGap").value),
-      sub_speed: ($("#edSpeed .active") || {}).dataset?.val || "calm"
+      line_gap: Number($("#edLineGap").value),
+      sub_speed: ($("#edSpeed .active") || {}).dataset?.val || "calm",
+      hflip: $("#edHflip").checked,
+      jump_cuts: $("#edJumpCuts").checked,
+      cut_zoom: $("#edCutZoom").checked,
+      tilt: Number($("#edTilt").value),
+      speed: Number($("#edSpeedR").value),
+      pitch: Number($("#edPitch").value)
     };
     try {
       await api(`/api/clips/${clip.id}/rerender`, { method: "POST", body: JSON.stringify(payload) });
@@ -2489,6 +2664,28 @@ $("#main").addEventListener("click", async (e) => {
 setInterval(() => {
   if (!state.current) loadProjects();
 }, 2500);
+
+$("#adhdBgInput").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (!/\.(mp4|webm|mov|mkv|m4v)$/i.test(file.name)) {
+    toast("Нужен видеофайл: mp4, webm, mov, mkv", "err");
+    return;
+  }
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const res = await api("/api/adhd-bg", { method: "POST", body: form });
+    state.opts.bgVideo = res.name;
+    await loadAdhdBgs();
+    const select = $("#bgSelect");
+    if (select) select.value = res.name;
+    toast("Фон добавлен: " + res.name);
+  } catch (err) {
+    toast("Фон не принят: " + err.message, "err");
+  }
+});
 
 $("#musicInput").addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];

@@ -628,6 +628,8 @@ h1.hero-title {
   color: var(--muted-2);
 }
 .mini-field.grow { flex: 1 1 190px; }
+.substyle > .mini-field { flex: 0 1 186px; }
+.substyle > .mini-field.grow { flex: 1 1 240px; }
 .mini-field > span { display: flex; justify-content: space-between; gap: 8px; font-weight: 500; }
 .mini-field b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .mini-field .seg { width: fit-content; }
@@ -1528,6 +1530,16 @@ input[type="range"]::-webkit-slider-thumb {
   width: 100%;
   height: 100%;
   display: block;
+  transform-origin: center center;
+  transition: transform 0.15s ease;
+}
+
+/* Пресет уникализации в шапке блока */
+.opt-head .mini-btn { margin-left: auto; }
+.opt-head .mini-btn.active {
+  color: var(--text);
+  border-color: rgba(59, 130, 246, 0.55);
+  background: rgba(59, 130, 246, 0.14);
 }
 .ed-stage-hint {
   position: absolute;

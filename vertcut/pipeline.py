@@ -10,7 +10,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import analyze, db, downloader, platforms, reframe, render, subtitles, transcribe, utils
+from . import (analyze, db, downloader, platforms, reframe, render, subtitles,
+               timeline, transcribe, utils)
 from .errors import Cancelled
 from .config import PROJECTS_DIR
 
@@ -41,6 +42,14 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "zoom": 100,
     "bitrate": 0,
     "music_volume": 8,
+    "hflip": False,
+    "tilt": 0.0,
+    "speed": 1.0,
+    "pitch": 1.0,
+    "jump_cuts": False,
+    "cut_zoom": False,
+    "bg_video": "random",
+    "split_ratio": 0.5,
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
@@ -84,7 +93,10 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not subtitles.font_exists(opts.get("sub_font") or ""):
         opts["sub_font"] = "montserrat"
     if opts.get("sub_position") not in subtitles.POSITIONS:
-        opts["sub_position"] = "bottom"
+        opts["sub_position"] = "middle" if opts.get("layout") == "adhd" else "bottom"
+    if (opts.get("layout") == "adhd" and (raw or {}).get("sub_position") is None
+            and (raw or {}).get("layout") == "adhd"):
+        opts["sub_position"] = "middle"
     if opts.get("sub_speed") not in subtitles.SPEEDS:
         opts["sub_speed"] = "calm"
     opts["keep_fps"] = bool(opts.get("keep_fps", True))
@@ -105,13 +117,36 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["music_volume"] = max(0, min(50, int(opts.get("music_volume", 8))))
     except (TypeError, ValueError):
         opts["music_volume"] = 8
+    opts["hflip"] = bool(opts.get("hflip", False))
+    opts["jump_cuts"] = bool(opts.get("jump_cuts", False))
+    opts["cut_zoom"] = bool(opts.get("cut_zoom", False))
+    try:
+        opts["tilt"] = max(0.0, min(3.0, round(float(opts.get("tilt", 0.0) or 0.0), 2)))
+    except (TypeError, ValueError):
+        opts["tilt"] = 0.0
+    try:
+        opts["speed"] = max(1.0, min(1.1, round(float(opts.get("speed", 1.0) or 1.0), 3)))
+    except (TypeError, ValueError):
+        opts["speed"] = 1.0
+    try:
+        opts["pitch"] = max(0.95, min(1.05, round(float(opts.get("pitch", 1.0) or 1.0), 3)))
+    except (TypeError, ValueError):
+        opts["pitch"] = 1.0
+    try:
+        opts["split_ratio"] = max(0.3, min(0.7, round(float(opts.get("split_ratio", 0.5) or 0.5), 2)))
+    except (TypeError, ValueError):
+        opts["split_ratio"] = 0.5
+    bg = str(opts.get("bg_video") or "random").strip()
+    if not bg or "/" in bg or "\\" in bg or ".." in bg:
+        bg = "random"
+    opts["bg_video"] = bg
     try:
         opts["line_gap"] = max(0, min(120, int(opts.get("line_gap", 0))))
     except (TypeError, ValueError):
         opts["line_gap"] = 0
     if not platforms.is_known(opts.get("platform")):
         opts["platform"] = platforms.DEFAULT_PLATFORM
-    if opts.get("layout") not in ("", *render.STREAM_LAYOUTS):
+    if opts.get("layout") not in ("", *render.STREAM_LAYOUTS, "adhd"):
         opts["layout"] = ""
     if opts.get("select") not in ("smart", "even"):
         opts["select"] = "smart"
@@ -251,6 +286,10 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "look": opts["look"], "vignette": opts["vignette"], "grain": opts["grain"],
         "zoom": opts["zoom"], "bitrate": opts["bitrate"],
         "music_volume": opts["music_volume"],
+        "hflip": opts["hflip"], "tilt": opts["tilt"],
+        "speed": opts["speed"], "pitch": opts["pitch"],
+        "jump_cuts": opts["jump_cuts"], "cut_zoom": opts["cut_zoom"],
+        "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
         "segments": bool(opts.get("segments")),
     }
 
@@ -637,6 +676,10 @@ def process_project(pid: str) -> None:
             "look": opts["look"], "vignette": opts["vignette"], "grain": opts["grain"],
             "zoom": opts["zoom"], "bitrate": opts["bitrate"],
             "music_volume": opts["music_volume"],
+            "hflip": opts["hflip"], "tilt": opts["tilt"],
+            "speed": opts["speed"], "pitch": opts["pitch"],
+            "jump_cuts": opts["jump_cuts"], "cut_zoom": opts["cut_zoom"],
+            "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
         }
         _check_cancel(pid)
         total = len(found)
@@ -746,6 +789,26 @@ def _music_file(workdir: Path) -> Optional[Path]:
     return None
 
 
+def _adhd_bg_file(choice: str) -> Optional[Path]:
+    """Фон для split-screen: выбранный файл или случайный из папки."""
+    from .config import ASSETS_DIR
+
+    folder = ASSETS_DIR / "adhd_bg"
+    if not folder.exists():
+        return None
+    files = [p for p in folder.iterdir()
+             if p.is_file() and p.suffix.lower() in (".mp4", ".webm", ".mov", ".mkv", ".m4v")]
+    if not files:
+        return None
+    if choice and choice != "random":
+        for path in files:
+            if path.name == choice:
+                return path
+    import random
+
+    return random.choice(files)
+
+
 def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
                 settings: Dict[str, Any], on_progress: Optional[Callable[[float], None]] = None) -> None:
     out_dir = workdir / "clips"
@@ -753,25 +816,52 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     out_dir.mkdir(parents=True, exist_ok=True)
     ass_dir.mkdir(parents=True, exist_ok=True)
 
+    layout = settings.get("layout") or ""
+    if layout not in ("", *render.STREAM_LAYOUTS, "adhd"):
+        layout = ""
+
+    speed = float(settings.get("speed", 1.0) or 1.0)
+    speed = max(1.0, min(1.1, speed))
+    pitch = float(settings.get("pitch", 1.0) or 1.0)
+    pitch = max(0.95, min(1.05, pitch))
+    segs: Optional[List[Any]] = None
+    words = list(clip["words"] or [])
+    ass_base = float(clip["start"])
+    ass_len = float(clip["end"]) - float(clip["start"])
+
+    if settings.get("jump_cuts") and words:
+        plan = timeline.plan(words, clip["start"], clip["end"], speed=speed)
+        if plan["cut"]:
+            segs = plan["segments"]
+            words = plan["words"]
+            ass_base = 0.0
+            ass_len = plan["duration"]
+    if segs is None and speed != 1.0:
+        words = timeline.scale_words(words, clip["start"], speed)
+        ass_base = 0.0
+        ass_len = (float(clip["end"]) - float(clip["start"])) / speed
+    out_duration = ass_len if (segs is not None or speed != 1.0) else float(clip["end"]) - float(clip["start"])
+
+    sub_position = settings.get("sub_position", "bottom")
     ass_path = None
     burn_subs = bool(settings.get("subtitles", True))
     export_subs = bool(settings.get("export_subs", False))
-    if clip["words"] and (burn_subs or export_subs):
+    if words and (burn_subs or export_subs):
         text = subtitles.build_ass(
-            clip["words"], clip["start"], clip["end"],
+            words, ass_base, ass_base + ass_len,
             hook=clip.get("hook") or clip.get("title") or "",
             accent=settings.get("accent", "yellow"),
             uppercase=settings.get("uppercase", True),
             show_hook=settings.get("show_hook", True),
             sub_size=int(settings.get("sub_size", 118)),
             font=settings.get("sub_font", "montserrat"),
-            position=settings.get("sub_position", "bottom"),
+            position=sub_position,
             offset=int(settings.get("sub_offset", 0)),
             speed=settings.get("sub_speed", "calm"),
             line_gap=int(settings.get("line_gap", 0) or 0),
             platform=settings.get("platform", platforms.DEFAULT_PLATFORM),
-            bottom_reserve=(render.BAND_H if settings.get("layout") == "band" else 0),
-            top_reserve=(render.BAND_H if settings.get("layout") == "band_top" else 0),
+            bottom_reserve=(render.BAND_H if layout == "band" else 0),
+            top_reserve=(render.BAND_H if layout == "band_top" else 0),
         )
         ass_path = ass_dir / f"{clip['id']}.ass"
         ass_path.write_text(text, encoding="utf-8")
@@ -783,15 +873,17 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     out_path = out_dir / f"clip_{clip['idx'] + 1:02d}.mp4"
     crop_path = None
     mode = settings.get("mode", "auto")
-    layout = settings.get("layout") or ""
-    if layout not in render.STREAM_LAYOUTS:
-        layout = ""
     platform = settings.get("platform", "")
     facecam: Optional[Dict[str, Any]] = None
     exclude = avoid = None
     crop_aspect = settings.get("aspect", "9:16")
+    ratio = float(settings.get("split_ratio", 0.5) or 0.5)
 
-    if layout:
+    if layout == "adhd":
+        # Верх — видео, низ — фон. Окно кадрирования считаем под верхнюю часть.
+        top_h = max(2, int(round(1920 * ratio / 2.0)) * 2)
+        crop_aspect = f"1080:{top_h}"
+    elif layout in render.STREAM_LAYOUTS:
         # Пресет стрима: находим врезку и не даём окну кадрирования её накрыть.
         try:
             facecam = reframe.detect_facecam(source, clip["start"], clip["end"])
@@ -820,11 +912,32 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         if not layout and crop_path and crop_path.get("coverage", 1.0) < 0.18:
             mode = "blur"
             crop_path = None
+
+    if crop_path and (segs is not None or speed != 1.0):
+        span = segs if segs is not None else [(0.0, float(clip["end"]) - float(clip["start"]))]
+        crop_path = timeline.remap_crop_path(crop_path, span, speed)
+
+    bg_path = None
+    bg_start = 0.0
+    if layout == "adhd":
+        bg_path = _adhd_bg_file(str(settings.get("bg_video") or "random"))
+        if bg_path is not None:
+            try:
+                bg_info = utils.probe(bg_path)
+                span = max(0.0, float(bg_info.get("duration") or 0) - 3.0)
+                if span > 0:
+                    import random
+
+                    bg_start = round(random.uniform(0.0, span), 2)
+            except Exception:
+                bg_start = 0.0
+
     render.render_clip(
         source, clip["start"], clip["end"], out_path, ass_path=ass_path,
         aspect=settings.get("aspect", "9:16"), mode=mode,
         focus_x=float(settings.get("focus_x", 0.5)), on_progress=on_progress,
         crop_path=crop_path, layout=layout, facecam=facecam, platform=platform,
+        fps=settings.get("fps"),
         look=settings.get("look", "none"),
         vignette=bool(settings.get("vignette")),
         grain=bool(settings.get("grain")),
@@ -832,9 +945,18 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         bitrate=int(settings.get("bitrate", 0) or 0),
         music_path=_music_file(workdir),
         music_volume=float(settings.get("music_volume", 8) or 0) / 100.0,
+        hflip=bool(settings.get("hflip")),
+        tilt=float(settings.get("tilt", 0.0) or 0.0),
+        speed=speed,
+        pitch=pitch,
+        segments=segs,
+        cut_zoom=bool(settings.get("cut_zoom")),
+        bg_path=bg_path,
+        bg_start=bg_start,
+        split_ratio=ratio,
     )
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"
-    render.make_thumb(out_path, thumb_path, at=min(1.2, max(0.2, (clip["end"] - clip["start"]) * 0.15)))
+    render.make_thumb(out_path, thumb_path, at=min(1.2, max(0.2, out_duration * 0.15)))
     render.make_preview(out_path, workdir / "previews" / f"{clip['id']}.mp4")
     db.update_clip(clip["id"], status="ready", path=str(out_path),
                    thumb=str(thumb_path) if thumb_path.exists() else None, error=None)
@@ -856,9 +978,16 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
     if settings.get("segments"):
         raise RuntimeError("Клип собран в экономном режиме из фрагмента. Шаблон меняется до запуска нарезки.")
     for key in ("aspect", "mode", "subtitles", "accent", "uppercase", "show_hook", "focus_x",
-                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "line_gap", "platform", "layout"):
+                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "line_gap",
+                "platform", "layout", "look", "vignette", "grain", "zoom", "bitrate",
+                "music_volume", "hflip", "tilt", "speed", "pitch", "jump_cuts", "cut_zoom",
+                "bg_video", "split_ratio", "fps"):
         if key in payload and payload[key] is not None:
             settings[key] = payload[key]
+    if (payload.get("layout") == "adhd" and payload.get("sub_position") is None
+            and (clip.get("settings") or {}).get("layout") != "adhd"):
+        # Первое включение split-screen: субтитры на стык кадров.
+        settings["sub_position"] = "middle"
     start = float(payload.get("start", clip["start"]))
     end = float(payload.get("end", clip["end"]))
     if end - start < 3:

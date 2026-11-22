@@ -81,6 +81,14 @@ class ClipEdit(BaseModel):
     music_volume: Optional[int] = None
     platform: Optional[str] = None
     layout: Optional[str] = None
+    hflip: Optional[bool] = None
+    tilt: Optional[float] = None
+    speed: Optional[float] = None
+    pitch: Optional[float] = None
+    jump_cuts: Optional[bool] = None
+    cut_zoom: Optional[bool] = None
+    bg_video: Optional[str] = None
+    split_ratio: Optional[float] = None
 
 
 # Лимиты загрузки: интерфейс проверяет 4 ГБ, но сервер обязан проверять сам.
@@ -145,7 +153,7 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
         raise HTTPException(400, "Неизвестная площадка")
     if "layout" in data:
         from . import render as _render
-        if data["layout"] not in ("", *_render.STREAM_LAYOUTS):
+        if data["layout"] not in ("", *_render.STREAM_LAYOUTS, "adhd"):
             raise HTTPException(400, "Неизвестный пресет кадра")
     if "sub_font" in data and not subtitles.font_exists(data["sub_font"]):
         raise HTTPException(400, "Шрифт не найден")
@@ -162,6 +170,21 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
                 data[key] = max(low, min(high, int(data[key])))
             except (TypeError, ValueError):
                 raise HTTPException(400, "Некорректное значение") from None
+    for key, low, high in (("speed", 1.0, 1.1), ("pitch", 0.95, 1.05),
+                           ("tilt", 0.0, 3.0), ("split_ratio", 0.3, 0.7)):
+        if key in data:
+            try:
+                data[key] = max(low, min(high, round(float(data[key]), 3)))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Некорректное значение") from None
+    for key in ("hflip", "jump_cuts", "cut_zoom"):
+        if key in data:
+            data[key] = bool(data[key])
+    if "bg_video" in data:
+        name = str(data["bg_video"] or "random").strip()
+        if name != "random" and ("/" in name or "\\" in name or ".." in name):
+            raise HTTPException(400, "Некорректное имя фона")
+        data["bg_video"] = name or "random"
     if "line_gap" in data:
         try:
             data["line_gap"] = max(0, min(120, int(data["line_gap"])))
@@ -592,6 +615,60 @@ def clip_srt(cid: str) -> Response:
                    f"filename*=UTF-8''{quote(title + '.srt')}")
     return Response(content=body, media_type="application/x-subrip",
                     headers={"Content-Disposition": disposition})
+
+
+ADHD_BG_DIR = ASSETS_DIR / "adhd_bg"
+ADHD_BG_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
+ADHD_BG_MAX_BYTES = 300 * 1024 * 1024
+
+
+def _adhd_bg_files() -> List[Dict[str, Any]]:
+    if not ADHD_BG_DIR.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    for path in sorted(ADHD_BG_DIR.iterdir()):
+        if path.is_file() and path.suffix.lower() in ADHD_BG_SUFFIXES:
+            out.append({"name": path.name, "size": path.stat().st_size})
+    return out
+
+
+@app.get("/api/adhd-bg")
+def list_adhd_bg() -> Dict[str, Any]:
+    return {"files": _adhd_bg_files()}
+
+
+@app.post("/api/adhd-bg")
+async def upload_adhd_bg(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Фоновые видео для split-screen: лежат в assets/adhd_bg."""
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ADHD_BG_SUFFIXES:
+        raise HTTPException(400, "Нужен видеофайл: mp4, webm, mov, mkv")
+    data = await file.read()
+    if len(data) > ADHD_BG_MAX_BYTES:
+        raise HTTPException(413, "Файл больше 300 МБ")
+    ADHD_BG_DIR.mkdir(parents=True, exist_ok=True)
+    base = "".join(ch for ch in Path(file.filename or "bg").stem if ch.isalnum() or ch in "-_ ")[:48].strip()
+    if not base:
+        base = "bg"
+    target = ADHD_BG_DIR / f"{base}{suffix}"
+    counter = 1
+    while target.exists():
+        target = ADHD_BG_DIR / f"{base}_{counter}{suffix}"
+        counter += 1
+    target.write_bytes(data)
+    return {"ok": True, "name": target.name, "size": len(data)}
+
+
+@app.delete("/api/adhd-bg/{name}")
+def delete_adhd_bg(name: str) -> Dict[str, Any]:
+    safe = Path(name).name
+    if safe != name or not safe:
+        raise HTTPException(400, "Некорректное имя фона")
+    target = ADHD_BG_DIR / safe
+    if target.suffix.lower() not in ADHD_BG_SUFFIXES or not target.exists():
+        raise HTTPException(404, "Фон не найден")
+    target.unlink(missing_ok=True)
+    return {"ok": True}
 
 
 MUSIC_SUFFIXES = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac", ".opus"}

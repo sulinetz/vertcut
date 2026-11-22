@@ -51,6 +51,10 @@ def probe(path: Path) -> Dict[str, Any]:
     if fm:
         info["fps"] = float(fm.group(1))
     info["has_audio"] = "Audio:" in text
+    # Частота дискретизации нужна сдвигу питча: asetrate считается от неё,
+    # а не от жёстких 48 кГц — иначе клип с 44.1 кГц уезжает по длительности.
+    am = re.search(r"Audio:[^\n]*?,\s*(\d{4,6})\s*Hz", text)
+    info["sample_rate"] = int(am.group(1)) if am else 48000
 
     # Поворот из метаданных (вертикальные видео с телефона)
     rm = re.search(r"rotation of (-?\d+(?:\.\d+)?) degrees", text)
