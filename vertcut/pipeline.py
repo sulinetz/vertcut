@@ -58,6 +58,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "segments": False,
     "force_hd": False,
     "audio_track": -1,
+    "export_order": "chrono",
 }
 
 
@@ -157,6 +158,8 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["audio_track"] = max(-1, min(64, int(opts.get("audio_track", -1))))
     except (TypeError, ValueError):
         opts["audio_track"] = -1
+    if opts.get("export_order") not in ("chrono", "score"):
+        opts["export_order"] = "chrono"
     try:
         opts["sub_offset"] = max(-120, min(180, int(opts.get("sub_offset", 0))))
     except Exception:
@@ -1039,27 +1042,53 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
     return db.get_clip(clip_id) or updated
 
 
+def build_named_exports(project_id: str) -> Path:
+    """Папка named/ с человеческими именами: префикс порядка + название."""
+    project = db.get_project(project_id)
+    workdir = PROJECTS_DIR / project_id
+    named = workdir / "named"
+    named.mkdir(parents=True, exist_ok=True)
+    clips = [c for c in db.list_clips(project_id) if c["status"] == "ready" and c["path"]]
+    order = ((project or {}).get("options") or {}).get("export_order", "chrono")
+    desired = {}
+    for clip, name in utils.named_exports(clips, order):
+        src = Path(clip["path"])
+        if src.exists():
+            desired[name] = (src, clip["id"])
+    for old in named.iterdir():
+        if old.is_file() and old.name not in desired:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    for name, (src, _cid) in desired.items():
+        target = named / name
+        try:
+            target.unlink(missing_ok=True)
+            try:
+                os.link(src, target)
+            except OSError:
+                shutil.copy2(src, target)
+        except OSError:
+            continue
+    return named
+
+
 def export_zip(project_id: str, dest: Path) -> Path:
+    project = db.get_project(project_id)
     clips = [c for c in db.list_clips(project_id) if c["status"] == "ready" and c["path"]]
     if not clips:
         raise RuntimeError("Нет готовых клипов для экспорта")
     import zipfile
 
+    order = ((project or {}).get("options") or {}).get("export_order", "chrono")
     dest.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_STORED) as zf:
-        for c in clips:
-            src = Path(c["path"])
+        for clip, name in utils.named_exports(clips, order):
+            src = Path(clip["path"])
             if src.exists():
-                zf.write(src, arcname=f"{c['idx'] + 1:02d}_{_slug(c['title'])}.mp4")
+                zf.write(src, arcname=name)
     return dest
-
-
-def _slug(text: str) -> str:
-    import re
-
-    slug = re.sub(r"[^\w\-]+", "_", (text or "clip").lower(), flags=re.U).strip("_")
-    slug = slug[:40].rstrip("_")
-    return slug or "clip"
 
 
 def delete_project_files(project_id: str) -> None:

@@ -159,7 +159,7 @@ class DesktopApi:
             pass
 
     def save_clip(self, clip_id: str) -> Dict[str, Any]:
-        from vertcut import db
+        from vertcut import db, utils
 
         clip = db.get_clip(clip_id)
         if not clip or not clip.get("path"):
@@ -167,7 +167,11 @@ class DesktopApi:
         src = Path(clip["path"])
         if not src.exists():
             return {"ok": False, "error": "Файл клипа не найден на диске"}
-        name = f"{clip.get('idx', 0) + 1:02d}_{self._safe(clip.get('title') or 'clip')}.mp4"
+        project = db.get_project(clip["project_id"]) or {}
+        order = ((project.get("options") or {}).get("export_order") or "chrono")
+        ready = [c for c in db.list_clips(clip["project_id"]) if c["status"] == "ready"]
+        name = next((name for c, name in utils.named_exports(ready, order) if c["id"] == clip_id), None)
+        name = name or f"{utils.safe_filename(clip.get('title') or 'clip')}.mp4"
         # VERTCUT_ASK_SAVE=0 — сохранять молча в Загрузки/VertCut (пакетный экспорт).
         target = self._ask_target(name) if self._ask_enabled() else "unavailable"
         if target is None:
@@ -224,9 +228,18 @@ class DesktopApi:
             return {"ok": False, "error": str(exc)[:200]}
 
     def open_project_folder(self, project_id: str) -> Dict[str, Any]:
+        from vertcut import db, pipeline
         from vertcut.config import PROJECTS_DIR
 
         folder = PROJECTS_DIR / project_id / "clips"
+        project = db.get_project(project_id)
+        try:
+            if project:
+                named = pipeline.build_named_exports(project_id)
+                if any(named.iterdir()):
+                    folder = named
+        except Exception:
+            pass
         if not folder.exists():
             folder = PROJECTS_DIR / project_id
         try:

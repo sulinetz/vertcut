@@ -177,6 +177,67 @@ def fmt_ts(seconds: float) -> str:
     return f"{m}:{s:04.1f}"
 
 
+_WIN_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+_INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def safe_filename(text: str, fallback: str = "clip", max_len: int = 80) -> str:
+    """Имя файла из названия клипа: без запрещённых символов и с запасом."""
+    name = _INVALID_FILENAME.sub(" ", str(text or ""))
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    if name.lower().endswith(".mp4"):
+        name = name[:-4].rstrip(" .")
+    if not name:
+        name = fallback
+    if name.split(".")[0].upper() in _WIN_RESERVED:
+        name = "_" + name
+    if len(name) > max_len:
+        name = name[:max_len].rstrip(" .")
+        if " " in name:
+            name = name[:name.rfind(" ")].rstrip(" .")
+    return name or fallback
+
+
+def ordered_clips(clips: List[Dict[str, Any]], order: str = "chrono") -> List[Dict[str, Any]]:
+    """Порядок для экспорта: хронология источника или лучшие оценки."""
+    if order == "score":
+        return sorted(
+            clips,
+            key=lambda c: (-float(c.get("score") or 0.0),
+                           float(c.get("start") or 0.0),
+                           int(c.get("idx") or 0)),
+        )
+    return sorted(
+        clips,
+        key=lambda c: (float(c.get("start") or 0.0),
+                       float(c.get("end") or 0.0),
+                       int(c.get("idx") or 0)),
+    )
+
+
+def named_exports(clips: List[Dict[str, Any]], order: str = "chrono") -> List[tuple]:
+    """Пары (клип, имя файла) с хронологическим/рейтинговым префиксом."""
+    ordered = ordered_clips(clips, order)
+    width = max(2, len(str(len(ordered))))
+    used: set = set()
+    out: List[tuple] = []
+    for position, clip in enumerate(ordered, 1):
+        title = safe_filename(clip.get("title") or clip.get("hook") or "clip")
+        stem = f"{position:0{width}d} — {title}"
+        name = f"{stem}.mp4"
+        counter = 2
+        while name.casefold() in used:
+            name = f"{stem} ({counter}).mp4"
+            counter += 1
+        used.add(name.casefold())
+        out.append((clip, name))
+    return out
+
+
 def ass_time(seconds: float) -> str:
     seconds = max(0.0, float(seconds))
     cs = int(round(seconds * 100))

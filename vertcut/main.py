@@ -581,6 +581,18 @@ def project_start(pid: str, body: StartIn = StartIn()) -> Dict[str, Any]:
     return db.get_project(pid) or project
 
 
+@app.post("/api/projects/{pid}/options")
+def project_options(pid: str, body: StartIn = StartIn()) -> Dict[str, Any]:
+    """Сохранить проектную настройку без запуска обработки (например, порядок экспорта)."""
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    current = project.get("options") or {}
+    options = pipeline.normalize_options({**current, **(body.options or {})})
+    db.update_project(pid, options=options)
+    return db.get_project(pid) or project
+
+
 @app.post("/api/projects/{pid}/cancel")
 def project_cancel(pid: str) -> Dict[str, Any]:
     project = db.get_project(pid)
@@ -735,6 +747,25 @@ def delete_music(pid: str) -> Dict[str, Any]:
         (PROJECTS_DIR / pid / f"music{old}").unlink(missing_ok=True)
     db.merge_meta(pid, {"music": False})
     return {"ok": True}
+
+
+@app.get("/api/clips/{cid}/download")
+def clip_download(cid: str) -> FileResponse:
+    """Скачать клип с человеческим именем в выбранном порядке проекта."""
+    clip = db.get_clip(cid)
+    if not clip or not clip.get("path"):
+        raise HTTPException(404, "Клип не найден")
+    path = Path(clip["path"])
+    if not path.exists():
+        raise HTTPException(404, "Файл клипа не найден на диске")
+    from . import utils
+
+    project = db.get_project(clip["project_id"]) or {}
+    order = ((project.get("options") or {}).get("export_order") or "chrono")
+    ready = [c for c in db.list_clips(clip["project_id"]) if c["status"] == "ready"]
+    name = next((name for c, name in utils.named_exports(ready, order) if c["id"] == cid), None)
+    name = name or f"{utils.safe_filename(clip.get('title') or 'clip')}.mp4"
+    return FileResponse(path, media_type="video/mp4", filename=name)
 
 
 @app.get("/api/clips/{cid}/subtitles.ass")

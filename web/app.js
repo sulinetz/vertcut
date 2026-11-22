@@ -918,7 +918,8 @@ function heroOptions() {
     layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
     language: "auto",
-    audio_track: -1
+    audio_track: -1,
+    export_order: "chrono"
   };
 }
 
@@ -1366,7 +1367,7 @@ function clipsGridHTML() {
         <div class="clip-title">${esc(c.title || "Без названия")}</div>
         ${partsLine ? `<div class="clip-parts">${partsLine}</div>` : ""}
         <div class="clip-tools">
-          <a class="download-btn" href="${url}" download="${esc(c.title || "clip")}.mp4" data-download-clip="${c.id}" title="Скачать MP4">
+          <a class="download-btn" href="/api/clips/${c.id}/download" download data-download-clip="${c.id}" title="Скачать MP4">
             ${ICONS.download}<span>Скачать MP4</span>
           </a>
           <a class="srt-btn" href="/api/clips/${c.id}/subtitles.ass" download title="Скачать субтитры (ASS для монтажа)">ASS</a>
@@ -1520,6 +1521,13 @@ function resultsHTML() {
       </div>
     </div>
     <div class="project-actions">
+      <label class="mini-field" style="min-width:160px">
+        <span>Порядок экспорта</span>
+        <select id="exportOrder">
+          <option value="chrono" ${(project.options?.export_order || "chrono") === "chrono" ? "selected" : ""}>По хронологии</option>
+          <option value="score" ${project.options?.export_order === "score" ? "selected" : ""}>Топ моменты</option>
+        </select>
+      </label>
       ${ready.length ? `<a class="btn-primary" href="/api/projects/${project.id}/zip" data-download-zip="${project.id}" style="display:inline-flex;align-items:center;gap:7px">${ICONS.zip} Скачать всё</a>` : ""}
       <button class="btn-ghost" data-action="folder" title="Открыть папку с готовыми MP4">${ICONS.folder} Открыть папку</button>
       ${ready.length ? `<button class="btn-ghost" data-action="smart-all">Пересобрать в умный кроп</button>` : ""}
@@ -1568,6 +1576,25 @@ function renderMain(force) {
 }
 
 function bindClips() {
+  const orderSelect = $("#exportOrder");
+  if (orderSelect) {
+    orderSelect.addEventListener("change", async () => {
+      if (!state.detail) return;
+      try {
+        await api(`/api/projects/${state.detail.project.id}/options`, {
+          method: "POST",
+          body: JSON.stringify({ options: { export_order: orderSelect.value } })
+        });
+        state.detail.project.options = {
+          ...(state.detail.project.options || {}),
+          export_order: orderSelect.value
+        };
+        toast(orderSelect.value === "score" ? "Экспорт: топ моменты" : "Экспорт: по хронологии");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    });
+  }
   const grid = $("#clipsGrid");
   if (grid) {
     grid.addEventListener("pointerover", (e) => {
@@ -1786,7 +1813,8 @@ function templateDefaults(project) {
     uppercase: o.uppercase !== false,
     showHook: o.show_hook !== false,
     subtitles: o.subtitles !== false,
-    audio: Number(o.audio_track == null ? -1 : o.audio_track)
+    audio: Number(o.audio_track == null ? -1 : o.audio_track),
+    exportOrder: o.export_order || "chrono"
   };
 }
 
@@ -1805,7 +1833,8 @@ function templateOptions() {
     accent: state.tmplAccent,
     uppercase: $("#tpUpper").checked,
     show_hook: $("#tpHook").checked,
-    audio_track: audioEl && audioEl.value !== "" ? Number(audioEl.value) : -1
+    audio_track: audioEl && audioEl.value !== "" ? Number(audioEl.value) : -1,
+    export_order: $("#tpExportOrder") ? $("#tpExportOrder").value : "chrono"
   };
 }
 
@@ -1985,6 +2014,13 @@ function openTemplate(pid) {
             <select id="tpAudio"></select>
           </div>
           <div class="field">
+            <label>Порядок экспорта</label>
+            <select id="tpExportOrder">
+              <option value="chrono">По хронологии</option>
+              <option value="score">Топ моменты</option>
+            </select>
+          </div>
+          <div class="field">
             <label>Уникализация</label>
             <div class="preset-row" id="tpUniqPresets">
               ${UNIQ_PRESETS.map((p) => `<button class="preset-chip" data-uniq="${p.key}">${p.label}</button>`).join("")}
@@ -2141,6 +2177,8 @@ async function tmplPoll() {
       $("#tpSubs").checked = defaults.subtitles !== false;
   $("#tpUpper").checked = defaults.uppercase;
       $("#tpHook").checked = defaults.showHook;
+      const tpExportOrder = $("#tpExportOrder");
+      if (tpExportOrder) tpExportOrder.value = defaults.exportOrder;
       $$("#tpSpeed button").forEach((b) => b.classList.toggle("active", b.dataset.val === defaults.speed));
       state.tmplAccent = defaults.accent;
       $$("#tpAccents .swatch").forEach((b) => b.classList.toggle("active", b.dataset.val === defaults.accent));

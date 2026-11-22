@@ -107,6 +107,7 @@ assets/             шрифты, иконки, YuNet, adhd_bg/
 - split-screen: `bg_video` (`random` или имя файла)
 - источник: `max_height`, `cookies_browser`, `keep_fps`, `language`,
   `audio_track` (индекс вшитой дорожки, `-1` — default)
+- экспорт: `export_order` (`chrono` — по времени источника, `score` — топ моменты)
 
 Настройки клипа хранятся в `clip.settings`; `rerender_clip` копирует из
 payload только известные ключи. Новую настройку нужно добавить в **три**
@@ -158,11 +159,12 @@ cd viralcut
 .\.venv-win\Scripts\python.exe -m pytest tests -q
 ```
 
-Сейчас: **104 passed, 4 skipped**. Покрыто: анализ, субтитры и их импорт,
+Сейчас: **111 passed, 4 skipped**. Покрыто: анализ, субтитры и их импорт,
 платформы, раскладки стрима, опции, fps, межстрочный интервал, таймлайн
-(`test_timeline.py`), команда ffmpeg, аудиодорожки и откат энкодера
-(`test_render_args.py`, `test_audio_tracks.py`, `test_hw_encode.py`),
-сквозные тайминги ASS и нормализация (`test_uniq_options.py`).
+(`test_timeline.py`), команда ffmpeg, аудиодорожки, имена/порядок экспорта
+(`test_render_args.py`, `test_audio_tracks.py`, `test_hw_encode.py`,
+`test_export_names.py`), сквозные тайминги ASS и нормализация
+(`test_uniq_options.py`).
 
 Сетевые и GPU-тесты пропускаются, если нет окружения.
 
