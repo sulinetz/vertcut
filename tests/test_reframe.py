@@ -44,6 +44,22 @@ class CropPathTest(unittest.TestCase):
         xs = set(path["x"])
         self.assertEqual(len(xs), 1, "без лиц окно стоит по центру")
 
+    def test_crop_expression_is_short_enough_for_ffmpeg(self):
+        # 200 keyframes — это ~20 КБ выражения; ffmpeg падает на разборе.
+        path = {
+            "times": [i * 0.5 for i in range(200)],
+            "x": [100 + i for i in range(200)],
+            "y": [50 + i * 0.2 for i in range(200)],
+            "crop_w": 608,
+            "crop_h": 1080,
+            "source": [1920, 1080],
+        }
+        x_expr, y_expr = reframe.crop_expressions(path)
+        self.assertLessEqual(x_expr.count("max("), 70)
+        self.assertLessEqual(y_expr.count("max("), 70)
+        self.assertLess(len(x_expr), 8000)
+        self.assertLess(len(y_expr), 8000)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

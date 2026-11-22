@@ -464,11 +464,38 @@ def _piecewise(times: List[float], values: List[float], clamp_max: float, var: s
     return f"max(0\\,min({clamp_max:.1f}\\,{expr}))"
 
 
+def _decimate_path(times: List[float], xs: List[float], ys: List[float],
+                   limit: int = 64) -> Tuple[List[float], List[float], List[float]]:
+    """Прореживает траекторию: ffmpeg не переваривает выражения на сотни термов.
+
+    При 2 fps путь за 90 секунд — это ~180 keyframes и ~20 КБ выражения.
+    Встроенный парсер ffmpeg падает с «Missing ')' or too many args».
+    Оставляем не больше `limit` равномерных точек: движение всё равно плавное.
+    """
+    count = len(times)
+    if count <= limit or limit < 2:
+        return times, xs, ys
+    step = (count - 1) / (limit - 1)
+    indices: List[int] = []
+    for i in range(limit):
+        index = int(round(i * step))
+        if not indices or index != indices[-1]:
+            indices.append(index)
+    if indices[-1] != count - 1:
+        indices.append(count - 1)
+    return ([times[i] for i in indices],
+            [xs[i] for i in indices],
+            [ys[i] for i in indices])
+
+
 def crop_expressions(path: Dict[str, Any]) -> Tuple[str, str]:
     """Возвращает (x_expr, y_expr) для фильтра crop."""
-    times = path["times"]
+    times = [float(t) for t in path["times"]]
+    xs = [float(v) for v in path["x"]]
+    ys = [float(v) for v in path["y"]]
+    times, xs, ys = _decimate_path(times, xs, ys)
     max_x = max(0.0, path["source"][0] - path["crop_w"])
     max_y = max(0.0, path["source"][1] - path["crop_h"])
-    x_expr = _piecewise(times, path["x"], max_x, "t")
-    y_expr = _piecewise(times, path["y"], max_y, "t")
+    x_expr = _piecewise(times, xs, max_x, "t")
+    y_expr = _piecewise(times, ys, max_y, "t")
     return x_expr, y_expr
