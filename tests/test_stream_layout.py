@@ -17,11 +17,11 @@ class StreamChainTest(unittest.TestCase):
 
     def test_face_layout_overlays_panel(self):
         chain = render._stream_chain(1080, 1920, self.crop, self.facecam,
-                                     "face_large", "universal")
+                                     "face_third", "universal")
         self.assertIn("overlay=", chain)
         self.assertIn("[face]", chain)
         self.assertIn("crop=310:240:70:10", chain)
-        self.assertIn("scale=520:406", chain)
+        self.assertIn("scale=360:281", chain)
 
     def test_face_panel_is_above_subtitles(self):
         chain = render._stream_chain(1080, 1920, self.crop, self.facecam,
@@ -36,8 +36,7 @@ class StreamChainTest(unittest.TestCase):
         self.assertIn(f"scale=1080:{render.BAND_H}", chain)
 
     def test_layouts_registry(self):
-        self.assertEqual(set(render.STREAM_LAYOUTS),
-                         {"face_third", "face_large", "face_huge", "band"})
+        self.assertEqual(set(render.STREAM_LAYOUTS), {"face_third", "band"})
 
 
 class LayoutOptionsTest(unittest.TestCase):

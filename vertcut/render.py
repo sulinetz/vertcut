@@ -19,7 +19,7 @@ from .utils import MediaError, probe, run, subprocess_kwargs
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}
 
 # Пресеты для стримов: игра на весь кадр плюс врезка с лицом.
-STREAM_SIZES = {"face_third": 360, "face_large": 520, "face_huge": 640}
+STREAM_SIZES = {"face_third": 360}
 STREAM_LAYOUTS = tuple(STREAM_SIZES) + ("band",)
 BAND_H = 640
 
@@ -57,7 +57,7 @@ def _stream_chain(w: int, h: int, crop_path: Optional[Dict[str, Any]],
         top = f"{base},pad={w}:{h}:0:0:black[top]"
         return f"{face};{top};[top][face]overlay=0:{h - BAND_H}[base]"
 
-    size = STREAM_SIZES.get(layout, STREAM_SIZES["face_large"])
+    size = STREAM_SIZES.get(layout, STREAM_SIZES["face_third"])
     face_h = int(round(size * 0.78))
     # Панель ставим сверху слева: внизу живут субтитры и интерфейс площадки.
     z = platforms.zones(platform)

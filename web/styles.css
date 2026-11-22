@@ -1558,7 +1558,7 @@ input[type="range"]::-webkit-slider-thumb {
 .ed-sub .w.hl { color: var(--hl, #ffe24a); }
 .ed-video-small {
   width: 100%;
-  height: 190px;
+  height: 300px;
   object-fit: contain;
   border-radius: 12px;
   background: #000;

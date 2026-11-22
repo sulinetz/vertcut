@@ -477,7 +477,6 @@ function heroHTML() {
         <div class="seg" data-group="layout">
           <button data-val="" class="${!o.layout ? "active" : ""}">Выкл</button>
           <button data-val="face_third" class="${o.layout === "face_third" ? "active" : ""}">Лицо · треть</button>
-          <button data-val="face_large" class="${o.layout === "face_large" ? "active" : ""}">Лицо · крупно</button>
           <button data-val="band" class="${o.layout === "band" ? "active" : ""}">Полоса снизу</button>
         </div>
       </div>
@@ -745,7 +744,7 @@ function renderQuality(data) {
   const rec = data.recommended;
   const cards = data.options.map((o) => `
     <button class="quality-card ${o.height === rec ? "recommended" : ""}" data-quality="${o.height}">
-      <span class="q-height">${o.height}p</span>
+      <span class="q-height">${o.height >= 2160 ? "4K" : o.height >= 1440 ? "2K" : o.height + "p"}</span>
       <span class="q-size">${formatSize(o.size_mb)}</span>
       ${o.height === rec ? '<span class="q-badge">рекомендуем</span>' : ""}
     </button>`).join("");
@@ -1992,7 +1991,6 @@ function openEditor(clipId) {
               <select id="edLayout">
                 <option value="" ${!s.layout ? "selected" : ""}>Выключен</option>
                 <option value="face_third" ${s.layout === "face_third" ? "selected" : ""}>Лицо · треть</option>
-                <option value="face_large" ${s.layout === "face_large" ? "selected" : ""}>Лицо · крупно</option>
                 <option value="band" ${s.layout === "band" ? "selected" : ""}>Полоса снизу</option>
               </select>
             </div>
@@ -2094,6 +2092,38 @@ function openEditor(clipId) {
   const hookView = $("#edHookView");
   const stageHint = $("#edStageHint");
 
+  const drawCover = (ctx, video, dx, dy, dw, dh) => {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    const scale = Math.max(dw / vw, dh / vh);
+    const sw = dw / scale, sh = dh / scale;
+    const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+    ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+  };
+
+  const drawFacecam = (ctx, fc, dx, dy, dw, dh, rounded) => {
+    if (!fc) return;
+    ctx.save();
+    if (rounded) {
+      const r = Math.min(dw, dh) * 0.08;
+      ctx.beginPath();
+      ctx.moveTo(dx + r, dy);
+      ctx.arcTo(dx + dw, dy, dx + dw, dy + dh, r);
+      ctx.arcTo(dx + dw, dy + dh, dx, dy + dh, r);
+      ctx.arcTo(dx, dy + dh, dx, dy, r);
+      ctx.arcTo(dx, dy, dx + dw, dy, r);
+      ctx.closePath();
+      ctx.clip();
+    }
+    const vw = srcVideo.videoWidth, vh = srcVideo.videoHeight;
+    const fx = Math.max(0, fc.x), fy = Math.max(0, fc.y);
+    const fw = Math.min(fc.w, vw - fx), fh = Math.min(fc.h, vh - fy);
+    const scale = Math.max(dw / fw, dh / fh);
+    const sw = dw / scale, sh = dh / scale;
+    ctx.drawImage(srcVideo, fx + (fw - sw) / 2, fy + (fh - sh) / 2, sw, sh, dx, dy, dw, dh);
+    ctx.restore();
+  };
+
   const drawFrame = () => {
     if (!stage || !canvas || !srcVideo || !srcVideo.videoWidth) return;
     const dpr = window.devicePixelRatio || 1;
@@ -2101,10 +2131,25 @@ function openEditor(clipId) {
     const h = Math.max(1, Math.round(stage.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     const ctx = canvas.getContext("2d");
-    const vw = srcVideo.videoWidth, vh = srcVideo.videoHeight;
-    const scale = Math.max(w / vw, h / vh);
-    const dw = vw * scale, dh = vh * scale;
-    ctx.drawImage(srcVideo, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    const layout = $("#edLayout") ? $("#edLayout").value : "";
+    const fc = (s && s.facecam) || null;
+    const k = w / 1080;
+
+    if (layout === "band" && fc) {
+      const topH = Math.round(h * 1280 / 1920);
+      drawCover(ctx, srcVideo, 0, 0, w, topH);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, topH, w, h - topH);
+      drawFacecam(ctx, fc, 0, topH, w, h - topH, false);
+    } else {
+      drawCover(ctx, srcVideo, 0, 0, w, h);
+      if (layout === "face_third" && fc) {
+        const size = 360 * k;
+        const x = 64 * k;
+        const y = 240 * k;
+        drawFacecam(ctx, fc, x, y, size, size * 0.78, true);
+      }
+    }
     if (stageHint) stageHint.classList.add("hidden");
   };
 
@@ -2154,7 +2199,8 @@ function openEditor(clipId) {
       subView.style.top = "50%";
       subView.style.transform = "translateY(-50%)";
     } else {
-      subView.style.bottom = Math.max(8, Math.max(320, zone.bottom + 60) * k + offset * k) + "px";
+      const bandLift = (($("#edLayout") ? $("#edLayout").value : "") === "band") ? 640 * k : 0;
+      subView.style.bottom = Math.max(8, Math.max(320, zone.bottom + 60) * k + offset * k + bandLift) + "px";
     }
     subView.style.setProperty("--hl", ACCENT_HEX[chosenAccent] || ACCENT_HEX.yellow);
 
@@ -2169,12 +2215,12 @@ function openEditor(clipId) {
     }
   };
 
-  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edLineGap", "edUpper", "edSubs", "edShowHook", "edPlatform"]
+  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edLineGap", "edUpper", "edSubs", "edShowHook", "edPlatform", "edLayout"]
     .forEach((id) => {
       const el = $("#" + id);
       if (!el) return;
       el.addEventListener("input", updateEditorPreview);
-      el.addEventListener("change", updateEditorPreview);
+      el.addEventListener("change", () => { updateEditorPreview(); drawFrame(); });
     });
   window.addEventListener("resize", () => { drawFrame(); updateEditorPreview(); });
   setTimeout(() => { updateEditorPreview(); seekSource(); }, 60);
@@ -2200,6 +2246,10 @@ function openEditor(clipId) {
   const start = $("#edStart"), end = $("#edEnd");
   const startNum = $("#edStartNum"), endNum = $("#edEndNum");
   const video = $("#edVideo");
+  if (video) {
+    video.volume = 0.5;
+    video.addEventListener("loadedmetadata", () => { video.volume = 0.5; });
+  }
 
   const durLabel = $("#edDur");
   const syncNumbers = () => {

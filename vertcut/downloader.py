@@ -649,7 +649,8 @@ def probe(url: str, browser: Optional[str] = None) -> Dict[str, Any]:
     video_heights = [int(f["height"]) for f in formats
                      if f.get("height") and (f.get("vcodec") or "none") != "none"]
     max_available = max(video_heights) if video_heights else 0
-    steps = [h for h in (1080, 720, 360) if h <= max_available] or ([max_available] if max_available else [])
+    steps = [h for h in (2160, 1440, 1080, 720, 360)
+             if h <= max_available] or ([max_available] if max_available else [])
 
     options = []
     for height in steps:

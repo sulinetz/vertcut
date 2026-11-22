@@ -103,7 +103,7 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         mh = int(opts.get("max_height", 1080))
     except Exception:
         mh = 1080
-    opts["max_height"] = mh if mh in (1080, 720, 480, 360) else 1080
+    opts["max_height"] = mh if mh in (2160, 1440, 1080, 720, 480, 360) else 1080
     opts["segments"] = bool(opts.get("segments"))
     opts["force_hd"] = bool(opts.get("force_hd"))
     opts["language"] = str(opts.get("language") or "auto")
@@ -754,6 +754,10 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         # Пресет стрима: находим врезку и не даём окну кадрирования её накрыть.
         try:
             facecam = reframe.detect_facecam(source, clip["start"], clip["end"])
+            if facecam:
+                # координаты врезки нужны предпросмотру в редакторе
+                settings = {**settings, "facecam": facecam}
+                db.update_clip(clip["id"], settings=settings)
         except Exception:
             facecam = None
         if facecam:
