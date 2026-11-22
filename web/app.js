@@ -290,6 +290,8 @@ const state = {
     subOffset: 0,
     subSpeed: "calm",
     lineGap: 0,
+    keepFps: true,
+    exportSubs: false,
     platform: "universal",
     layout: "",
     cookies: "",
@@ -484,6 +486,7 @@ function heroHTML() {
         <span class="opt-label">Субтитры</span>
         <div class="opt-control">
           <label class="toggle"><input type="checkbox" id="subsToggle" ${o.subtitles ? "checked" : ""}/><span class="track"></span><span>Включены</span></label>
+          <label class="toggle" title="Ролик без вшитых субтитров, но с файлами ASS и SRT"><input type="checkbox" id="exportSubsToggle" ${o.exportSubs ? "checked" : ""}/><span class="track"></span><span>Файлы отдельно</span></label>
           <div class="swatches" id="accents">
             ${swatchesHTML(o.accent)}
           </div>
@@ -514,6 +517,13 @@ function heroHTML() {
           <label class="mini-field grow">
             <span>Сдвиг <b id="offsetVal">${o.subOffset}</b></span>
             <input type="range" id="offsetRange" min="-120" max="180" step="5" value="${o.subOffset}" />
+          </label>
+          <label class="mini-field">
+            <span>Кадры в секунду</span>
+            <select id="fpsSelect">
+              <option value="source" ${o.keepFps ? "selected" : ""}>Как в исходнике</option>
+              <option value="30" ${!o.keepFps ? "selected" : ""}>Всегда 30</option>
+            </select>
           </label>
           <label class="mini-field grow">
             <span>Межстрочный интервал <b id="lineGapVal">${o.lineGap}</b></span>
@@ -566,6 +576,10 @@ function bindHero() {
   }
   const subs = $("#subsToggle");
   if (subs) subs.addEventListener("change", () => { state.opts.subtitles = subs.checked; });
+  const exportSubs = $("#exportSubsToggle");
+  if (exportSubs) exportSubs.addEventListener("change", () => {
+    state.opts.exportSubs = exportSubs.checked;
+  });
 
   const cookies = $("#cookiesSelect");
   if (cookies) cookies.addEventListener("change", () => { state.opts.cookies = cookies.value; });
@@ -592,6 +606,11 @@ function bindHero() {
 
   const posSelect = $("#posSelect");
   if (posSelect) posSelect.addEventListener("change", () => { state.opts.subPos = posSelect.value; });
+
+  const fpsSelect = $("#fpsSelect");
+  if (fpsSelect) fpsSelect.addEventListener("change", () => {
+    state.opts.keepFps = fpsSelect.value === "source";
+  });
 
   const lineGapRange = $("#lineGapRange");
   if (lineGapRange) lineGapRange.addEventListener("input", () => {
@@ -654,6 +673,8 @@ function heroOptions() {
     sub_offset: state.opts.subOffset,
     sub_speed: state.opts.subSpeed,
     line_gap: state.opts.lineGap,
+    keep_fps: state.opts.keepFps,
+    export_subs: state.opts.exportSubs,
     platform: state.opts.platform,
     layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
@@ -1088,7 +1109,8 @@ function clipsGridHTML() {
           <a class="download-btn" href="${url}" download="${esc(c.title || "clip")}.mp4" data-download-clip="${c.id}" title="Скачать MP4">
             ${ICONS.download}<span>Скачать MP4</span>
           </a>
-          <a class="srt-btn" href="/api/clips/${c.id}/subtitles.srt" download title="Скачать субтитры (SRT)">SRT</a>
+          <a class="srt-btn" href="/api/clips/${c.id}/subtitles.ass" download title="Скачать субтитры (ASS для монтажа)">ASS</a>
+                <a class="srt-btn" href="/api/clips/${c.id}/subtitles.srt" download title="Скачать субтитры (SRT)">SRT</a>
         </div>
       </div>
     </div>`;

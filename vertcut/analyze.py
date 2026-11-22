@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import difflib
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -398,6 +399,13 @@ def _make_caption(title: str, text: str, platform: str) -> str:
     return f"{title}\n\n{tag_line}"
 
 
+def _text_similar(a: str, b: str, threshold: float = 0.74) -> bool:
+    """Один и тот же текст в разных местах: припев, повторённая фраза, рефрен."""
+    if not a or not b:
+        return False
+    return difflib.SequenceMatcher(None, _norm(a), _norm(b)).ratio() > threshold
+
+
 def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                   count: int = 10, min_dur: float = 15, max_dur: float = 60,
                   target_dur: float = 32, platform: str = "shorts") -> List[Dict[str, Any]]:
@@ -519,6 +527,11 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                 if jaccard > 0.62:
                     overlap = True
                     break
+            # Один и тот же припев или повторённая фраза в другом месте выпуска:
+            # сравниваем весь текст, а не только ключевые слова.
+            if _text_similar(cand.get("text") or "", p.get("text") or ""):
+                overlap = True
+                break
         if not overlap:
             picked.append(cand)
 

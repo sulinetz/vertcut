@@ -61,9 +61,17 @@ class EvenSplitTest(unittest.TestCase):
         self.assertAlmostEqual(found[-1]["end"], 120.0)
         self.assertEqual(found[0]["title"], "Часть 1")
 
-    def test_respects_max_duration(self):
+    def test_explicit_count_is_honored(self):
+        # Пользователь явно попросил 2 клипа — делим на 2, даже если куски длинные.
         found = pipeline._even_segments(600.0, {"count": 2, "target_dur": 30,
                                                 "min_dur": 5, "max_dur": 60}, None)
+        self.assertEqual(len(found), 2)
+        self.assertAlmostEqual(found[0]["end"] - found[0]["start"], 300.0)
+
+    def test_auto_count_respects_max_duration(self):
+        found = pipeline._even_segments(600.0, {"count": 0, "target_dur": 30,
+                                                "min_dur": 5, "max_dur": 60}, None)
+        self.assertEqual(len(found), 20)
         for clip in found:
             self.assertLessEqual(clip["end"] - clip["start"], 60.5)
 

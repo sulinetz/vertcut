@@ -33,6 +33,8 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "sub_offset": 0,
     "sub_speed": "calm",
     "line_gap": 0,
+    "keep_fps": True,
+    "export_subs": False,
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
@@ -79,6 +81,8 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["sub_position"] = "bottom"
     if opts.get("sub_speed") not in subtitles.SPEEDS:
         opts["sub_speed"] = "calm"
+    opts["keep_fps"] = bool(opts.get("keep_fps", True))
+    opts["export_subs"] = bool(opts.get("export_subs", False))
     try:
         opts["line_gap"] = max(0, min(120, int(opts.get("line_gap", 0))))
     except (TypeError, ValueError):
@@ -220,6 +224,8 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
         "line_gap": opts["line_gap"],
         "platform": opts["platform"], "layout": opts["layout"],
+        "fps": None if opts.get("keep_fps", True) else 30.0,
+        "export_subs": bool(opts.get("export_subs", False)),
         "segments": bool(opts.get("segments")),
     }
 
@@ -239,7 +245,7 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     select = opts.get("select") or "smart"
     transcript: Optional[Dict[str, Any]] = None
     no_speech = False
-    if select == "even" and not opts.get("subtitles"):
+    if select == "even" and not opts.get("subtitles") and not opts.get("export_subs"):
         progress(0.55, "Нарезка на равные части")
     else:
         progress(0.32, "Распознавание речи")
@@ -416,18 +422,22 @@ def _even_segments(duration: float, opts: Dict[str, Any],
     duration = max(1.0, float(duration))
     count = int(opts.get("count") or 0)
     target = max(1.0, float(opts.get("target_dur") or 60))
+    explicit = count > 0
     if count <= 0:
         count = int(round(duration / target))
     count = max(1, min(200, count))
     max_dur = max(5.0, float(opts.get("max_dur") or 60))
     min_dur = max(3.0, float(opts.get("min_dur") or 15))
     step = duration / count
-    while step > max_dur and count < 200:
-        count = min(200, count + max(1, int(step / max_dur)))
-        step = duration / count
-    while step < min_dur and count > 1:
-        count -= 1
-        step = duration / count
+    # Если количество задано вручную — делим ровно на столько частей.
+    # Иначе подгоняем число кусков под выбранную длительность.
+    if not explicit:
+        while step > max_dur and count < 200:
+            count = min(200, count + max(1, int(step / max_dur)))
+            step = duration / count
+        while step < min_dur and count > 1:
+            count -= 1
+            step = duration / count
 
     segments = (transcript or {}).get("segments") or []
     out: List[Dict[str, Any]] = []
@@ -515,7 +525,8 @@ def process_project(pid: str) -> None:
     try:
         select = opts.get("select") or "smart"
         transcript: Optional[Dict[str, Any]] = None
-        need_text = select != "even" or bool(opts.get("subtitles"))
+        need_text = (select != "even" or bool(opts.get("subtitles"))
+                     or bool(opts.get("export_subs")))
         hook_ok = False
         prepared = None
         no_speech = False
@@ -596,6 +607,8 @@ def process_project(pid: str) -> None:
             "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
             "line_gap": opts["line_gap"],
             "platform": opts["platform"], "layout": opts["layout"],
+            "fps": None if opts.get("keep_fps", True) else 30.0,
+            "export_subs": bool(opts.get("export_subs", False)),
         }
         _check_cancel(pid)
         total = len(found)
@@ -701,7 +714,9 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     ass_dir.mkdir(parents=True, exist_ok=True)
 
     ass_path = None
-    if settings.get("subtitles", True) and clip["words"]:
+    burn_subs = bool(settings.get("subtitles", True))
+    export_subs = bool(settings.get("export_subs", False))
+    if clip["words"] and (burn_subs or export_subs):
         text = subtitles.build_ass(
             clip["words"], clip["start"], clip["end"],
             hook=clip.get("hook") or clip.get("title") or "",
@@ -719,6 +734,10 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         )
         ass_path = ass_dir / f"{clip['id']}.ass"
         ass_path.write_text(text, encoding="utf-8")
+
+    # Субтитры не вжигаем, но файл оставляем для экспорта в редактор.
+    if not burn_subs:
+        ass_path = None
 
     out_path = out_dir / f"clip_{clip['idx'] + 1:02d}.mp4"
     crop_path = None

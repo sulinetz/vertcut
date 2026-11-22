@@ -183,7 +183,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 crf: int = 21, preset: str = "veryfast",
                 crop_path: Optional[Dict[str, Any]] = None,
                 layout: str = "", facecam: Optional[Dict[str, Any]] = None,
-                platform: str = "") -> Dict[str, Any]:
+                platform: str = "", fps: Optional[float] = None) -> Dict[str, Any]:
     w, h = ASPECTS.get(aspect, ASPECTS["9:16"])
     if layout in STREAM_LAYOUTS and facecam:
         w, h = ASPECTS["9:16"]
@@ -243,7 +243,12 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     video_args = _hw_args(hw, crf) if hw else ["-c:v", "libx264", "-preset", preset,
                                                "-crf", str(crf), "-profile:v", "high",
                                                "-pix_fmt", "yuv420p"]
-    cmd += video_args + ["-r", "30", "-movflags", "+faststart", "-shortest", str(out_path)]
+    out_fps = 30.0
+    if fps:
+        out_fps = round(float(fps), 2)
+    elif info.get("fps"):
+        out_fps = round(float(info["fps"]), 2)
+    cmd += video_args + ["-r", str(out_fps), "-movflags", "+faststart", "-shortest", str(out_path)]
 
     # -progress в cmd даёт машинно-читаемый прогресс: UI не «замирает» на минуту.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,

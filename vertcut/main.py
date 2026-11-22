@@ -580,6 +580,24 @@ def clip_srt(cid: str) -> Response:
                     headers={"Content-Disposition": disposition})
 
 
+@app.get("/api/clips/{cid}/subtitles.ass")
+def clip_ass(cid: str) -> FileResponse:
+    """Тот же ASS, что вжигается в видео — для монтажа в своём редакторе."""
+    clip = db.get_clip(cid)
+    if not clip:
+        raise HTTPException(404, "Клип не найден")
+    path = PROJECTS_DIR / clip["project_id"] / "ass" / f"{clip['id']}.ass"
+    if not path.exists():
+        raise HTTPException(404, "Субтитры для этого клипа ещё не собраны")
+    title = (clip.get("title") or "clip").replace("/", " ").strip()[:60] or "clip"
+    from urllib.parse import quote
+
+    disposition = (f"attachment; filename=\"clip.ass\"; "
+                   f"filename*=UTF-8''{quote(title + '.ass')}")
+    return FileResponse(path, media_type="text/x-ssa",
+                        headers={"Content-Disposition": disposition})
+
+
 @app.post("/api/clips/{cid}/rerender")
 def clip_rerender(cid: str, body: ClipEdit) -> Dict[str, Any]:
     clip = db.get_clip(cid)
