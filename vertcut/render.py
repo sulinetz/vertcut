@@ -14,8 +14,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .config import ffmpeg
 from . import custom_fonts
 from .reframe import crop_expressions
-from .timeline import offsets as timeline_offsets
-from .utils import MediaError, probe, run, subprocess_kwargs
+from .timeline import dub_pieces, offsets as timeline_offsets
+from .utils import MediaError, probe, probe_audio, run, subprocess_kwargs
 
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}
 
@@ -204,6 +204,42 @@ def _normalize_segments(segments: Optional[List[Any]], src_dur: float) -> Option
     return out or None
 
 
+def _dub_audio_filters(src: str, segments: List[Tuple[float, float]], offset: float,
+                       available: float, sample_rate: int,
+                       out: str = "[seq_a]") -> List[str]:
+    """Звук дубляжа по тем же кускам, что и видео, с учётом сдвига.
+
+    Положительный offset задерживает дорожку, отрицательный ускоряет; то, чего
+    в файле не хватает (начало раньше нуля или файл короче), заменяется тишиной,
+    чтобы звук не отставал от картинки после склеек.
+    """
+    rate = int(sample_rate or 48000)
+    pieces = dub_pieces(segments, offset, available)
+    if not pieces:
+        total = max(0.05, sum(max(0.0, b - a) for a, b in segments))
+        pieces = [{"audio": False, "duration": round(total, 3)}]
+    filters: List[str] = []
+    count = len(pieces)
+    for i, piece in enumerate(pieces):
+        label = out if count == 1 else f"[dp{i}]"
+        if piece.get("audio"):
+            filters.append(
+                f"{src}atrim=start={float(piece['start']):.3f}:end={float(piece['end']):.3f},"
+                f"asetpts=PTS-STARTPTS,aresample={rate},"
+                f"aformat=sample_fmts=fltp:sample_rates={rate}:channel_layouts=stereo{label}"
+            )
+        else:
+            filters.append(
+                f"aevalsrc=0|0:s={rate}:d={max(0.03, float(piece['duration'])):.3f},"
+                f"asetpts=PTS-STARTPTS,"
+                f"aformat=sample_fmts=fltp:sample_rates={rate}:channel_layouts=stereo{label}"
+            )
+    if count > 1:
+        joined = "".join(f"[dp{i}]" for i in range(count))
+        filters.append(f"{joined}concat=n={count}:v=0:a=1{out}")
+    return filters
+
+
 def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path,
                 ass_path: Optional[Path] = None, aspect: str = "9:16",
                 mode: str = "blur", focus_x: float = 0.5,
@@ -220,7 +256,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 speed: float = 1.0, pitch: float = 1.0,
                 segments: Optional[List[Any]] = None, cut_zoom: bool = False,
                 bg_path: Optional[Path] = None, bg_start: float = 0.0,
-                split_ratio: float = 0.5, audio_track: Optional[int] = None) -> Dict[str, Any]:
+                split_ratio: float = 0.5, audio_track: Optional[int] = None,
+                external_audio: Optional[Path] = None, audio_offset: float = 0.0,
+                external_audio_track: Optional[int] = None) -> Dict[str, Any]:
     speed = max(1.0, min(1.25, float(speed or 1.0)))
     pitch = max(0.85, min(1.15, float(pitch or 1.0)))
     tilt = max(0.0, min(5.0, float(tilt or 0.0)))
@@ -261,11 +299,40 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     top_h = max(2, int(round(h * ratio / 2.0)) * 2)
     bot_h = h - top_h
 
-    # Входы: 0 — источник, затем фон ADHD, затем музыка.
+    # Входы: 0 — источник, затем фон ADHD, музыка и внешняя дорожка (дубляж).
     bg_idx = 1 if (is_adhd and bg_path is not None) else None
+    next_idx = 2 if bg_idx is not None else 1
     music_idx = None
     if music_path is not None:
-        music_idx = 2 if bg_idx is not None else 1
+        music_idx = next_idx
+        next_idx += 1
+
+    dub_path: Optional[Path] = None
+    dub_info: Optional[Dict[str, Any]] = None
+    if external_audio is not None:
+        candidate = Path(external_audio)
+        if candidate.is_file():
+            try:
+                info_dub = probe_audio(candidate)
+            except Exception:  # noqa: BLE001
+                info_dub = None
+            if info_dub and info_dub.get("has_audio"):
+                dub_path = candidate
+                dub_info = info_dub
+    dub_track: Optional[int] = None
+    if dub_path is not None:
+        try:
+            wanted = int(external_audio_track) if external_audio_track is not None else -1
+        except (TypeError, ValueError):
+            wanted = -1
+        dub_streams = (dub_info or {}).get("audio_streams") or []
+        if 0 <= wanted < len(dub_streams):
+            dub_track = wanted
+    dub_idx = None
+    if dub_path is not None:
+        dub_idx = next_idx
+        next_idx += 1
+    use_dub = dub_idx is not None
 
     if is_adhd:
         top_sharpen = info["width"] < w * 0.75
@@ -364,6 +431,8 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 "-i", str(bg_path)]
     if music_idx is not None and music_path is not None:
         cmd += ["-stream_loop", "-1", "-i", str(music_path)]
+    if dub_idx is not None and dub_path is not None:
+        cmd += ["-i", str(dub_path)]
 
     source_rate = int(info.get("sample_rate") or 48000)
     audio_index: Optional[int] = None
@@ -382,8 +451,19 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             source_rate = int(rate)
     audio: List[str] = []
     audio_label: Optional[str] = None
-    if info["has_audio"]:
-        if segs:
+    if info["has_audio"] or use_dub:
+        if use_dub:
+            dub_streams = (dub_info or {}).get("audio_streams") or []
+            dub_src = f"[{dub_idx}:a:{dub_track}]" if dub_track is not None else f"[{dub_idx}:a]"
+            if dub_track is not None and 0 <= dub_track < len(dub_streams):
+                source_rate = int(dub_streams[dub_track].get("sample_rate") or source_rate)
+            elif dub_info and dub_info.get("sample_rate"):
+                source_rate = int(dub_info["sample_rate"])
+            audio += _dub_audio_filters(dub_src, segs or [(0.0, src_dur)],
+                                        float(audio_offset or 0.0),
+                                        float((dub_info or {}).get("duration") or 0.0),
+                                        source_rate)
+        elif segs:
             if len(segs) == 1:
                 a, b = segs[0]
                 audio.append(f"{audio_src}atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[seq_a]")
@@ -401,7 +481,15 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 f"asetrate={source_rate}*{pitch:.5f},aresample={source_rate}")
         afilters.extend(_atempo_chain(speed / pitch))
 
-        measured = _measure_loudness(source, clip_start, src_dur, audio_track=audio_index)
+        measured = None
+        if use_dub and dub_path is not None:
+            dub_dur = float((dub_info or {}).get("duration") or 0.0)
+            m_start = max(0.0, clip_start - float(audio_offset or 0.0))
+            m_dur = min(src_dur, max(0.0, dub_dur - m_start))
+            if m_dur > 0.2:
+                measured = _measure_loudness(dub_path, m_start, m_dur, audio_track=dub_track)
+        else:
+            measured = _measure_loudness(source, clip_start, src_dur, audio_track=audio_index)
         if measured:
             afilters.append(
                 "loudnorm=I=-14:TP=-1.5:LRA=11"

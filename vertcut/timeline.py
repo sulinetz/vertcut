@@ -227,3 +227,96 @@ def plan(words: Sequence[Dict[str, Any]], start: float, end: float,
         "duration": round(max(0.4, total / speed), 3),
         "cut": len(segments) > 1,
     }
+
+
+def shift_words(words: Sequence[Dict[str, Any]], offset: float,
+                duration: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Слова из таймлайна дубляжа -> таймлайн видео.
+
+    Положительный offset задерживает дубляж: его время t соответствует
+    видео t + offset. Слова вне ролика отбрасываются, границы подрезаются.
+    """
+    shift = float(offset or 0.0)
+    limit = None if duration is None else max(0.0, float(duration))
+    out: List[Dict[str, Any]] = []
+    for word in words or []:
+        try:
+            start = float(word["start"]) + shift
+            end = float(word["end"]) + shift
+        except (KeyError, TypeError, ValueError):
+            continue
+        if limit is not None:
+            if end <= 0 or start >= limit:
+                continue
+            start = max(0.0, start)
+            end = min(limit, end)
+        if end - start < 0.03:
+            continue
+        mapped = dict(word)
+        mapped["start"] = round(start, 3)
+        mapped["end"] = round(end, 3)
+        out.append(mapped)
+    out.sort(key=lambda item: float(item["start"]))
+    return out
+
+
+def shift_transcript(segments: Sequence[Dict[str, Any]], offset: float,
+                     duration: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Реплики распознавания по дубляжу -> таймлайн видео."""
+    shift = float(offset or 0.0)
+    limit = None if duration is None else max(0.0, float(duration))
+    out: List[Dict[str, Any]] = []
+    for seg in segments or []:
+        words = shift_words(seg.get("words") or [], shift, limit)
+        try:
+            start = float(seg.get("start") or 0.0) + shift
+            end = float(seg.get("end") or 0.0) + shift
+        except (TypeError, ValueError):
+            start, end = 0.0, 0.0
+        if limit is not None:
+            start = max(0.0, min(limit, start))
+            end = max(0.0, min(limit, end))
+        if words:
+            start = min(start, float(words[0]["start"]))
+            end = max(end, float(words[-1]["end"]))
+        if end - start < 0.03 and not words:
+            continue
+        mapped = dict(seg)
+        mapped["start"] = round(start, 3)
+        mapped["end"] = round(max(end, start + 0.03), 3)
+        mapped["words"] = words
+        out.append(mapped)
+    return out
+
+
+def dub_pieces(segments: Sequence[Span], offset: float = 0.0,
+               available: float = 0.0) -> List[Dict[str, Any]]:
+    """Куски внешней дорожки под таймлайн клипа.
+
+    offset — сдвиг дубляжа: положительный задерживает звук, отрицательный
+    ускоряет. available — длительность файла дубляжа. Возвращает порядок
+    воспроизведения: {"audio": True, "start", "end"} — время файла,
+    {"audio": False, "duration"} — тишина на месте недостающего куска.
+    """
+    shift = float(offset or 0.0)
+    limit = max(0.0, float(available or 0.0))
+    out: List[Dict[str, Any]] = []
+    for a, b in segments or []:
+        length = max(0.0, float(b) - float(a))
+        if length <= 0.0:
+            continue
+        start = float(a) - shift
+        end = float(b) - shift
+        lo = max(0.0, start)
+        hi = min(end, limit)
+        if hi - lo <= 0.03:
+            out.append({"audio": False, "duration": round(length, 3)})
+            continue
+        head = min(length, max(0.0, lo - start))
+        tail = min(max(0.0, length - head), max(0.0, end - hi))
+        if head > 0.03:
+            out.append({"audio": False, "duration": round(head, 3)})
+        out.append({"audio": True, "start": round(lo, 3), "end": round(hi, 3)})
+        if tail > 0.03:
+            out.append({"audio": False, "duration": round(tail, 3)})
+    return out

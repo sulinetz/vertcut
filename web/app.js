@@ -306,6 +306,7 @@ const state = {
   tmplUniq: null,
   pendingFile: null,
   pendingSubs: null,
+  subsToTemplate: false,
   opts: {
     count: 10,
     dur: "20-45",
@@ -845,7 +846,10 @@ function bindHero() {
   const uploadBtn = $("#uploadBtn");
   if (uploadBtn) uploadBtn.addEventListener("click", () => $("#fileInput").click());
   const subsBtn = $("#subsBtn");
-  if (subsBtn) subsBtn.addEventListener("click", () => $("#subsInput").click());
+  if (subsBtn) subsBtn.addEventListener("click", () => {
+    state.subsToTemplate = false;
+    $("#subsInput").click();
+  });
   const subsChip = $("#pendingSubs");
   if (subsChip) subsChip.addEventListener("click", () => {
     state.pendingSubs = null;
@@ -1814,6 +1818,9 @@ function templateDefaults(project) {
     showHook: o.show_hook !== false,
     subtitles: o.subtitles !== false,
     audio: Number(o.audio_track == null ? -1 : o.audio_track),
+    externalAudio: !!o.external_audio,
+    externalTrack: Number(o.external_audio_track == null ? -1 : o.external_audio_track),
+    audioOffset: Number(o.audio_offset || 0),
     exportOrder: o.export_order || "chrono"
   };
 }
@@ -1821,6 +1828,9 @@ function templateDefaults(project) {
 function templateOptions() {
   const base = (state.tmplDetail && state.tmplDetail.project.options) || {};
   const audioEl = $("#tpAudio");
+  const dubUse = $("#tpDubUse");
+  const dubTrack = $("#tpDubTrack");
+  const dubOffset = $("#tpDubOffset");
   return {
     ...base,
     ...(state.tmplUniq || {}),
@@ -1834,8 +1844,121 @@ function templateOptions() {
     uppercase: $("#tpUpper").checked,
     show_hook: $("#tpHook").checked,
     audio_track: audioEl && audioEl.value !== "" ? Number(audioEl.value) : -1,
+    external_audio: dubUse ? !!dubUse.checked : !!base.external_audio,
+    external_audio_track: dubTrack && dubTrack.value !== "" ? Number(dubTrack.value) : -1,
+    audio_offset: dubOffset && dubOffset.value !== "" ? Number(dubOffset.value) : 0,
     export_order: $("#tpExportOrder") ? $("#tpExportOrder").value : "chrono"
   };
+}
+
+function renderDub(project) {
+  const name = $("#tpDubName");
+  const use = $("#tpDubUse");
+  const del = $("#tpDubDel");
+  const btn = $("#tpDubBtn");
+  const field = $("#tpDubField");
+  const trackField = $("#tpDubTrackField");
+  const track = $("#tpDubTrack");
+  const offset = $("#tpDubOffset");
+  const hint = $("#tpDubHint");
+  if (!name || !use || !btn) return;
+  if (field) {
+    // Экономный режим качает только выбранные куски: общей дорожки там нет.
+    field.style.display = (project && project.meta && project.meta.segments_mode) ? "none" : "";
+  }
+  const dub = project && project.dub;
+  const o = (project && project.options) || {};
+  if (!dub) {
+    name.textContent = "не подключена";
+    name.classList.add("muted");
+    use.checked = false;
+    use.disabled = true;
+    if (del) del.classList.add("hidden");
+    btn.textContent = "подключить";
+    if (trackField) trackField.style.display = "none";
+    if (offset) { offset.value = "0"; offset.disabled = true; }
+    if (hint) hint.textContent = "Подключите отдельный аудиофайл или контейнер с русской дорожкой — он заменит звук оригинала. Положительный сдвиг задерживает звук, если голос опережает картинку.";
+    const noDubSubs = $("#tpDubSubs");
+    if (noDubSubs) {
+      const attached = Number(((project && project.meta) || {}).subtitles_attached || 0);
+      noDubSubs.textContent = attached ? `свои субтитры: ${attached} реплик` : "субтитры не приложены";
+      noDubSubs.classList.toggle("muted", !attached);
+    }
+    return;
+  }
+  name.textContent = `${dub.name || "файл"} · ${fmtDur(dub.duration || 0)}`;
+  name.classList.remove("muted");
+  use.disabled = false;
+  use.checked = !!o.external_audio;
+  if (del) del.classList.remove("hidden");
+  btn.textContent = "заменить";
+  const tracks = Array.isArray(dub.audio_tracks) ? dub.audio_tracks : [];
+  const selected = Number(o.external_audio_track == null ? -1 : o.external_audio_track);
+  if (trackField && track) {
+    if (tracks.length > 1) {
+      track.innerHTML = `<option value="-1">По умолчанию</option>` + tracks.map((t) =>
+        `<option value="${t.index}">${esc(audioTrackLabel(t))}</option>`).join("");
+      track.value = tracks.some((t) => Number(t.index) === selected) ? String(selected) : "-1";
+      trackField.style.display = "";
+    } else {
+      trackField.style.display = "none";
+    }
+  }
+  if (offset) {
+    offset.disabled = false;
+    offset.value = String(Number(o.audio_offset || 0));
+  }
+  if (hint) {
+    const known = Number((project && project.duration) || 0);
+    const gap = known > 0 ? Math.abs(Number(dub.duration || 0) - known) : 0;
+    hint.textContent = gap > 2
+      ? `Длительности отличаются на ${gap.toFixed(1)} с — если голос разъехался с картинкой, поправьте сдвиг.`
+      : "Дубляж заменит звук оригинала. Если голос отстаёт — увеличьте сдвиг, если спешит — уменьшите.";
+  }
+  const subsChip = $("#tpDubSubs");
+  if (subsChip) {
+    const attached = Number(((project && project.meta) || {}).subtitles_attached || 0);
+    subsChip.textContent = attached ? `свои субтитры: ${attached} реплик` : "субтитры не приложены";
+    subsChip.classList.toggle("muted", !attached);
+  }
+}
+
+async function uploadDub(file) {
+  if (!state.tmplPid || !file) return;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const res = await api(`/api/projects/${state.tmplPid}/dub`, { method: "POST", body: form });
+    if (state.tmplDetail && state.tmplDetail.project) {
+      state.tmplDetail.project.dub = res.dub;
+      state.tmplDetail.project.options = {
+        ...(state.tmplDetail.project.options || {}),
+        external_audio: true
+      };
+      renderDub(state.tmplDetail.project);
+      const use = $("#tpDubUse");
+      if (use) use.checked = true;
+    }
+    toast("Дубляж подключён — звук клипов заменится");
+  } catch (err) {
+    toast("Дубляж не принят: " + err.message, "err");
+  }
+}
+
+async function deleteDub() {
+  if (!state.tmplPid) return;
+  try {
+    await api(`/api/projects/${state.tmplPid}/dub`, { method: "DELETE" });
+    if (state.tmplDetail && state.tmplDetail.project) {
+      state.tmplDetail.project.dub = null;
+      state.tmplDetail.project.options = {
+        ...(state.tmplDetail.project.options || {}),
+        external_audio: false
+      };
+      renderDub(state.tmplDetail.project);
+    }
+    toast("Дубляж убран — звук снова из оригинала");
+  } catch (err) { toast(err.message, "err"); }
 }
 
 function renderAudioTracks(project, selected) {
@@ -1963,6 +2086,7 @@ function closeTemplate(keepProject) {
   state.tmplAnim = null;
   state.tmplPid = null;
   state.tmplDetail = null;
+  state.subsToTemplate = false;
   $("#modal").classList.add("hidden");
   $("#modal").innerHTML = "";
   if (!keepProject) {
@@ -2012,6 +2136,30 @@ function openTemplate(pid) {
           <div class="field" id="tpAudioField" style="display:none">
             <label>Дорожка звука</label>
             <select id="tpAudio"></select>
+          </div>
+          <div class="field" id="tpDubField">
+            <label>Внешняя дорожка (дубляж)</label>
+            <div class="dub-row">
+              <span id="tpDubName" class="pending-file">не подключена</span>
+              <button type="button" class="link-btn" id="tpDubBtn">подключить</button>
+              <button type="button" class="link-btn hidden" id="tpDubDel">убрать</button>
+            </div>
+            <label class="toggle"><input type="checkbox" id="tpDubUse" disabled/><span class="track"></span><span>Заменить звук дубляжом</span></label>
+            <div class="row2">
+              <div class="field" id="tpDubTrackField" style="display:none">
+                <label>Дорожка в файле</label>
+                <select id="tpDubTrack"></select>
+              </div>
+              <div class="field">
+                <label>Сдвиг звука, с</label>
+                <input type="number" id="tpDubOffset" min="-300" max="300" step="0.1" value="0" />
+              </div>
+            </div>
+            <span class="opt-hint" id="tpDubHint">Подключите отдельный аудиофайл или контейнер с русской дорожкой — он заменит звук оригинала. Положительный сдвиг задерживает звук, если голос опережает картинку.</span>
+            <div class="dub-row">
+              <span id="tpDubSubs" class="pending-file muted">субтитры не приложены</span>
+              <button type="button" class="link-btn" id="tpSubsBtn">приложить субтитры</button>
+            </div>
           </div>
           <div class="field">
             <label>Порядок экспорта</label>
@@ -2125,6 +2273,15 @@ function openTemplate(pid) {
   }));
   $("#tmplStart").addEventListener("click", startFromTemplate);
 
+  $("#tpDubBtn").addEventListener("click", () => $("#dubInput").click());
+  const tpDubDel = $("#tpDubDel");
+  if (tpDubDel) tpDubDel.addEventListener("click", deleteDub);
+  const tpSubsBtn = $("#tpSubsBtn");
+  if (tpSubsBtn) tpSubsBtn.addEventListener("click", () => {
+    state.subsToTemplate = true;
+    $("#subsInput").click();
+  });
+
   tmplPoll();
 }
 
@@ -2183,6 +2340,7 @@ async function tmplPoll() {
       state.tmplAccent = defaults.accent;
       $$("#tpAccents .swatch").forEach((b) => b.classList.toggle("active", b.dataset.val === defaults.accent));
       renderAudioTracks(project, defaults.audio);
+      renderDub(project);
       if (state.tmplUniq === null) {
         const o = project.options || {};
         state.tmplUniq = {
@@ -2398,6 +2556,17 @@ function openEditor(clipId) {
               <label class="toggle"><input type="checkbox" id="edSubs" ${s.subtitles !== false ? "checked" : ""}/><span class="track"></span><span>Показывать</span></label>
               <label class="toggle"><input type="checkbox" id="edUpper" ${s.uppercase !== false ? "checked" : ""}/><span class="track"></span><span>КАПСОМ</span></label>
               <label class="toggle"><input type="checkbox" id="edShowHook" ${s.show_hook !== false ? "checked" : ""}/><span class="track"></span><span>Хук сверху</span></label>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label>Звук</label>
+              <label class="toggle"><input type="checkbox" id="edDub" ${s.external_audio ? "checked" : ""} ${project.dub ? "" : "disabled"}/><span class="track"></span><span>Дубляж вместо оригинала</span></label>
+              ${project.dub ? "" : `<span class="opt-hint">Дубляж не подключён — добавьте его в окне настройки проекта.</span>`}
+            </div>
+            <div class="field">
+              <label>Сдвиг дубляжа, с</label>
+              <input type="number" id="edDubOffset" min="-300" max="300" step="0.1" value="${Number(s.audio_offset || 0)}" ${project.dub ? "" : "disabled"} />
             </div>
           </div>
           <div class="row2">
@@ -2756,7 +2925,9 @@ function openEditor(clipId) {
       cut_zoom: $("#edCutZoom").checked,
       tilt: Number($("#edTilt").value),
       speed: Number($("#edSpeedR").value),
-      pitch: Number($("#edPitch").value)
+      pitch: Number($("#edPitch").value),
+      external_audio: $("#edDub") ? $("#edDub").checked : undefined,
+      audio_offset: $("#edDubOffset") ? Number($("#edDubOffset").value) : undefined
     };
     try {
       await api(`/api/clips/${clip.id}/rerender`, { method: "POST", body: JSON.stringify(payload) });
@@ -2882,6 +3053,25 @@ $("#subsInput").addEventListener("change", (e) => {
     toast("Нужен файл .srt, .ass или .vtt", "err");
     return;
   }
+  if (state.subsToTemplate && state.tmplPid) {
+    // В окне настройки свои субтитры сразу уходят в проект: они важнее Whisper.
+    state.subsToTemplate = false;
+    const form = new FormData();
+    form.append("file", file);
+    api(`/api/projects/${state.tmplPid}/subtitles`, { method: "POST", body: form })
+      .then((res) => {
+        if (state.tmplDetail && state.tmplDetail.project) {
+          state.tmplDetail.project.meta = {
+            ...(state.tmplDetail.project.meta || {}),
+            subtitles_attached: res.segments || 1
+          };
+          renderDub(state.tmplDetail.project);
+        }
+        toast(`Субтитры подключены: ${file.name}`);
+      })
+      .catch((err) => toast("Субтитры не приняты: " + err.message, "err"));
+    return;
+  }
   state.pendingSubs = file;
   const chip = $("#pendingSubs");
   if (chip) {
@@ -2889,6 +3079,17 @@ $("#subsInput").addEventListener("change", (e) => {
     chip.classList.remove("hidden");
   }
   toast("Субтитры приложены — текст возьмётся из файла");
+});
+
+$("#dubInput").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (!/\.(mka|mkv|mp4|m4v|mov|webm|mp3|m4a|aac|wav|ogg|flac|opus|ac3|eac3|dts|ts)$/i.test(file.name)) {
+    toast("Нужен аудиофайл или контейнер: mka, mkv, mp4, mp3, aac…", "err");
+    return;
+  }
+  uploadDub(file);
 });
 
 $("#fileInput").addEventListener("change", (e) => {

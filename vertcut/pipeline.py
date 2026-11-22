@@ -58,6 +58,9 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "segments": False,
     "force_hd": False,
     "audio_track": -1,
+    "external_audio": False,
+    "external_audio_track": -1,
+    "audio_offset": 0.0,
     "export_order": "chrono",
 }
 
@@ -158,6 +161,15 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["audio_track"] = max(-1, min(64, int(opts.get("audio_track", -1))))
     except (TypeError, ValueError):
         opts["audio_track"] = -1
+    try:
+        opts["external_audio_track"] = max(-1, min(64, int(opts.get("external_audio_track", -1))))
+    except (TypeError, ValueError):
+        opts["external_audio_track"] = -1
+    try:
+        opts["audio_offset"] = round(max(-300.0, min(300.0, float(opts.get("audio_offset", 0.0) or 0.0))), 2)
+    except (TypeError, ValueError):
+        opts["audio_offset"] = 0.0
+    opts["external_audio"] = bool(opts.get("external_audio", False))
     if opts.get("export_order") not in ("chrono", "score"):
         opts["export_order"] = "chrono"
     try:
@@ -302,12 +314,19 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
         "segments": bool(opts.get("segments")),
         "audio_track": int(opts.get("audio_track", -1)),
+        "external_audio": bool(opts.get("external_audio", False)),
+        "external_audio_track": int(opts.get("external_audio_track", -1)),
+        "audio_offset": float(opts.get("audio_offset", 0.0) or 0.0),
     }
 
 
 def _audio_track(opts: Dict[str, Any]) -> Optional[int]:
+    return _track_index(opts.get("audio_track", -1))
+
+
+def _track_index(value: Any) -> Optional[int]:
     try:
-        index = int(opts.get("audio_track", -1))
+        index = int(value)
     except (TypeError, ValueError):
         return None
     return index if index >= 0 else None
@@ -438,8 +457,9 @@ def _process_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                        "end": min(actual, offset + (float(clip["end"]) - float(clip["start"]))),
                        "words": words}
             # Скачанный фрагмент содержит одну дорожку — индекс полного исходника
-            # к нему неприменим.
-            _render_one(part, workdir, virtual, {**settings, "audio_track": -1},
+            # к нему неприменим, как и внешний дубляж: он разложен по всему видео.
+            _render_one(part, workdir, virtual,
+                        {**settings, "audio_track": -1, "external_audio": False},
                         lambda p, _i=i: progress(0.55 + (_i + p) / total * 0.45, label))
             db.update_clip(clip["id"], status="ready", error=None)
             rendered += 1
@@ -550,8 +570,14 @@ def _hook_allowed(transcript: Dict[str, Any]) -> bool:
     return not re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]", text)
 
 
-def _existing_subtitles(source: Path, workdir: Path) -> Optional[Dict[str, Any]]:
-    """Готовые субтитры: приложенные вручную или вшитые текстовой дорожкой."""
+def _existing_subtitles(source: Path, workdir: Path,
+                        dub: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """Готовые субтитры: приложенные вручную, в дубляже или вшитые в видео.
+
+    При включённом дубляже вшитые субтитры исходника не берём: они на языке
+    оригинальной озвучки и разойдутся с русским звуком. Вместо них — дорожки
+    контейнера дубляжа, если они там есть.
+    """
     for name in ("subtitles.srt", "subtitles.ass", "subtitles.ssa", "subtitles.vtt"):
         path = workdir / name
         if path.exists() and path.stat().st_size > 8:
@@ -559,6 +585,12 @@ def _existing_subtitles(source: Path, workdir: Path) -> Optional[Dict[str, Any]]
             if segs:
                 return {"language": "", "duration": 0.0, "segments": segs,
                         "engine": f"subtitles-{path.suffix.lstrip('.').lower()}"}
+
+    if dub is not None:
+        embedded = _dub_subtitles(dub, workdir)
+        if embedded is not None:
+            return embedded
+        return None
 
     cached = workdir / "source_subs.srt"
     if not cached.exists() or cached.stat().st_size < 8:
@@ -570,6 +602,31 @@ def _existing_subtitles(source: Path, workdir: Path) -> Optional[Dict[str, Any]]
     if not segs:
         return None
     return {"language": "", "duration": 0.0, "segments": segs, "engine": "embedded-subtitles"}
+
+
+def _dub_subtitles(dub: Path, workdir: Path) -> Optional[Dict[str, Any]]:
+    """Текстовые субтитры внутри контейнера дубляжа; русские — первыми."""
+    try:
+        tracks = utils.subtitle_streams(dub)
+    except Exception:  # noqa: BLE001
+        return None
+    if not tracks:
+        return None
+    tracks = sorted(tracks, key=lambda t: 0 if str(t.get("language") or "").lower()
+                    in ("ru", "rus") else 1)
+    for i, track in enumerate(tracks):
+        dst = workdir / f"dub_subs_{i}.srt"
+        if not dst.exists() or dst.stat().st_size < 8:
+            if not utils.extract_subtitles(dub, dst, index=int(track.get("index", 0))):
+                continue
+        try:
+            segs = utils.parse_subtitles(dst)
+        except Exception:  # noqa: BLE001
+            continue
+        if segs:
+            return {"language": "", "duration": 0.0, "segments": segs,
+                    "engine": "dub-subtitles", "language_track": track.get("language") or ""}
+    return None
 
 
 def process_project(pid: str) -> None:
@@ -615,9 +672,11 @@ def process_project(pid: str) -> None:
         hook_ok = False
         prepared = None
         no_speech = False
+        dub = _external_audio_path(workdir, opts)
+        dub_offset = float(opts.get("audio_offset", 0.0) or 0.0)
         if need_text and opts.get("subtitle_source", "auto") != "whisper":
             try:
-                prepared = _existing_subtitles(source, workdir)
+                prepared = _existing_subtitles(source, workdir, dub=dub)
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
         if prepared is not None:
@@ -635,11 +694,22 @@ def process_project(pid: str) -> None:
                 progress(0.05, "Скачиваю модель распознавания речи (~460 МБ, один раз)")
             stop_hb, hb_thread = _heartbeat(pid, "Распознавание речи")
             try:
-                transcript = transcribe.transcribe(
-                    source, workdir, language=opts.get("language") or None,
-                    on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
-                    audio_track=_audio_track(opts),
-                )
+                if dub is not None:
+                    # Дубляж: распознаём русский звук; его время сдвинуто на offset.
+                    transcript = transcribe.transcribe(
+                        dub, workdir, language=opts.get("language") or None,
+                        on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
+                        audio_track=_track_index(opts.get("external_audio_track")),
+                    )
+                    if dub_offset:
+                        transcript["segments"] = timeline.shift_transcript(
+                            transcript.get("segments") or [], dub_offset, duration)
+                else:
+                    transcript = transcribe.transcribe(
+                        source, workdir, language=opts.get("language") or None,
+                        on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
+                        audio_track=_audio_track(opts),
+                    )
                 stop_hb.set(); hb_thread.join(timeout=1)
             except Exception as exc:  # noqa: BLE001
                 stop_hb.set(); hb_thread.join(timeout=1)
@@ -703,6 +773,9 @@ def process_project(pid: str) -> None:
             "jump_cuts": opts["jump_cuts"], "cut_zoom": opts["cut_zoom"],
             "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
             "audio_track": int(opts.get("audio_track", -1)),
+            "external_audio": bool(opts.get("external_audio", False)),
+            "external_audio_track": int(opts.get("external_audio_track", -1)),
+            "audio_offset": float(opts.get("audio_offset", 0.0) or 0.0),
         }
         _check_cancel(pid)
         total = len(found)
@@ -801,6 +874,9 @@ def run_project(pid: str) -> None:
 
 
 MUSIC_SUFFIXES = (".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac", ".opus")
+# Дубляж: отдельный аудиофайл или контейнер, внутри которого лежит дорожка.
+DUB_SUFFIXES = (".mka", ".mkv", ".mp4", ".m4v", ".mov", ".webm", ".mp3", ".m4a",
+                ".aac", ".wav", ".ogg", ".flac", ".opus", ".ac3", ".eac3", ".dts", ".ts")
 
 
 def _music_file(workdir: Path) -> Optional[Path]:
@@ -810,6 +886,22 @@ def _music_file(workdir: Path) -> Optional[Path]:
         if path.exists() and path.stat().st_size > 1024:
             return path
     return None
+
+
+def _dub_file(workdir: Path) -> Optional[Path]:
+    """Внешняя звуковая дорожка (дубляж): первый файл dub.* в папке проекта."""
+    for suffix in DUB_SUFFIXES:
+        path = workdir / f"dub{suffix}"
+        if path.exists() and path.stat().st_size > 1024:
+            return path
+    return None
+
+
+def _external_audio_path(workdir: Path, settings: Dict[str, Any]) -> Optional[Path]:
+    """Дубляж только если он включён и файл на месте; иначе рендер как раньше."""
+    if not settings.get("external_audio"):
+        return None
+    return _dub_file(workdir)
 
 
 def _adhd_bg_file(choice: str) -> Optional[Path]:
@@ -978,6 +1070,9 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         bg_start=bg_start,
         split_ratio=ratio,
         audio_track=settings.get("audio_track"),
+        external_audio=_external_audio_path(workdir, settings),
+        audio_offset=float(settings.get("audio_offset", 0.0) or 0.0),
+        external_audio_track=_track_index(settings.get("external_audio_track")),
     )
     settings = {**settings, "render_encoder": result.get("encoder", "libx264")}
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"
@@ -1007,7 +1102,8 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
                 "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "line_gap",
                 "platform", "layout", "look", "vignette", "grain", "zoom", "bitrate",
                 "music_volume", "hflip", "tilt", "speed", "pitch", "jump_cuts", "cut_zoom",
-                "bg_video", "split_ratio", "fps", "audio_track"):
+                "bg_video", "split_ratio", "fps", "audio_track", "external_audio",
+                "external_audio_track", "audio_offset"):
         if key in payload and payload[key] is not None:
             settings[key] = payload[key]
     if (payload.get("layout") == "adhd" and payload.get("sub_position") is None

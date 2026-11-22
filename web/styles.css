@@ -1469,6 +1469,21 @@ input[type="range"]::-webkit-slider-thumb {
 .pending-file.hidden {
   display: none;
 }
+.pending-file.muted {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: var(--muted-2, #94a3b8);
+  cursor: default;
+}
+
+/* Внешняя звуковая дорожка (дубляж) */
+.dub-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
 
 /* Подсказка под названием настройки */
 .opt-hint {

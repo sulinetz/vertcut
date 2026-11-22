@@ -90,6 +90,9 @@ class ClipEdit(BaseModel):
     bg_video: Optional[str] = None
     split_ratio: Optional[float] = None
     audio_track: Optional[int] = None
+    external_audio: Optional[bool] = None
+    external_audio_track: Optional[int] = None
+    audio_offset: Optional[float] = None
 
 
 # Лимит загрузки: интерфейс берёт значение из /api/health и проверяет сам.
@@ -182,6 +185,18 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
     for key in ("hflip", "jump_cuts", "cut_zoom"):
         if key in data:
             data[key] = bool(data[key])
+    if "external_audio" in data:
+        data["external_audio"] = bool(data["external_audio"])
+    if "external_audio_track" in data:
+        try:
+            data["external_audio_track"] = max(-1, min(64, int(data["external_audio_track"])))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Некорректная дорожка дубляжа") from None
+    if "audio_offset" in data:
+        try:
+            data["audio_offset"] = round(max(-300.0, min(300.0, float(data["audio_offset"]))), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Некорректный сдвиг дубляжа") from None
     if "bg_video" in data:
         name = str(data["bg_video"] or "random").strip()
         if name != "random" and ("/" in name or "\\" in name or ".." in name):
@@ -443,6 +458,7 @@ async def upload_into_project(pid: str, file: UploadFile = File(...)) -> Dict[st
     project = db.get_project(pid)
     if not project:
         raise HTTPException(404, "Проект не найден")
+    had_source = bool(project.get("source"))
     try:
         target = await _store_upload(pid, file)
     except HTTPException as exc:
@@ -460,6 +476,10 @@ async def upload_into_project(pid: str, file: UploadFile = File(...)) -> Dict[st
                       progress=100, error=None)
     if tracks:
         db.merge_meta(pid, {"subtitle_tracks": tracks})
+    # Дубляж от прошлого исходника к новому видео не подходит: убираем, чтобы
+    # не получить чужой звук в клипах. Первая загрузка в черновик не считается.
+    if had_source:
+        _clear_dub(pid, PROJECTS_DIR / pid, drop_options=True)
     return db.get_project(pid) or project
 
 
@@ -547,6 +567,27 @@ def project_detail(pid: str) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001
             tracks = []
     project["audio_tracks"] = tracks
+    dub_meta = (project.get("meta") or {}).get("dub")
+    dub_file = pipeline._dub_file(PROJECTS_DIR / pid)
+    if dub_file is not None:
+        if not isinstance(dub_meta, dict) or not dub_meta:
+            try:
+                from . import utils
+
+                probed = utils.probe_audio(dub_file)
+                dub_meta = {"name": dub_file.name,
+                            "duration": round(float(probed.get("duration") or 0), 2),
+                            "has_video": bool(probed.get("has_video")),
+                            "audio_tracks": probed.get("audio_streams") or [],
+                            "sample_rate": int(probed.get("sample_rate") or 48000)}
+                db.merge_meta(pid, {"dub": dub_meta})
+            except Exception:  # noqa: BLE001
+                dub_meta = None
+        if dub_meta is not None:
+            dub_meta = {**dub_meta, "ready": True}
+    else:
+        dub_meta = None
+    project["dub"] = dub_meta
     return {"project": project, "clips": clips}
 
 
@@ -746,6 +787,91 @@ def delete_music(pid: str) -> Dict[str, Any]:
     for old in MUSIC_SUFFIXES:
         (PROJECTS_DIR / pid / f"music{old}").unlink(missing_ok=True)
     db.merge_meta(pid, {"music": False})
+    return {"ok": True}
+
+
+DUB_SUFFIXES = set(pipeline.DUB_SUFFIXES)
+
+
+def _clear_dub(pid: str, workdir: Path, drop_options: bool = False) -> None:
+    """Убирает файл дубляжа и кэш его субтитров, чтобы не осталось чужих дорожек."""
+    for suffix in DUB_SUFFIXES:
+        (workdir / f"dub{suffix}").unlink(missing_ok=True)
+    for cached in workdir.glob("dub_subs_*.srt"):
+        cached.unlink(missing_ok=True)
+    db.merge_meta(pid, {"dub": None})
+    if drop_options:
+        project = db.get_project(pid)
+        options = (project or {}).get("options") or {}
+        if options.get("external_audio"):
+            db.update_project(pid, options=pipeline.normalize_options(
+                {**options, "external_audio": False}))
+
+
+@app.post("/api/projects/{pid}/dub")
+async def upload_dub(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Внешняя звуковая дорожка (дубляж): заменяет звук исходного видео."""
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in DUB_SUFFIXES:
+        raise HTTPException(400, "Нужен аудиофайл (mka, aac, mp3, flac…) или контейнер (mkv, mp4)")
+    workdir = PROJECTS_DIR / pid
+    workdir.mkdir(parents=True, exist_ok=True)
+    target = workdir / f"dub{suffix}"
+    written = 0
+    try:
+        with open(target, "wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
+                    size_hint = (f"{MAX_UPLOAD_BYTES / 1024 ** 3:.1f} ГБ"
+                                 if MAX_UPLOAD_BYTES >= 1024 ** 3
+                                 else f"{MAX_UPLOAD_BYTES / 1024 ** 2:.0f} МБ")
+                    raise HTTPException(413, f"Файл больше {size_hint} — поднимите VERTCUT_MAX_UPLOAD_GB")
+                fh.write(chunk)
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
+    try:
+        from . import utils
+
+        info = utils.probe_audio(target)
+        if not info.get("has_audio") or float(info.get("duration") or 0) < 1:
+            raise ValueError("нет звука")
+    except Exception:  # noqa: BLE001
+        target.unlink(missing_ok=True)
+        raise HTTPException(400, "В файле нет звуковой дорожки — проверьте содержимое") from None
+    for old in DUB_SUFFIXES:
+        path = workdir / f"dub{old}"
+        if path != target:
+            path.unlink(missing_ok=True)
+    for cached in workdir.glob("dub_subs_*.srt"):
+        cached.unlink(missing_ok=True)
+    meta = {
+        "name": file.filename or target.name,
+        "duration": round(float(info.get("duration") or 0), 2),
+        "has_video": bool(info.get("has_video")),
+        "audio_tracks": info.get("audio_streams") or [],
+        "sample_rate": int(info.get("sample_rate") or 48000),
+    }
+    db.merge_meta(pid, {"dub": meta})
+    options = pipeline.normalize_options(
+        {**(project.get("options") or {}), "external_audio": True})
+    db.update_project(pid, options=options)
+    return {"ok": True, "dub": meta, "project": db.get_project(pid) or project}
+
+
+@app.delete("/api/projects/{pid}/dub")
+def delete_dub(pid: str) -> Dict[str, Any]:
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    _clear_dub(pid, PROJECTS_DIR / pid, drop_options=True)
     return {"ok": True}
 
 

@@ -74,6 +74,34 @@ def probe(path: Path) -> Dict[str, Any]:
     return info
 
 
+def probe_audio(path: Path) -> Dict[str, Any]:
+    """Метаданные звука: подходит и для аудиофайла, и для контейнера с дубляжом.
+
+    `probe` требует видеодорожку, поэтому для внешней звуковой дорожки нужен
+    отдельный разбор — видео в ней может не быть вовсе.
+    """
+    proc = run([ffmpeg(), "-hide_banner", "-i", str(path)])
+    text = proc.stderr or ""
+    m = _TIME_RE.search(text)
+    streams = parse_audio_streams(text)
+    default_audio = next((s for s in streams if s.get("default")), streams[0] if streams else None)
+    return {
+        "duration": _to_seconds(*m.groups()) if m else 0.0,
+        "has_audio": bool(streams),
+        "has_video": "Video:" in text,
+        "audio_streams": streams,
+        "sample_rate": int((default_audio or {}).get("sample_rate") or 48000),
+    }
+
+
+def audio_track_rate(streams: List[Dict[str, Any]], index: Optional[int],
+                     fallback: int = 48000) -> int:
+    """Частота выбранной дорожки: питч нельзя считать от чужой частоты."""
+    if index is None or not (0 <= int(index) < len(streams or [])):
+        return int(fallback or 48000)
+    return int(streams[int(index)].get("sample_rate") or fallback or 48000)
+
+
 _AUDIO_STREAM_RE = re.compile(
     r"Stream #0:(\d+)(?:\[[^\]]+\])?(?:\(([^)]+)\))?: Audio: ([^,\n]+)"
     r"(?:,\s*(\d+)\s*Hz)?(?:,\s*([^,\n]+))?(?:,\s*([^,\n]+))?"
@@ -293,19 +321,27 @@ _SUB_STREAM_RE = re.compile(
 
 
 def subtitle_streams(path: Path) -> List[Dict[str, Any]]:
-    """Текстовые дорожки субтитров внутри файла (для .mkv и подобных)."""
+    """Текстовые дорожки субтитров внутри файла (для .mkv и подобных).
+
+    index — номер именно субтитровой дорожки для `-map 0:s:N`: ffmpeg считает
+    все субтитры, включая картинные, поэтому счётчик общий, а текстовые
+    возвращаются отдельно.
+    """
     proc = run([ffmpeg(), "-hide_banner", "-i", str(path)])
     text = proc.stderr or ""
     out: List[Dict[str, Any]] = []
+    position = 0
     for line in text.splitlines():
         m = _SUB_STREAM_RE.search(line)
         if not m:
             continue
         codec = m.group(2).lower()
+        index = position
+        position += 1
         # bitmap-дорожки (pgs/dvdsub) не превратить в текст
         if codec in ("hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "xsub"):
             continue
-        out.append({"index": len(out), "codec": codec, "language": m.group(1) or ""})
+        out.append({"index": index, "codec": codec, "language": m.group(1) or ""})
     return out
 
 
