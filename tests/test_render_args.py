@@ -99,6 +99,38 @@ class RenderCommandTest(unittest.TestCase):
         # cap добавляется в render_clip, а не в _hw_args
         self.assertNotIn("-maxrate", args)
 
+    def test_audio_track_and_encoder(self):
+        measured = []
+
+        def fake_measure(*args, **kwargs):
+            measured.append(kwargs)
+            return None
+
+        info = _probe(self.src)
+        info["audio_streams"] = [
+            {"index": 0, "language": "jpn", "sample_rate": 48000, "default": False},
+            {"index": 1, "language": "rus", "sample_rate": 44100, "default": True},
+        ]
+        made = []
+
+        def fake(cmd, **kw):
+            proc = FakeProc(cmd, **kw)
+            made.append(proc.cmd)
+            return proc
+
+        with mock.patch.object(render, "probe", lambda _p: info), \
+             mock.patch.object(render, "_measure_loudness", side_effect=fake_measure), \
+             mock.patch.object(render, "hw_encoder", lambda: "h264_nvenc"), \
+             mock.patch.object(render, "subprocess") as sub:
+            sub.Popen.side_effect = fake
+            sub.PIPE = -1
+            result = render.render_clip(self.src, 0.0, 10.0, self.out, audio_track=1)
+
+        graph = made[0][made[0].index("-filter_complex") + 1]
+        self.assertIn("[0:a:1]anull[seq_a]", graph)
+        self.assertEqual(measured[0]["audio_track"], 1)
+        self.assertEqual(result["encoder"], "h264_nvenc")
+
     def test_fallback_keeps_command_tail(self):
         cmd_holder = {"calls": 0}
 

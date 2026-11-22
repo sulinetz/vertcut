@@ -31,7 +31,8 @@ _CACHE_SECONDS = 1.0
 _GPU_EXE: Optional[str] = None
 _GPU_LOOKED = False
 
-_NVIDIA_QUERY = "name,utilization.gpu,temperature.gpu,memory.used,memory.total"
+_NVIDIA_QUERY = ("name,utilization.gpu,temperature.gpu,memory.used,memory.total,"
+                 "utilization.encoder,utilization.decoder")
 
 
 def _num(value: str) -> Optional[float]:
@@ -59,6 +60,8 @@ def parse_nvidia_smi(text: str) -> Optional[Dict[str, Any]]:
             "mem_used_mb": used,
             "mem_total_mb": total,
             "mem_percent": round(used / total * 100, 1) if used and total else None,
+            "encoder": _num(parts[5]) if len(parts) > 5 else None,
+            "decoder": _num(parts[6]) if len(parts) > 6 else None,
         }
     return None
 
@@ -81,17 +84,24 @@ def _gpu_snapshot() -> Optional[Dict[str, Any]]:
     exe = _nvidia_smi_exe()
     if not exe:
         return None
-    try:
-        proc = subprocess.run(
-            [exe, f"--query-gpu={_NVIDIA_QUERY}", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=2, errors="replace",
-            **subprocess_kwargs(),
-        )
-        if proc.returncode != 0:
-            return None
-        return parse_nvidia_smi(proc.stdout or "")
-    except Exception:  # noqa: BLE001 — драйвер может отвечать медленно/быть занят
-        return None
+    queries = (
+        _NVIDIA_QUERY,
+        "name,utilization.gpu,temperature.gpu,memory.used,memory.total",
+    )
+    for query in queries:
+        try:
+            proc = subprocess.run(
+                [exe, f"--query-gpu={query}", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=2, errors="replace",
+                **subprocess_kwargs(),
+            )
+            if proc.returncode == 0:
+                parsed = parse_nvidia_smi(proc.stdout or "")
+                if parsed:
+                    return parsed
+        except Exception:  # noqa: BLE001 — драйвер может отвечать медленно/быть занят
+            continue
+    return None
 
 
 def _cpu_snapshot() -> Optional[Dict[str, Any]]:

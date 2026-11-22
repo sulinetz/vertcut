@@ -133,13 +133,18 @@ def _hw_args(encoder: str, crf: int) -> List[str]:
             "-profile:v", "high", "-pix_fmt", "yuv420p"]
 
 
-def _measure_loudness(source: Path, start: float, duration: float) -> Optional[Dict[str, Any]]:
+def _measure_loudness(source: Path, start: float, duration: float,
+                      audio_track: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Первый проход loudnorm: измеряем громкость фрагмента."""
     try:
+        cmd = [ffmpeg(), "-hide_banner", "-nostats", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
+               "-i", str(source)]
+        if audio_track is not None:
+            cmd += ["-map", f"0:a:{max(0, int(audio_track))}"]
+        cmd += ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
+                "-f", "null", "-"]
         proc = subprocess.run(
-            [ffmpeg(), "-hide_banner", "-nostats", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
-             "-i", str(source), "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
-             "-f", "null", "-"],
+            cmd,
             capture_output=True, text=True, errors="replace",
             timeout=max(30.0, duration * 2.5),
             **subprocess_kwargs(),
@@ -215,7 +220,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 speed: float = 1.0, pitch: float = 1.0,
                 segments: Optional[List[Any]] = None, cut_zoom: bool = False,
                 bg_path: Optional[Path] = None, bg_start: float = 0.0,
-                split_ratio: float = 0.5) -> Dict[str, Any]:
+                split_ratio: float = 0.5, audio_track: Optional[int] = None) -> Dict[str, Any]:
     speed = max(1.0, min(1.25, float(speed or 1.0)))
     pitch = max(0.85, min(1.15, float(pitch or 1.0)))
     tilt = max(0.0, min(5.0, float(tilt or 0.0)))
@@ -361,20 +366,34 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         cmd += ["-stream_loop", "-1", "-i", str(music_path)]
 
     source_rate = int(info.get("sample_rate") or 48000)
+    audio_index: Optional[int] = None
+    if audio_track is not None:
+        try:
+            audio_index = max(0, int(audio_track))
+        except (TypeError, ValueError):
+            audio_index = None
+    streams = info.get("audio_streams") or []
+    if audio_index is not None and streams and not (0 <= audio_index < len(streams)):
+        audio_index = None
+    audio_src = f"[0:a:{audio_index}]" if audio_index is not None else "[0:a]"
+    if audio_index is not None and 0 <= audio_index < len(streams):
+        rate = streams[audio_index].get("sample_rate")
+        if rate:
+            source_rate = int(rate)
     audio: List[str] = []
     audio_label: Optional[str] = None
     if info["has_audio"]:
         if segs:
             if len(segs) == 1:
                 a, b = segs[0]
-                audio.append(f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[seq_a]")
+                audio.append(f"{audio_src}atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[seq_a]")
             else:
                 for i, (a, b) in enumerate(segs):
-                    audio.append(f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[ai{i}]")
+                    audio.append(f"{audio_src}atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[ai{i}]")
                 audio.append("".join(f"[ai{i}]" for i in range(len(segs)))
                              + f"concat=n={len(segs)}:v=0:a=1[seq_a]")
         else:
-            audio.append("[0:a]anull[seq_a]")
+            audio.append(f"{audio_src}anull[seq_a]")
 
         afilters: List[str] = []
         if abs(pitch - 1.0) > 1e-4:
@@ -382,7 +401,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 f"asetrate={source_rate}*{pitch:.5f},aresample={source_rate}")
         afilters.extend(_atempo_chain(speed / pitch))
 
-        measured = _measure_loudness(source, clip_start, src_dur)
+        measured = _measure_loudness(source, clip_start, src_dur, audio_track=audio_index)
         if measured:
             afilters.append(
                 "loudnorm=I=-14:TP=-1.5:LRA=11"
@@ -491,9 +510,14 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     if killed["hit"]:
         out_path.unlink(missing_ok=True)
         raise MediaError(f"Рендер остановлен: {killed['reason']}. Попробуйте ещё раз.")
+    fallback_used = False
     if hw and (proc.returncode != 0 or not out_path.exists()):
         # аппаратный энкодер не завёлся (нет GPU/драйвера) — повторяем на libx264.
         # Заменяем ровно те аргументы, что добавили, иначе срезается хвост команды.
+        hw_error = "".join(tail)[-300:]
+        print(f"[render] {hw} не сработал, повтор на libx264: {hw_error}",
+              file=sys.stderr, flush=True)
+        fallback_used = True
         fallback = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
                     "-profile:v", "high", "-pix_fmt", "yuv420p"]
         if mbps:
@@ -515,7 +539,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
 
     if on_progress:
         on_progress(1.0)
-    return {"path": out_path, "duration": round(duration, 2), "width": w, "height": h}
+    return {"path": out_path, "duration": round(duration, 2), "width": w, "height": h,
+            "encoder": "libx264" if (not hw or fallback_used) else hw,
+            "fallback": fallback_used}
 
 
 def make_preview(clip_path: Path, out_path: Path, width: int = 540) -> Optional[Path]:

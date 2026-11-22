@@ -218,6 +218,33 @@ const STYLE_PRESETS = [
   { key: "script", label: "Скрипт", opts: { subFont: "marckscript", subSize: 142, subPos: "bottom", subOffset: 0, accent: "lavender", uppercase: false } }
 ];
 
+const UNIQ_PRESETS = [
+  { key: "off", label: "Без", opts: { hflip: false, tilt: 0, speed: 1, pitch: 1, jumpCuts: false, cutZoom: false } },
+  { key: "mirror", label: "Зеркало", opts: { hflip: true, tilt: 0, speed: 1, pitch: 1, jumpCuts: false, cutZoom: false } },
+  { key: "mirror_tilt", label: "Зеркало + наклон 0.5°", opts: { hflip: true, tilt: 0.5, speed: 1, pitch: 1, jumpCuts: false, cutZoom: false } },
+  { key: "light", label: "Лёгкий динамичный", opts: { hflip: true, tilt: 0.5, speed: 1.03, pitch: 1, jumpCuts: true, cutZoom: true } },
+  { key: "strong", label: "Сильный динамичный", opts: { hflip: true, tilt: 1.0, speed: 1.06, pitch: 1.01, jumpCuts: true, cutZoom: true } }
+];
+
+const AUDIO_LANG_LABELS = {
+  rus: "Русский", russian: "Русский",
+  jpn: "Японский", japanese: "Японский",
+  eng: "Английский", english: "Английский",
+  ukr: "Украинский", ukrainian: "Украинский",
+  deu: "Немецкий", ger: "Немецкий",
+  fra: "Французский", fre: "Французский",
+  spa: "Испанский", ita: "Итальянский",
+  kor: "Корейский", zho: "Китайский", chi: "Китайский"
+};
+
+function audioTrackLabel(track) {
+  const lang = AUDIO_LANG_LABELS[(track.language || "").toLowerCase()] ||
+    (track.language ? String(track.language).toUpperCase() : "Без языка");
+  const codec = String(track.codec || "").toUpperCase();
+  const channels = track.channels ? `, ${track.channels}` : "";
+  return `${lang}${codec ? ` · ${codec}${channels}` : ""}${track.default ? " · по умолчанию" : ""}`;
+}
+
 const DUR_PRESETS = {
   "15-30": { min: 15, max: 30, target: 22, label: "15–30 сек" },
   "20-45": { min: 20, max: 45, target: 32, label: "20–45 сек" },
@@ -276,6 +303,7 @@ const state = {
   tmplTimer: null,
   tmplAnim: null,
   tmplDetail: null,
+  tmplUniq: null,
   pendingFile: null,
   pendingSubs: null,
   opts: {
@@ -592,10 +620,11 @@ function heroHTML() {
         </div>
       </div>
       <div class="opt wide">
-        <span class="opt-head">${optIcon("style", "ico-pink")}<span class="opt-label">Уникализация</span>
-          <button type="button" class="mini-btn" id="uniPreset">Динамичный монтаж</button>
-        </span>
+        <span class="opt-head">${optIcon("style", "ico-pink")}<span class="opt-label">Уникализация</span></span>
         <div class="substyle">
+          <div class="preset-row" id="uniqPresets" style="flex-basis:100%">
+            ${UNIQ_PRESETS.map((p) => `<button type="button" class="preset-chip" data-uniq="${p.key}">${p.label}</button>`).join("")}
+          </div>
           <label class="toggle"><input type="checkbox" id="hflipToggle" /><span class="track"></span><span>Зеркало</span></label>
           <label class="toggle"><input type="checkbox" id="jumpCutsToggle" /><span class="track"></span><span>Склейки пауз</span></label>
           <label class="toggle"><input type="checkbox" id="cutZoomToggle" /><span class="track"></span><span>Зум на склейках</span></label>
@@ -768,28 +797,11 @@ function bindHero() {
   if (bgSelect) bgSelect.addEventListener("change", () => { state.opts.bgVideo = bgSelect.value; });
   const bgUploadBtn = $("#bgUploadBtn");
   if (bgUploadBtn) bgUploadBtn.addEventListener("click", () => $("#adhdBgInput").click());
-  const uniPreset = $("#uniPreset");
-  if (uniPreset) uniPreset.addEventListener("click", () => {
-    state.opts.hflip = true;
-    state.opts.tilt = 0.5;
-    state.opts.speed = 1.03;
-    state.opts.pitch = 1;
-    state.opts.jumpCuts = true;
-    state.opts.cutZoom = true;
-    const setCheck = (id, val) => { const el = $("#" + id); if (el) el.checked = val; };
-    const setRange = (id, val, labelId, digits) => {
-      const el = $("#" + id);
-      if (el) el.value = val;
-      const label = $("#" + labelId);
-      if (label) label.textContent = digits ? Number(val).toFixed(digits) : val;
-    };
-    setCheck("hflipToggle", true);
-    setCheck("jumpCutsToggle", true);
-    setCheck("cutZoomToggle", true);
-    setRange("tiltRange", 0.5, "tiltVal", 0);
-    setRange("speedRange", 1.03, "speedVal", 2);
-    setRange("pitchRange", 1, "pitchVal", 2);
-    toast("Динамичный монтаж включён. Проверьте первый клип — склейки заметны на слух.");
+  const uniqPresets = $("#uniqPresets");
+  if (uniqPresets) uniqPresets.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-uniq]");
+    if (!btn) return;
+    applyUniqPreset(btn.dataset.uniq);
   });
   loadAdhdBgs();
 
@@ -841,6 +853,33 @@ function bindHero() {
   });
 }
 
+function applyUniqPreset(key) {
+  const preset = UNIQ_PRESETS.find((p) => p.key === key);
+  if (!preset) return;
+  const o = preset.opts;
+  state.opts.hflip = o.hflip;
+  state.opts.tilt = o.tilt;
+  state.opts.speed = o.speed;
+  state.opts.pitch = o.pitch;
+  state.opts.jumpCuts = o.jumpCuts;
+  state.opts.cutZoom = o.cutZoom;
+  const setCheck = (id, val) => { const el = $("#" + id); if (el) el.checked = val; };
+  const setRange = (id, val, labelId, digits) => {
+    const el = $("#" + id);
+    if (el) el.value = val;
+    const label = $("#" + labelId);
+    if (label) label.textContent = digits ? Number(val).toFixed(digits) : val;
+  };
+  setCheck("hflipToggle", o.hflip);
+  setCheck("jumpCutsToggle", o.jumpCuts);
+  setCheck("cutZoomToggle", o.cutZoom);
+  setRange("tiltRange", o.tilt, "tiltVal", 0);
+  setRange("speedRange", o.speed, "speedVal", 2);
+  setRange("pitchRange", o.pitch, "pitchVal", 2);
+  $$("#uniqPresets button").forEach((b) => b.classList.toggle("active", b.dataset.uniq === key));
+  toast(`Пресет уникализации: ${preset.label}`);
+}
+
 function heroOptions() {
   const d = DUR_PRESETS[state.opts.dur] || DUR_PRESETS["20-45"];
   return {
@@ -878,7 +917,8 @@ function heroOptions() {
     platform: state.opts.platform,
     layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
-    language: "auto"
+    language: "auto",
+    audio_track: -1
   };
 }
 
@@ -1084,15 +1124,12 @@ async function startLocalFile() {
     const form = new FormData();
     form.append("file", file);
     await api(`/api/projects/${project.id}/upload`, { method: "POST", body: form });
-    await api(`/api/projects/${project.id}/start`, {
-      method: "POST",
-      body: JSON.stringify({ options: heroOptions() })
-    });
     state.pendingFile = null;
     updatePendingChip();
     await loadProjects();
     openProject(project.id);
-    toast("Файл загружен, идёт обработка");
+    openTemplate(project.id);
+    toast("Файл загружен — выберите дорожку и запустите нарезку");
   } catch (e) {
     toast(e.message || "Ошибка загрузки", "err");
     if (btn) { btn.disabled = false; btn.textContent = label || "Запустить нарезку"; }
@@ -1748,14 +1785,17 @@ function templateDefaults(project) {
     accent: o.accent || "yellow",
     uppercase: o.uppercase !== false,
     showHook: o.show_hook !== false,
-    subtitles: o.subtitles !== false
+    subtitles: o.subtitles !== false,
+    audio: Number(o.audio_track == null ? -1 : o.audio_track)
   };
 }
 
 function templateOptions() {
   const base = (state.tmplDetail && state.tmplDetail.project.options) || {};
+  const audioEl = $("#tpAudio");
   return {
     ...base,
+    ...(state.tmplUniq || {}),
     sub_font: $("#tpFont").value,
     sub_size: Number($("#tpSize").value),
     sub_position: $("#tpPos").value,
@@ -1764,8 +1804,60 @@ function templateOptions() {
     subtitles: $("#tpSubs").checked,
     accent: state.tmplAccent,
     uppercase: $("#tpUpper").checked,
-    show_hook: $("#tpHook").checked
+    show_hook: $("#tpHook").checked,
+    audio_track: audioEl && audioEl.value !== "" ? Number(audioEl.value) : -1
   };
+}
+
+function renderAudioTracks(project, selected) {
+  const field = $("#tpAudioField");
+  const select = $("#tpAudio");
+  if (!field || !select) return;
+  const tracks = project.audio_tracks || (project.meta && project.meta.audio_tracks) || [];
+  if ((project.meta && project.meta.segments_mode) || !Array.isArray(tracks) || tracks.length < 2) {
+    field.style.display = "none";
+    select.innerHTML = "";
+    return;
+  }
+  const current = Number(selected);
+  const fallback = tracks.find((t) => t.default) || tracks[0];
+  const value = tracks.some((t) => Number(t.index) === current) ? current : Number(fallback.index);
+  select.innerHTML = tracks.map((t) =>
+    `<option value="${t.index}">${esc(audioTrackLabel(t))}</option>`
+  ).join("");
+  select.value = String(value);
+  field.style.display = "";
+}
+
+function applyTemplateUniq(key) {
+  const preset = UNIQ_PRESETS.find((p) => p.key === key);
+  if (!preset) return;
+  const o = preset.opts;
+  state.tmplUniq = {
+    hflip: o.hflip,
+    tilt: o.tilt,
+    speed: o.speed,
+    pitch: o.pitch,
+    jump_cuts: o.jumpCuts,
+    cut_zoom: o.cutZoom
+  };
+  $$("#tpUniqPresets .preset-chip").forEach((b) => b.classList.toggle("active", b.dataset.uniq === key));
+}
+
+function markTemplateUniq() {
+  const current = state.tmplUniq || {};
+  const match = UNIQ_PRESETS.find((p) => {
+    const o = p.opts;
+    return !!current.hflip === o.hflip &&
+      Number(current.tilt || 0) === o.tilt &&
+      Number(current.speed || 1) === o.speed &&
+      Number(current.pitch || 1) === o.pitch &&
+      !!current.jump_cuts === o.jumpCuts &&
+      !!current.cut_zoom === o.cutZoom;
+  });
+  $$("#tpUniqPresets .preset-chip").forEach((b) =>
+    b.classList.toggle("active", !!match && b.dataset.uniq === match.key)
+  );
 }
 
 function updateTemplatePreview() {
@@ -1858,6 +1950,7 @@ function openTemplate(pid) {
   state.tmplDetail = null;
   clearInterval(state.tmplAnim);
   state.tmplAccent = "yellow";
+  state.tmplUniq = null;
   state.tmplReady = false;
 
   $("#modal").innerHTML = `
@@ -1885,6 +1978,16 @@ function openTemplate(pid) {
             <label>Шаблоны</label>
             <div class="preset-row">
               ${STYLE_PRESETS.map((p) => `<button class="preset-chip" data-preset="${p.key}">${p.label}</button>`).join("")}
+            </div>
+          </div>
+          <div class="field" id="tpAudioField" style="display:none">
+            <label>Дорожка звука</label>
+            <select id="tpAudio"></select>
+          </div>
+          <div class="field">
+            <label>Уникализация</label>
+            <div class="preset-row" id="tpUniqPresets">
+              ${UNIQ_PRESETS.map((p) => `<button class="preset-chip" data-uniq="${p.key}">${p.label}</button>`).join("")}
             </div>
           </div>
           <div class="row2">
@@ -1976,9 +2079,13 @@ function openTemplate(pid) {
     $$("#tpAccents .swatch").forEach((x) => x.classList.toggle("active", x === b));
     updateTemplatePreview();
   });
-  $$(".preset-chip", $("#modal")).forEach((btn) => btn.addEventListener("click", () => {
-    $$(".preset-chip", $("#modal")).forEach((b) => b.classList.toggle("active", b === btn));
+  $$(".preset-chip[data-preset]", $("#modal")).forEach((btn) => btn.addEventListener("click", () => {
+    $$(".preset-chip[data-preset]", $("#modal")).forEach((b) => b.classList.toggle("active", b === btn));
     applyPreset(btn.dataset.preset);
+  }));
+  $$("#tpUniqPresets .preset-chip").forEach((btn) => btn.addEventListener("click", () => {
+    applyTemplateUniq(btn.dataset.uniq);
+    updateTemplatePreview();
   }));
   $("#tmplStart").addEventListener("click", startFromTemplate);
 
@@ -2037,6 +2144,19 @@ async function tmplPoll() {
       $$("#tpSpeed button").forEach((b) => b.classList.toggle("active", b.dataset.val === defaults.speed));
       state.tmplAccent = defaults.accent;
       $$("#tpAccents .swatch").forEach((b) => b.classList.toggle("active", b.dataset.val === defaults.accent));
+      renderAudioTracks(project, defaults.audio);
+      if (state.tmplUniq === null) {
+        const o = project.options || {};
+        state.tmplUniq = {
+          hflip: !!o.hflip,
+          tilt: Number(o.tilt || 0),
+          speed: Number(o.speed || 1),
+          pitch: Number(o.pitch || 1),
+          jump_cuts: !!o.jump_cuts,
+          cut_zoom: !!o.cut_zoom
+        };
+      }
+      markTemplateUniq();
       updateTemplatePreview();
 
       const video = $("#tmplVideo");
@@ -2787,6 +2907,7 @@ function renderSystem(data) {
   box.hidden = false;
   setMetric("#cpuBar", "#cpuVal", data?.cpu?.percent);
   setMetric("#gpuBar", "#gpuVal", data?.gpu?.util);
+  setMetric("#encBar", "#encVal", data?.gpu?.encoder);
   const cpuLabel = $("#cpuVal");
   if (cpuLabel) {
     cpuLabel.title = data?.memory ? `RAM ${Math.round(data.memory.percent)}% · ${data.memory.used_gb} из ${data.memory.total_gb} ГБ` : "";

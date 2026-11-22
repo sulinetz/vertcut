@@ -89,6 +89,7 @@ class ClipEdit(BaseModel):
     cut_zoom: Optional[bool] = None
     bg_video: Optional[str] = None
     split_ratio: Optional[float] = None
+    audio_track: Optional[int] = None
 
 
 # Лимит загрузки: интерфейс берёт значение из /api/health и проверяет сам.
@@ -191,6 +192,11 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
             data["line_gap"] = max(0, min(120, int(data["line_gap"])))
         except (TypeError, ValueError):
             raise HTTPException(400, "Некорректный межстрочный интервал") from None
+    if "audio_track" in data:
+        try:
+            data["audio_track"] = max(-1, min(64, int(data["audio_track"])))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Некорректная аудиодорожка") from None
     if "sub_offset" in data:
         try:
             data["sub_offset"] = max(-120, min(180, int(data["sub_offset"])))
@@ -410,6 +416,9 @@ async def _store_upload(pid: str, file: UploadFile) -> Path:
         probed = utils.probe(target)
         if not probed.get("duration"):
             raise ValueError("нет длительности")
+        tracks = probed.get("audio_streams") or []
+        if tracks:
+            db.merge_meta(pid, {"audio_tracks": tracks})
     except Exception:  # noqa: BLE001
         target.unlink(missing_ok=True)
         raise HTTPException(400, "Файл не похож на видео или аудио — проверьте содержимое") from None
@@ -526,6 +535,18 @@ def project_detail(pid: str) -> Dict[str, Any]:
             project["source_url"] = "/media/" + quote(rel)
         except ValueError:
             pass
+    tracks = (project.get("meta") or {}).get("audio_tracks") or []
+    if source and not tracks and Path(source).exists():
+        try:
+            from . import utils
+
+            tracks = utils.audio_streams(Path(source))
+            if tracks:
+                db.merge_meta(pid, {"audio_tracks": tracks})
+                project.setdefault("meta", {})["audio_tracks"] = tracks
+        except Exception:  # noqa: BLE001
+            tracks = []
+    project["audio_tracks"] = tracks
     return {"project": project, "clips": clips}
 
 

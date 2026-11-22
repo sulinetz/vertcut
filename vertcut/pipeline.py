@@ -57,6 +57,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "max_height": 1080,
     "segments": False,
     "force_hd": False,
+    "audio_track": -1,
 }
 
 
@@ -153,6 +154,10 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if opts.get("subtitle_source") not in ("auto", "whisper"):
         opts["subtitle_source"] = "auto"
     try:
+        opts["audio_track"] = max(-1, min(64, int(opts.get("audio_track", -1))))
+    except (TypeError, ValueError):
+        opts["audio_track"] = -1
+    try:
         opts["sub_offset"] = max(-120, min(180, int(opts.get("sub_offset", 0))))
     except Exception:
         opts["sub_offset"] = 0
@@ -226,7 +231,8 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                     progress(0.98, "Исходник уже скачан · пропускаю загрузку")
                     _update(pid, source=str(cached), duration=round(info["duration"], 2))
                     db.merge_meta(pid, {"width": info["width"], "height": info["height"],
-                                        "source_height": info["height"]})
+                                        "source_height": info["height"],
+                                        "audio_tracks": info.get("audio_streams") or []})
                     return cached
     if project["url"].startswith("local:"):
         source = Path(project.get("source") or (workdir / "source.mp4"))
@@ -269,6 +275,7 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                   "fallback": meta.get("fallback"),
                   "fallback_reason": meta.get("fallback_reason"),
                   "uploader": meta.get("uploader"), "extractor": meta.get("extractor")})
+    db.merge_meta(pid, {"audio_tracks": info.get("audio_streams") or []})
     return source
 
 
@@ -291,7 +298,16 @@ def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
         "jump_cuts": opts["jump_cuts"], "cut_zoom": opts["cut_zoom"],
         "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
         "segments": bool(opts.get("segments")),
+        "audio_track": int(opts.get("audio_track", -1)),
     }
+
+
+def _audio_track(opts: Dict[str, Any]) -> Optional[int]:
+    try:
+        index = int(opts.get("audio_track", -1))
+    except (TypeError, ValueError):
+        return None
+    return index if index >= 0 else None
 
 
 def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
@@ -418,7 +434,9 @@ def _process_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
             virtual = {**clip, "start": offset,
                        "end": min(actual, offset + (float(clip["end"]) - float(clip["start"]))),
                        "words": words}
-            _render_one(part, workdir, virtual, settings,
+            # Скачанный фрагмент содержит одну дорожку — индекс полного исходника
+            # к нему неприменим.
+            _render_one(part, workdir, virtual, {**settings, "audio_track": -1},
                         lambda p, _i=i: progress(0.55 + (_i + p) / total * 0.45, label))
             db.update_clip(clip["id"], status="ready", error=None)
             rendered += 1
@@ -617,6 +635,7 @@ def process_project(pid: str) -> None:
                 transcript = transcribe.transcribe(
                     source, workdir, language=opts.get("language") or None,
                     on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
+                    audio_track=_audio_track(opts),
                 )
                 stop_hb.set(); hb_thread.join(timeout=1)
             except Exception as exc:  # noqa: BLE001
@@ -680,6 +699,7 @@ def process_project(pid: str) -> None:
             "speed": opts["speed"], "pitch": opts["pitch"],
             "jump_cuts": opts["jump_cuts"], "cut_zoom": opts["cut_zoom"],
             "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
+            "audio_track": int(opts.get("audio_track", -1)),
         }
         _check_cancel(pid)
         total = len(found)
@@ -932,7 +952,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             except Exception:
                 bg_start = 0.0
 
-    render.render_clip(
+    result = render.render_clip(
         source, clip["start"], clip["end"], out_path, ass_path=ass_path,
         aspect=settings.get("aspect", "9:16"), mode=mode,
         focus_x=float(settings.get("focus_x", 0.5)), on_progress=on_progress,
@@ -954,11 +974,14 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         bg_path=bg_path,
         bg_start=bg_start,
         split_ratio=ratio,
+        audio_track=settings.get("audio_track"),
     )
+    settings = {**settings, "render_encoder": result.get("encoder", "libx264")}
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"
     render.make_thumb(out_path, thumb_path, at=min(1.2, max(0.2, out_duration * 0.15)))
     render.make_preview(out_path, workdir / "previews" / f"{clip['id']}.mp4")
     db.update_clip(clip["id"], status="ready", path=str(out_path),
+                   settings=settings,
                    thumb=str(thumb_path) if thumb_path.exists() else None, error=None)
 
 
@@ -981,7 +1004,7 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
                 "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "line_gap",
                 "platform", "layout", "look", "vignette", "grain", "zoom", "bitrate",
                 "music_volume", "hflip", "tilt", "speed", "pitch", "jump_cuts", "cut_zoom",
-                "bg_video", "split_ratio", "fps"):
+                "bg_video", "split_ratio", "fps", "audio_track"):
         if key in payload and payload[key] is not None:
             settings[key] = payload[key]
     if (payload.get("layout") == "adhd" and payload.get("sub_position") is None

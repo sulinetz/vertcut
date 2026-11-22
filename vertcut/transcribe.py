@@ -531,7 +531,8 @@ def _split_audio(wav: Path, workdir: Path, chunk_seconds: int) -> tuple[List[tup
 
 
 def transcribe(media: Path, workdir: Path, language: Optional[str] = None,
-               on_progress: ProgressCb = None) -> Dict[str, Any]:
+               on_progress: ProgressCb = None,
+               audio_track: Optional[int] = None) -> Dict[str, Any]:
     started = time.time()
     if on_progress:
         on_progress(0.005, "Подготовка звука для распознавания…")
@@ -546,7 +547,7 @@ def transcribe(media: Path, workdir: Path, language: Optional[str] = None,
         raise TranscriptionError("В видео нет аудиодорожки — нарезки с субтитрами невозможны.")
 
     # Чистим звук: убираем низкочастотный гул и шипение, выравниваем громкость.
-    wav = utils.extract_asr_audio(media, workdir / "audio16k.wav")
+    wav = utils.extract_asr_audio(media, workdir / "audio16k.wav", audio_track=audio_track)
     chunk_seconds = max(120, int(os.environ.get("VERTCUT_WHISPER_CHUNK", "600")))
     trigger = max(chunk_seconds, int(os.environ.get("VERTCUT_WHISPER_CHUNK_MIN", "1800")))
     long_audio = duration > trigger

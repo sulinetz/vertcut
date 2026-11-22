@@ -13,13 +13,15 @@ from vertcut import config, sysmon
 class NvidiaParseTest(unittest.TestCase):
     def test_full_line(self):
         data = sysmon.parse_nvidia_smi(
-            "NVIDIA GeForce RTX 5070 Ti, 2, 37, 3691, 16303\n")
+            "NVIDIA GeForce RTX 5070 Ti, 2, 37, 3691, 16303, 22, 3\n")
         self.assertEqual(data["name"], "NVIDIA GeForce RTX 5070 Ti")
         self.assertEqual(data["util"], 2.0)
         self.assertEqual(data["temp"], 37.0)
         self.assertEqual(data["mem_used_mb"], 3691.0)
         self.assertEqual(data["mem_total_mb"], 16303.0)
         self.assertAlmostEqual(data["mem_percent"], 22.6, places=1)
+        self.assertEqual(data["encoder"], 22.0)
+        self.assertEqual(data["decoder"], 3.0)
 
     def test_unknown_values_become_none(self):
         data = sysmon.parse_nvidia_smi("NVIDIA GPU, [N/A], N/A, 100, 1000")

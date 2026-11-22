@@ -53,8 +53,14 @@ def probe(path: Path) -> Dict[str, Any]:
     info["has_audio"] = "Audio:" in text
     # Частота дискретизации нужна сдвигу питча: asetrate считается от неё,
     # а не от жёстких 48 кГц — иначе клип с 44.1 кГц уезжает по длительности.
-    am = re.search(r"Audio:[^\n]*?,\s*(\d{4,6})\s*Hz", text)
-    info["sample_rate"] = int(am.group(1)) if am else 48000
+    streams = parse_audio_streams(text)
+    info["audio_streams"] = streams
+    default_audio = next((s for s in streams if s.get("default")), streams[0] if streams else None)
+    if default_audio and default_audio.get("sample_rate"):
+        info["sample_rate"] = int(default_audio["sample_rate"])
+    else:
+        am = re.search(r"Audio:[^\n]*?,\s*(\d{4,6})\s*Hz", text)
+        info["sample_rate"] = int(am.group(1)) if am else 48000
 
     # Поворот из метаданных (вертикальные видео с телефона)
     rm = re.search(r"rotation of (-?\d+(?:\.\d+)?) degrees", text)
@@ -68,6 +74,41 @@ def probe(path: Path) -> Dict[str, Any]:
     return info
 
 
+_AUDIO_STREAM_RE = re.compile(
+    r"Stream #0:(\d+)(?:\[[^\]]+\])?(?:\(([^)]+)\))?: Audio: ([^,\n]+)"
+    r"(?:,\s*(\d+)\s*Hz)?(?:,\s*([^,\n]+))?(?:,\s*([^,\n]+))?"
+)
+
+
+def parse_audio_streams(text: str) -> List[Dict[str, Any]]:
+    """Список аудиодорожек из вывода `ffmpeg -i` (язык, кодек, частота)."""
+    out: List[Dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        match = _AUDIO_STREAM_RE.search(line)
+        if not match:
+            continue
+        channels = (match.group(5) or "").strip()
+        if channels and not re.search(r"mono|stereo|channels|\d\.\d", channels):
+            channels = ""
+        out.append({
+            "index": len(out),
+            "stream": int(match.group(1)),
+            "language": (match.group(2) or "").strip().lower(),
+            "codec": match.group(3).strip(),
+            "sample_rate": int(match.group(4)) if match.group(4) else None,
+            "channels": channels,
+            "default": "(default)" in line,
+        })
+    if out and not any(item["default"] for item in out):
+        out[0]["default"] = True
+    return out
+
+
+def audio_streams(path: Path) -> List[Dict[str, Any]]:
+    proc = run([ffmpeg(), "-hide_banner", "-i", str(path)])
+    return parse_audio_streams(proc.stderr or "")
+
+
 def media_duration(path: Path) -> float:
     """Длительность любого медиа, включая аудио без видеодорожки."""
     proc = run([ffmpeg(), "-hide_banner", "-i", str(path)])
@@ -75,17 +116,21 @@ def media_duration(path: Path) -> float:
     return _to_seconds(*m.groups()) if m else 0.0
 
 
-def extract_audio(src: Path, dst: Path, sample_rate: int = 16000) -> Path:
+def extract_audio(src: Path, dst: Path, sample_rate: int = 16000,
+                  audio_track: Optional[int] = None) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [ffmpeg(), "-y", "-v", "error", "-i", str(src), "-vn",
-           "-ac", "1", "-ar", str(sample_rate), "-c:a", "pcm_s16le", str(dst)]
+    cmd = [ffmpeg(), "-y", "-v", "error", "-i", str(src)]
+    if audio_track is not None:
+        cmd += ["-map", f"0:a:{max(0, int(audio_track))}"]
+    cmd += ["-vn", "-ac", "1", "-ar", str(sample_rate), "-c:a", "pcm_s16le", str(dst)]
     proc = run(cmd)
     if proc.returncode != 0 or not dst.exists():
         raise MediaError(f"Не удалось извлечь аудиодорожку: {(proc.stderr or '')[-300:]}")
     return dst
 
 
-def extract_asr_audio(src: Path, dst: Path, sample_rate: int = 16000) -> Path:
+def extract_asr_audio(src: Path, dst: Path, sample_rate: int = 16000,
+                      audio_track: Optional[int] = None) -> Path:
     """Аудио для распознавания речи: без гула, шипения и перепадов громкости.
 
     Распознавание ошибается в первую очередь на «грязном» звуке: низкочастотный
@@ -94,8 +139,10 @@ def extract_asr_audio(src: Path, dst: Path, sample_rate: int = 16000) -> Path:
     шумоподавление и выравнивание громкости по фразам.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    base = [ffmpeg(), "-y", "-v", "error", "-i", str(src), "-vn",
-            "-ac", "1", "-ar", str(sample_rate)]
+    base = [ffmpeg(), "-y", "-v", "error", "-i", str(src)]
+    if audio_track is not None:
+        base += ["-map", f"0:a:{max(0, int(audio_track))}"]
+    base += ["-vn", "-ac", "1", "-ar", str(sample_rate)]
     filters = "highpass=f=70,lowpass=f=7800,afftdn=nr=10:nf=-40,dynaudnorm=f=200:g=10"
     proc = run(base + ["-af", filters, "-c:a", "pcm_s16le", str(dst)])
     if proc.returncode != 0 or not dst.exists():
