@@ -19,6 +19,8 @@ cd viralcut
 ```
 
 Данные (база, проекты, модели, логи): `%APPDATA%\VertCut`.
+Тяжёлые проекты можно вынести на другой диск: `VERTCUT_PROJECTS` или строка пути
+в `%APPDATA%\VertCut\projects_dir.txt`. База и модели остаются на системном диске.
 Код и окружение: `viralcut\`.
 
 ## Стек
@@ -51,6 +53,7 @@ vertcut/
   custom_fonts.py   свои шрифты и синхронизация для libass
   live.py           запись HLS-эфиров и нарезка окон
   utils.py          probe, run, извлечение аудио
+  sysmon.py         CPU/GPU, температура GPU и свободное место для панели в UI
   updater.py        проверка обновлений (выключена в этой сборке)
 tests/              pytest
 tools/              enable_cuda.py и служебные скрипты

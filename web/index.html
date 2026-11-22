@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VertCut — вертикальные клипы из длинных видео</title>
-  <link rel="stylesheet" href="/static/styles.css?v=14" />
+  <link rel="stylesheet" href="/static/styles.css?v=15" />
   <link rel="stylesheet" id="customFontsCss" href="/api/fonts.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Crect x='10' y='5' width='12' height='22' rx='3.5' fill='white'/%3E%3Cpath d='M14.5 12v8l6-4-6-4z' fill='%232563eb'/%3E%3C/svg%3E" />
 </head>
@@ -44,6 +44,20 @@
 
       <div class="side-foot">
         <div class="health" id="health"><span class="dot"></span><span id="healthText">Проверка движка…</span></div>
+        <div class="sysmon" id="sysmon" hidden>
+          <div class="sysmon-head"><span>Нагрузка</span><span id="sysDisk" title="">—</span></div>
+          <div class="sysmon-line">
+            <span class="sysmon-label">CPU</span>
+            <span class="sysmon-track"><i id="cpuBar"></i></span>
+            <b id="cpuVal">—</b>
+          </div>
+          <div class="sysmon-line">
+            <span class="sysmon-label">GPU</span>
+            <span class="sysmon-track"><i id="gpuBar"></i></span>
+            <b id="gpuVal">—</b>
+          </div>
+          <div class="sysmon-foot"><span id="gpuName">GPU</span><span id="gpuTemp">—</span></div>
+        </div>
         <div class="hint">Всё обрабатывается локально на этом компьютере. Видео никуда не отправляется.</div>
       </div>
     </aside>
@@ -60,6 +74,6 @@
   <input type="file" id="musicInput" accept=".mp3,.m4a,.aac,.wav,.ogg,.flac,.opus" class="hidden" />
   <input type="file" id="subsInput" accept=".srt,.ass,.ssa,.vtt" class="hidden" />
 
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=16"></script>
 </body>
 </html>

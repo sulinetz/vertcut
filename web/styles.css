@@ -374,6 +374,62 @@ a { color: inherit; text-decoration: none; }
 .health.bad .dot { background: var(--danger); }
 .hint { font-size: 11px; line-height: 1.45; color: var(--muted-2); }
 
+/* Датчики нагрузки в подвале сайдбара */
+.sysmon {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 9px;
+  border-top: 1px solid var(--separator);
+}
+.sysmon[hidden] { display: none; }
+.sysmon-head, .sysmon-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--muted-2);
+}
+.sysmon-head span:first-child { letter-spacing: 0.04em; text-transform: uppercase; }
+.sysmon-foot span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+.sysmon-line {
+  display: grid;
+  grid-template-columns: 27px 1fr 32px;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: var(--muted-2);
+}
+.sysmon-line b {
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.sysmon-track {
+  display: block;
+  height: 4px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+.sysmon-track i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 100px;
+  background: var(--grad);
+  transition: width 0.45s var(--ease);
+}
+#gpuTemp.hot { color: var(--warn); }
+#gpuTemp { font-variant-numeric: tabular-nums; }
+
 .main {
   width: 100%;
   max-width: 1260px;

@@ -267,6 +267,7 @@ const state = {
   pollTimer: null,
   mainKey: "",
   health: null,
+  system: null,
   probeOpen: false,
   probeUrl: "",
   probeData: null,
@@ -894,6 +895,12 @@ function formatSize(mb) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} ГБ` : `${mb} МБ`;
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} ГБ`;
+  return `${Math.max(1, Math.round(value / 1024 ** 2))} МБ`;
+}
+
 function closeProbe() {
   state.probeOpen = false;
   state.probeUrl = "";
@@ -1025,7 +1032,11 @@ function updatePendingChip() {
 
 function uploadFile(file) {
   if (!file) return;
-  if (file.size > 4 * 1024 * 1024 * 1024) { toast("Файл больше 4 ГБ", "err"); return; }
+  const limit = Number(state.health && state.health.max_upload_bytes) || 0;
+  if (limit > 0 && file.size > limit) {
+    toast(`Файл больше ${formatBytes(limit)}`, "err");
+    return;
+  }
   state.pendingFile = file;
   const input = $("#urlInput");
   if (input) input.value = "";
@@ -2747,6 +2758,59 @@ document.addEventListener("click", (e) => {
   }
 });
 
+async function checkSystem() {
+  try {
+    const data = await api("/api/system");
+    state.system = data;
+    renderSystem(data);
+  } catch (_) { /* панель датчиков не критична */ }
+}
+
+function setMetric(barId, valueId, value) {
+  const bar = $(barId);
+  const label = $(valueId);
+  if (!bar || !label) return;
+  const num = Number(value);
+  if (value == null || !Number.isFinite(num)) {
+    bar.style.width = "0%";
+    label.textContent = "—";
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, num));
+  bar.style.width = pct + "%";
+  label.textContent = Math.round(pct) + "%";
+}
+
+function renderSystem(data) {
+  const box = $("#sysmon");
+  if (!box) return;
+  box.hidden = false;
+  setMetric("#cpuBar", "#cpuVal", data?.cpu?.percent);
+  setMetric("#gpuBar", "#gpuVal", data?.gpu?.util);
+  const cpuLabel = $("#cpuVal");
+  if (cpuLabel) {
+    cpuLabel.title = data?.memory ? `RAM ${Math.round(data.memory.percent)}% · ${data.memory.used_gb} из ${data.memory.total_gb} ГБ` : "";
+  }
+  const temp = data?.gpu?.temp;
+  const tempEl = $("#gpuTemp");
+  if (tempEl) {
+    tempEl.textContent = temp == null ? "—" : `${Math.round(temp)}°C`;
+    tempEl.classList.toggle("hot", temp != null && temp >= 80);
+    tempEl.title = temp == null ? "Температура GPU недоступна" : "Температура GPU";
+  }
+  const nameEl = $("#gpuName");
+  if (nameEl) {
+    nameEl.textContent = data?.gpu?.name || "GPU не найден";
+    nameEl.title = data?.gpu?.name || "";
+  }
+  const diskEl = $("#sysDisk");
+  if (diskEl) {
+    const disk = data?.disk;
+    diskEl.textContent = disk ? `${Math.round(disk.free_gb)} ГБ свободно` : "—";
+    diskEl.title = disk ? `Проекты: ${disk.path} · всего ${Math.round(disk.total_gb)} ГБ` : "";
+  }
+}
+
 async function checkHealth() {
   try {
     const h = await api("/api/health");
@@ -2833,6 +2897,7 @@ window.addEventListener("hashchange", () => {
   checkUpdates();
   setInterval(checkUpdates, 30 * 60 * 1000);
   await checkHealth();
+  checkSystem();
   await loadFontCatalog();
   await loadProjects();
   const hash = location.hash.replace("#", "");
@@ -2842,4 +2907,5 @@ window.addEventListener("hashchange", () => {
     renderMain(true);
   }
   setInterval(checkHealth, 20000);
+  setInterval(() => { if (!document.hidden) checkSystem(); }, 3000);
 })();

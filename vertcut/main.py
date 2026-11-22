@@ -91,12 +91,13 @@ class ClipEdit(BaseModel):
     split_ratio: Optional[float] = None
 
 
-# Лимиты загрузки: интерфейс проверяет 4 ГБ, но сервер обязан проверять сам.
+# Лимит загрузки: интерфейс берёт значение из /api/health и проверяет сам.
+# 0 или пусто — без ограничения (проекты можно хранить на большом диске).
 ALLOWED_UPLOAD_SUFFIXES = {
     ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".ts", ".mts", ".m2ts",
     ".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac",
 }
-MAX_UPLOAD_BYTES = int(float(os.environ.get("VERTCUT_MAX_UPLOAD_GB", "4")) * 1024 ** 3)
+MAX_UPLOAD_BYTES = int(float(os.environ.get("VERTCUT_MAX_UPLOAD_GB", "0") or "0") * 1024 ** 3)
 MAX_FONT_BYTES = 24 * 1024 * 1024
 
 
@@ -220,7 +221,16 @@ def health() -> Dict[str, Any]:
         "model": transcribe.model_cached(),
         "device": transcribe.device_info(),
         "projects": db.count_projects(),
+        "max_upload_bytes": MAX_UPLOAD_BYTES,
     }
+
+
+@app.get("/api/system")
+def system_stats() -> Dict[str, Any]:
+    """Нагрузка CPU/GPU, температура GPU и свободное место — для панели в UI."""
+    from . import sysmon
+
+    return sysmon.snapshot()
 
 
 @app.get("/api/update")
@@ -376,7 +386,7 @@ async def _store_upload(pid: str, file: UploadFile) -> Path:
                 if not chunk:
                     break
                 written += len(chunk)
-                if written > MAX_UPLOAD_BYTES:
+                if MAX_UPLOAD_BYTES and written > MAX_UPLOAD_BYTES:
                     size_hint = (f"{MAX_UPLOAD_BYTES / 1024 ** 3:.1f} ГБ"
                                  if MAX_UPLOAD_BYTES >= 1024 ** 3
                                  else f"{MAX_UPLOAD_BYTES / 1024 ** 2:.0f} МБ")

@@ -19,12 +19,50 @@ for _key in list(os.environ):
         os.environ.setdefault("VERTCUT_" + _key[len("VIRALCUT_"):], os.environ[_key])
 
 DATA_DIR = Path(os.environ.get("VERTCUT_DATA", ROOT / "data")).resolve()
-PROJECTS_DIR = DATA_DIR / "projects"
+
+
+def resolve_projects_dir(data_dir: Path) -> Path:
+    """Папка с тяжёлыми проектами: можно вынести на другой диск.
+
+    Приоритет: `VERTCUT_PROJECTS` / `VERTCUT_PROJECTS_DIR` → файл
+    `projects_dir.txt` в папке данных → `<данные>/projects`. Файл нужен для
+    собранного приложения: его не запускают из консоли с переменными.
+    """
+    raw = (os.environ.get("VERTCUT_PROJECTS")
+           or os.environ.get("VERTCUT_PROJECTS_DIR") or "").strip()
+    if not raw:
+        marker = data_dir / "projects_dir.txt"
+        try:
+            raw = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            raw = ""
+    if not raw:
+        return (data_dir / "projects").resolve()
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = data_dir / path
+    return path.resolve()
+
+
+PROJECTS_DIR = resolve_projects_dir(DATA_DIR)
 MODELS_DIR = DATA_DIR / "models"
 DB_PATH = DATA_DIR / "vertcut.db"
 
+# Временные файлы больших загрузок и ffmpeg держим рядом с проектами, а не
+# на системном диске. Иначе 20-гигабайтный файл сначала целиком ложится в TMP.
+TEMP_DIR = Path(os.environ.get("VERTCUT_TEMP", PROJECTS_DIR.parent / "temp")).resolve()
+
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
+for _var in ("TMP", "TEMP", "TMPDIR"):
+    os.environ[_var] = str(TEMP_DIR)
+try:
+    import tempfile as _tempfile
+
+    _tempfile.tempdir = str(TEMP_DIR)
+except Exception:  # noqa: BLE001
+    pass
 
 # Размер модели Whisper: tiny / base / small / medium / large-v3
 WHISPER_MODEL = os.environ.get("VERTCUT_WHISPER", "small")
