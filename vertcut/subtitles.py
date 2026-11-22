@@ -404,7 +404,7 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               font: str = "montserrat",
               position: str = "bottom", offset: int = 0,
               speed: str = "calm", platform: str = "", bottom_reserve: int = 0,
-              line_gap: int = 0) -> str:
+              line_gap: int = 0, top_reserve: int = 0) -> str:
     """Собирает ASS-файл для фрагмента. Тайминги слов абсолютные (от начала видео)."""
     accent_color = ACCENTS.get(accent, ACCENTS["yellow"])
     info = font_info(font)
@@ -462,7 +462,7 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
             hook_y = platforms.bottom_text_y(platform) - 20
             hook_anchor = 2
         else:
-            hook_y = platforms.top_text_y(platform)
+            hook_y = platforms.top_text_y(platform) + int(top_reserve or 0)
             hook_anchor = 8
         events.extend(_line_events(
             hook_lines, 1, "Hook", start, end, hook_anchor, PLAY_W // 2, int(hook_y),

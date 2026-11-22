@@ -476,8 +476,8 @@ function heroHTML() {
         </div>
         <div class="seg" data-group="layout">
           <button data-val="" class="${!o.layout ? "active" : ""}">Выкл</button>
-          <button data-val="face_third" class="${o.layout === "face_third" ? "active" : ""}">Лицо · треть</button>
-          <button data-val="band" class="${o.layout === "band" ? "active" : ""}">Полоса снизу</button>
+          <button data-val="band" class="${o.layout === "band" ? "active" : ""}">Лицо снизу</button>
+          <button data-val="band_top" class="${o.layout === "band_top" ? "active" : ""}">Лицо сверху</button>
         </div>
       </div>
       <div class="opt">
@@ -1990,8 +1990,8 @@ function openEditor(clipId) {
               <label>Пресет стрима</label>
               <select id="edLayout">
                 <option value="" ${!s.layout ? "selected" : ""}>Выключен</option>
-                <option value="face_third" ${s.layout === "face_third" ? "selected" : ""}>Лицо · треть</option>
-                <option value="band" ${s.layout === "band" ? "selected" : ""}>Полоса снизу</option>
+                <option value="band" ${s.layout === "band" ? "selected" : ""}>Лицо крупно снизу</option>
+                <option value="band_top" ${s.layout === "band_top" ? "selected" : ""}>Лицо крупно сверху</option>
               </select>
             </div>
             <div class="field">
@@ -2141,14 +2141,12 @@ function openEditor(clipId) {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, topH, w, h - topH);
       drawFacecam(ctx, fc, 0, topH, w, h - topH, false);
+    } else if (layout === "band_top" && fc) {
+      const bandH = Math.round(h * 640 / 1920);
+      drawFacecam(ctx, fc, 0, 0, w, bandH, false);
+      drawCover(ctx, srcVideo, 0, bandH, w, h - bandH);
     } else {
       drawCover(ctx, srcVideo, 0, 0, w, h);
-      if (layout === "face_third" && fc) {
-        const size = 360 * k;
-        const x = 64 * k;
-        const y = 240 * k;
-        drawFacecam(ctx, fc, x, y, size, size * 0.78, true);
-      }
     }
     if (stageHint) stageHint.classList.add("hidden");
   };
@@ -2209,7 +2207,9 @@ function openEditor(clipId) {
       hookView.textContent = upper ? hookText.toUpperCase() : hookText;
       hookView.style.fontFamily = FONT_CSS[fontKey] || "VCMontserrat";
       hookView.style.fontSize = Math.max(9, size * 0.8) + "px";
-      hookView.style.top = Math.max(6, (zone.top + 40) * k) + "px";
+      const layoutNow = $("#edLayout") ? $("#edLayout").value : "";
+      const hookLift = layoutNow === "band_top" ? 640 * k : 0;
+      hookView.style.top = Math.max(6, (zone.top + 40) * k + hookLift) + "px";
       hookView.style.display = showHook && showSubs && hookText ? "block" : "none";
       hookView.style.lineHeight = (1.1 + lineGap / 110).toFixed(2);
     }

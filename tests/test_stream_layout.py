@@ -1,51 +1,47 @@
-"""Пресеты стрима: врезка с лицом поверх видео."""
+"""Пресеты стрима: крупное лицо полосой сверху или снизу."""
 from __future__ import annotations
 
 import unittest
-from unittest import mock
 
 from vertcut import platforms, render
 
 
 class StreamChainTest(unittest.TestCase):
-    """Собираем строку фильтров без запуска ffmpeg."""
-
     facecam = {"x": 70, "y": 10, "w": 310, "h": 240, "share": 1.0, "source": [1920, 1080]}
     crop = {"times": [0.0, 5.0], "x": [400, 400], "y": [0, 0],
             "crop_w": 608, "crop_h": 1080, "source": [1920, 1080],
             "coverage": 1.0, "faces": 10, "samples": 10}
 
-    def test_face_layout_overlays_panel(self):
-        chain = render._stream_chain(1080, 1920, self.crop, self.facecam,
-                                     "face_third", "universal")
-        self.assertIn("overlay=", chain)
-        self.assertIn("[face]", chain)
-        self.assertIn("crop=310:240:70:10", chain)
-        self.assertIn("scale=360:281", chain)
-
-    def test_face_panel_is_above_subtitles(self):
-        chain = render._stream_chain(1080, 1920, self.crop, self.facecam,
-                                     "face_third", "universal")
-        top = platforms.zones("universal")["top"]
-        self.assertIn(f"overlay=64:{top + 40}", chain)
-
-    def test_band_uses_bottom_strip(self):
+    def test_band_bottom(self):
         chain = render._stream_chain(1080, 1920, self.crop, self.facecam,
                                      "band", "universal")
         self.assertIn(f"overlay=0:{1920 - render.BAND_H}", chain)
         self.assertIn(f"scale=1080:{render.BAND_H}", chain)
+        self.assertIn("crop=310:240:70:10", chain)
+
+    def test_band_top(self):
+        chain = render._stream_chain(1080, 1920, self.crop, self.facecam,
+                                     "band_top", "universal")
+        self.assertIn("overlay=0:0", chain)
+        self.assertIn(f"pad=1080:1920:0:{render.BAND_H}:black", chain)
+
+    def test_base_is_cropped_for_band(self):
+        for layout in ("band", "band_top"):
+            chain = render._stream_chain(1080, 1920, self.crop, self.facecam,
+                                         layout, "universal")
+            self.assertIn("scale=1080:1280", chain, layout)
 
     def test_layouts_registry(self):
-        self.assertEqual(set(render.STREAM_LAYOUTS), {"face_third", "band"})
+        self.assertEqual(set(render.STREAM_LAYOUTS), {"band", "band_top"})
 
 
-class LayoutOptionsTest(unittest.TestCase):
-    def test_layout_defaults_and_validation(self):
+class BandOptionsTest(unittest.TestCase):
+    def test_layout_validation(self):
         from vertcut import pipeline
 
-        self.assertEqual(pipeline.normalize_options({})["layout"], "")
-        self.assertEqual(pipeline.normalize_options({"layout": "band"})["layout"], "band")
-        self.assertEqual(pipeline.normalize_options({"layout": "nonsense"})["layout"], "")
+        for layout in ("band", "band_top"):
+            self.assertEqual(pipeline.normalize_options({"layout": layout})["layout"], layout)
+        self.assertEqual(pipeline.normalize_options({"layout": "face_third"})["layout"], "")
 
     def test_band_reserves_space_for_subtitles(self):
         plain = platforms.bottom_text_y("universal")

@@ -731,6 +731,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             line_gap=int(settings.get("line_gap", 0) or 0),
             platform=settings.get("platform", platforms.DEFAULT_PLATFORM),
             bottom_reserve=(render.BAND_H if settings.get("layout") == "band" else 0),
+            top_reserve=(render.BAND_H if settings.get("layout") == "band_top" else 0),
         )
         ass_path = ass_dir / f"{clip['id']}.ass"
         ass_path.write_text(text, encoding="utf-8")
@@ -764,7 +765,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             exclude = (facecam["x"], facecam["y"],
                        facecam["x"] + facecam["w"], facecam["y"] + facecam["h"])
             avoid = exclude
-            crop_aspect = "27:32" if layout == "band" else "9:16"
+            crop_aspect = "27:32" if layout in ("band", "band_top") else "9:16"
         else:
             layout = ""
 

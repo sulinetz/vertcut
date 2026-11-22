@@ -19,8 +19,7 @@ from .utils import MediaError, probe, run, subprocess_kwargs
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}
 
 # Пресеты для стримов: игра на весь кадр плюс врезка с лицом.
-STREAM_SIZES = {"face_third": 360}
-STREAM_LAYOUTS = tuple(STREAM_SIZES) + ("band",)
+STREAM_LAYOUTS = ("band", "band_top")
 BAND_H = 640
 
 
@@ -46,27 +45,19 @@ def _stream_chain(w: int, h: int, crop_path: Optional[Dict[str, Any]],
         cw = int(crop_path["crop_w"])
         ch = int(crop_path["crop_h"])
         base = (f"[0:v]crop={cw}:{ch}:x='{x_expr}':y='{y_expr}',"
-                f"scale={w}:{h if layout != 'band' else 1280}:flags=lanczos")
+                f"scale={w}:{h if layout not in ('band', 'band_top') else 1280}:flags=lanczos")
     else:
         base = f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
 
-    if layout == "band":
-        face = (f"[0:v]crop={fw}:{fh}:{fx}:{fy},"
-                f"scale={w}:{BAND_H}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{BAND_H},setsar=1{sharp}[face]")
-        top = f"{base},pad={w}:{h}:0:0:black[top]"
-        return f"{face};{top};[top][face]overlay=0:{h - BAND_H}[base]"
-
-    size = STREAM_SIZES.get(layout, STREAM_SIZES["face_third"])
-    face_h = int(round(size * 0.78))
-    # Панель ставим сверху слева: внизу живут субтитры и интерфейс площадки.
-    z = platforms.zones(platform)
-    x = max(int(z["left"]), 24)
-    y = int(z["top"]) + 40
+    # Крупное лицо полосой во всю ширину: снизу или сверху кадра.
     face = (f"[0:v]crop={fw}:{fh}:{fx}:{fy},"
-            f"scale={size}:{face_h}:flags=lanczos,setsar=1{sharp}[face]")
-    return (f"{face};{base},setsar=1[top];"
-            f"[top][face]overlay={x}:{y}[base]")
+            f"scale={w}:{BAND_H}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{BAND_H},setsar=1{sharp}[face]")
+    if layout == "band_top":
+        top = f"{base},pad={w}:{h}:0:{BAND_H}:black[top]"
+        return f"{face};{top};[top][face]overlay=0:0[base]"
+    top = f"{base},pad={w}:{h}:0:0:black[top]"
+    return f"{face};{top};[top][face]overlay=0:{h - BAND_H}[base]"
 
 
 def _bg_chain(w: int, h: int, focus_x: float = 0.5, sharpen: bool = False) -> str:
