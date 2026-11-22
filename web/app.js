@@ -227,6 +227,14 @@ const DUR_PRESETS = {
   "120-180": { min: 120, max: 180, target: 150, label: "2–3 мин" }
 };
 
+const PLATFORM_ZONES = {
+  universal: { top: 200, bottom: 484 },
+  shorts: { top: 140, bottom: 360 },
+  tiktok: { top: 130, bottom: 484 },
+  reels: { top: 200, bottom: 420 },
+  none: { top: 0, bottom: 320 }
+};
+
 const ASPECT_META = {
   "9:16": { short: "Вертикально", hint: "Shorts, Reels, TikTok", w: 9, h: 16 },
   "1:1": { short: "Квадрат", hint: "лента Instagram, VK", w: 1, h: 1 },
@@ -1887,7 +1895,16 @@ function openEditor(clipId) {
         <button class="icon-btn" data-close>${ICONS.close}</button>
       </div>
       <div class="modal-body">
-        <div class="editor-video"><video id="edVideo" src="${clipUrl(clip)}" controls playsinline></video></div>
+        <div class="editor-preview">
+          <div class="ed-stage" id="edStage">
+            <canvas id="edCanvas"></canvas>
+            <div class="ed-hook" id="edHookView"></div>
+            <div class="ed-sub" id="edSubView"></div>
+            <div class="ed-stage-hint" id="edStageHint">Беру кадр из видео…</div>
+          </div>
+          <video id="edVideo" class="ed-video-small" src="${clipUrl(clip)}" controls playsinline></video>
+          <video id="edSrc" class="hidden" muted playsinline preload="auto" src="${project.source_url || ""}"></video>
+        </div>
         <div class="editor-fields">
           <div class="field">
             <label>Заголовок на видео (хук)</label>
@@ -2027,7 +2044,98 @@ function openEditor(clipId) {
     if (!b) return;
     chosenAccent = b.dataset.val;
     $$(".swatch", $("#edAccents")).forEach((x) => x.classList.toggle("active", x === b));
+    updateEditorPreview();
   });
+
+  /* --- Живой предпросмотр: кадр из источника + текст субтитров --- */
+  const stage = $("#edStage");
+  const canvas = $("#edCanvas");
+  const srcVideo = $("#edSrc");
+  const subView = $("#edSubView");
+  const hookView = $("#edHookView");
+  const stageHint = $("#edStageHint");
+
+  const drawFrame = () => {
+    if (!stage || !canvas || !srcVideo || !srcVideo.videoWidth) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(stage.clientWidth * dpr));
+    const h = Math.max(1, Math.round(stage.clientHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const ctx = canvas.getContext("2d");
+    const vw = srcVideo.videoWidth, vh = srcVideo.videoHeight;
+    const scale = Math.max(w / vw, h / vh);
+    const dw = vw * scale, dh = vh * scale;
+    ctx.drawImage(srcVideo, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    if (stageHint) stageHint.classList.add("hidden");
+  };
+
+  const seekSource = () => {
+    if (!srcVideo || !srcVideo.src) return;
+    const target = Math.max(0, Number(start.value) + 0.3);
+    try {
+      if (Math.abs(srcVideo.currentTime - target) > 0.4) srcVideo.currentTime = target;
+      else drawFrame();
+    } catch (_) {}
+  };
+
+  if (srcVideo) {
+    srcVideo.addEventListener("loadeddata", seekSource);
+    srcVideo.addEventListener("seeked", drawFrame);
+    if (srcVideo.readyState >= 2) seekSource();
+  }
+
+  const updateEditorPreview = () => {
+    if (!stage || !subView) return;
+    const W = stage.clientWidth || 1;
+    const k = W / 1080;
+    const zone = PLATFORM_ZONES[$("#edPlatform") ? $("#edPlatform").value : "universal"] || PLATFORM_ZONES.universal;
+    const size = Number($("#edSize") ? $("#edSize").value : 118) * 0.45 * k;
+    const position = $("#edPos") ? $("#edPos").value : "bottom";
+    const offset = Number($("#edOffset") ? $("#edOffset").value : 0);
+    const upper = $("#edUpper") ? $("#edUpper").checked : true;
+    const showSubs = $("#edSubs") ? $("#edSubs").checked : true;
+    const showHook = $("#edShowHook") ? $("#edShowHook").checked : true;
+    const fontKey = $("#edFont") ? $("#edFont").value : "montserrat";
+
+    const words = (($("#edText") ? $("#edText").value : "") || "").trim().split(/\s+/).filter(Boolean).slice(0, 8);
+    const line = words.map((w, i) => `<span class="w ${i === 0 ? "hl" : ""}">${esc(upper ? w.toUpperCase() : w)}</span>`).join(" ");
+
+    subView.style.fontFamily = FONT_CSS[fontKey] || "VCMontserrat";
+    subView.style.fontSize = size + "px";
+    subView.innerHTML = line;
+    subView.style.display = showSubs && words.length ? "block" : "none";
+    subView.style.top = "";
+    subView.style.bottom = "";
+    subView.style.transform = "";
+    if (position === "top") {
+      subView.style.top = Math.max(8, (zone.top + 120) * k - offset * k) + "px";
+    } else if (position === "middle") {
+      subView.style.top = "50%";
+      subView.style.transform = "translateY(-50%)";
+    } else {
+      subView.style.bottom = Math.max(8, Math.max(320, zone.bottom + 60) * k + offset * k) + "px";
+    }
+    subView.style.setProperty("--hl", ACCENT_HEX[chosenAccent] || ACCENT_HEX.yellow);
+
+    const hookText = ($("#edHook") ? $("#edHook").value : "").trim();
+    if (hookView) {
+      hookView.textContent = upper ? hookText.toUpperCase() : hookText;
+      hookView.style.fontFamily = FONT_CSS[fontKey] || "VCMontserrat";
+      hookView.style.fontSize = Math.max(9, size * 0.8) + "px";
+      hookView.style.top = Math.max(6, (zone.top + 40) * k) + "px";
+      hookView.style.display = showHook && showSubs && hookText ? "block" : "none";
+    }
+  };
+
+  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edUpper", "edSubs", "edShowHook", "edPlatform"]
+    .forEach((id) => {
+      const el = $("#" + id);
+      if (!el) return;
+      el.addEventListener("input", updateEditorPreview);
+      el.addEventListener("change", updateEditorPreview);
+    });
+  window.addEventListener("resize", () => { drawFrame(); updateEditorPreview(); });
+  setTimeout(() => { updateEditorPreview(); seekSource(); }, 60);
 
   $("#edSize").addEventListener("input", (e) => { $("#edSizeVal").textContent = e.target.value; });
   $("#edFont").addEventListener("change", () => {
