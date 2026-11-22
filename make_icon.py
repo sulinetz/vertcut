@@ -28,6 +28,11 @@ def gradient(size: int) -> Image.Image:
 
 
 def build() -> Image.Image:
+    # Готовый знак: если лежит исходник, все форматы собираются из него.
+    source = ASSETS / "icon_source.png"
+    if source.exists():
+        return Image.open(source).convert("RGBA").resize((S, S), Image.LANCZOS)
+
     bg = gradient(W)
 
     mask = Image.new("L", (W, W), 0)
