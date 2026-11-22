@@ -1419,3 +1419,27 @@ input[type="range"]::-webkit-slider-thumb {
 .opt > div > .opt-label {
   display: block;
 }
+
+/* Прогресс в списке проектов */
+.project-item .p-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.project-item .p-bar {
+  display: block;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.project-item .p-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #3b82f6, #22d3ee);
+  transition: width 0.4s ease;
+}

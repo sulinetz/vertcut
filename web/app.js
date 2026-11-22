@@ -324,12 +324,21 @@ function renderSidebar() {
   }
   list.innerHTML = state.projects.map((p) => {
     const when = new Date((p.created_at || 0) * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
-    const sub = p.status === "done" ? `${p.meta?.clips || ""} клипов · ${when}` : p.status === "error" ? "ошибка" : p.status === "running" ? "обработка…" : when;
+    const active = ["queued", "preparing", "running", "processing"].includes(p.status);
+    const pct = Math.max(0, Math.min(100, Math.round(p.progress || 0)));
+    const sub = p.status === "done" ? `${p.meta?.clips || ""} клипов · ${when}`
+      : p.status === "error" ? "ошибка"
+      : p.status === "cancelled" ? "отменено"
+      : p.status === "draft" ? "черновик · не запущен"
+      : active ? `${p.stage || "обработка"}${pct ? ` · ${pct}%` : ""}`
+      : when;
+    const bar = active ? `<span class="p-bar"><i style="width:${Math.max(2, pct)}%"></i></span>` : "";
     return `<button class="project-item ${state.current === p.id ? "active" : ""}" data-project="${p.id}">
       <span class="status-dot ${esc(p.status)}"></span>
-      <span style="min-width:0">
+      <span class="p-body">
         <span class="p-title">${esc(p.title || p.url)}</span>
         <span class="p-meta">${esc(sub)}</span>
+        ${bar}
       </span>
     </button>`;
   }).join("");
@@ -843,6 +852,7 @@ async function loadDetail(force) {
       item.status = detail.project.status;
       item.title = detail.project.title;
       item.stage = detail.project.stage;
+      item.progress = detail.project.progress;
       item.meta = detail.project.meta;
     } else {
       state.projects.unshift({
@@ -2115,6 +2125,12 @@ $("#main").addEventListener("click", async (e) => {
     return;
   }
 });
+
+// Список проектов обновляем сам: видно стадию, процент и полоску прогресса,
+// даже если проект запущен не из этого окна.
+setInterval(() => {
+  if (!state.current) loadProjects();
+}, 2500);
 
 $("#subsInput").addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
