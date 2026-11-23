@@ -299,6 +299,8 @@ def _line_events(lines: List[str], layer: int, style: str, start: float, end: fl
     out: List[str] = []
     total = len(lines)
     step = line_h + gap
+    durations = [sum(int(value) for value in re.findall(r"\\k(\d+)", line)) for line in lines]
+    passed = 0
     for i, line in enumerate(lines):
         if anchor in (1, 2, 3):
             ly = y - (total - 1 - i) * step
@@ -306,8 +308,13 @@ def _line_events(lines: List[str], layer: int, style: str, start: float, end: fl
             ly = y + i * step
         else:
             ly = y + (i - (total - 1) / 2) * step
+        # Каждая строка — отдельное событие, поэтому караоке следующей строки
+        # должно начаться после времени предыдущих: иначе подсветка «прыгает»
+        # на первую строку. \k — сотые доли секунды, как и в словах.
+        prefix = f"{{\\k{passed}}}" if i > 0 and passed > 0 else ""
         out.append(f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style},,0,0,0,,"
-                   f"{{\\an{anchor}\\pos({x},{int(ly)}){tags}}}{line}")
+                   f"{{\\an{anchor}\\pos({x},{int(ly)}){tags}}}{prefix}{line}")
+        passed += durations[i]
     return out
 
 
