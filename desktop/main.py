@@ -212,6 +212,84 @@ class DesktopApi:
         self._reveal(dest)
         return {"ok": True, "path": str(dest), "folder": str(dest.parent)}
 
+    def pick_source(self) -> Dict[str, Any]:
+        """Нативный выбор файла: путь + файлы-спутники (1.avi, 1.srt, 1.mka)."""
+        try:
+            import webview
+
+            windows = getattr(webview, "windows", None) or []
+            if not windows:
+                return {"ok": False, "error": "Окно ещё не готово"}
+            chosen = windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=("Видео (*.mp4;*.mkv;*.webm;*.mov;*.m4v;*.avi;*.ts)",
+                            "Все файлы (*.*)"))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)[:300]}
+        if not chosen:
+            return {"ok": False, "cancelled": True}
+        value = chosen[0] if isinstance(chosen, (list, tuple)) else chosen
+        video = Path(str(value))
+        if not video.exists():
+            return {"ok": False, "error": "Файл не найден"}
+        from vertcut import utils
+
+        return {"ok": True, "video": str(video), "name": video.name,
+                "group": utils.group_sibling_files(video.parent, video)}
+
+    def attach_source(self, pid: str, video_path: str, subs_path: str = "",
+                      dub_path: str = "", music_path: str = "") -> Dict[str, Any]:
+        """Копирует выбранный файл и спутники в проект и запускает подготовку."""
+        from vertcut import db, jobs, pipeline
+
+        project = db.get_project(pid)
+        if not project:
+            return {"ok": False, "error": "Проект не найден"}
+        video = Path(video_path)
+        if not video.exists():
+            return {"ok": False, "error": "Файл не найден"}
+        workdir = pipeline.PROJECTS_DIR / pid
+        workdir.mkdir(parents=True, exist_ok=True)
+        target = workdir / f"source{video.suffix.lower() or '.mp4'}"
+
+        def place(src: Path, dst: Path) -> bool:
+            try:
+                try:
+                    os.link(src, dst)
+                except OSError:
+                    shutil.copy2(src, dst)
+                return True
+            except OSError:
+                return False
+
+        if not place(video, target):
+            return {"ok": False, "error": "Не удалось скопировать видео"}
+        for other in workdir.glob("source.*"):
+            if other != target and not other.name.endswith(".part"):
+                try:
+                    other.unlink()
+                except OSError:
+                    pass
+
+        def attach(path: str, prefix: str, allowed: set) -> bool:
+            if not path:
+                return False
+            source = Path(path)
+            if not source.exists() or source.suffix.lower() not in allowed:
+                return False
+            return place(source, workdir / f"{prefix}{source.suffix.lower()}")
+
+        attached_subs = attach(subs_path, "subtitles",
+                               {".srt", ".ass", ".ssa", ".vtt"})
+        attached_dub = attach(dub_path, "dub", set(pipeline.DUB_SUFFIXES))
+        attached_music = attach(music_path, "music", set(pipeline.MUSIC_SUFFIXES))
+        db.update_project(pid, source=str(target), title=project.get("title") or video.name,
+                          status="queued", stage="Подготовка", error=None, progress=0)
+        jobs.submit_prepare(pid)
+        return {"ok": True, "source": str(target), "subtitles": attached_subs,
+                "dub": attached_dub, "music": attached_music}
+
     def open_url(self, url: str) -> Dict[str, Any]:
         """Открывает внешнюю ссылку в системном браузере (Telegram-канал и т.п.)."""
         from urllib.parse import urlparse

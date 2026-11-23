@@ -615,6 +615,18 @@ def project_detail(pid: str) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001
             tracks = []
     project["audio_tracks"] = tracks
+    sub_tracks = (project.get("meta") or {}).get("subtitle_tracks") or []
+    if source and not sub_tracks and Path(source).exists():
+        try:
+            from . import utils
+
+            sub_tracks = utils.subtitle_streams(Path(source))
+            if sub_tracks:
+                db.merge_meta(pid, {"subtitle_tracks": sub_tracks})
+                project.setdefault("meta", {})["subtitle_tracks"] = sub_tracks
+        except Exception:  # noqa: BLE001
+            sub_tracks = []
+    project["subtitle_tracks"] = sub_tracks
     dub_meta = (project.get("meta") or {}).get("dub")
     dub_file = pipeline._dub_file(PROJECTS_DIR / pid)
     if dub_file is not None:
@@ -729,6 +741,58 @@ def project_delete(pid: str) -> Dict[str, Any]:
     db.delete_project(pid)
     pipeline.delete_project_files(pid)
     return {"ok": True}
+
+
+@app.get("/api/projects/{pid}/frame.jpg")
+def project_frame(pid: str, t: float = 0.0, width: int = 720):
+    """Кадр источника для живого предпросмотра кадрирования в мастере."""
+    project = db.get_project(pid)
+    if not project or not project.get("source"):
+        raise HTTPException(404, "Исходное видео не найдено")
+    source = Path(project["source"])
+    if not source.exists():
+        raise HTTPException(404, "Исходное видео не найдено")
+    frames = PROJECTS_DIR / pid / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    width = max(240, min(1280, int(width)))
+    target = frames / f"f_{int(max(0.0, float(t)) * 1000)}_{width}.jpg"
+    if not target.exists() or target.stat().st_size < 1000:
+        from . import utils
+
+        proc = utils.run([ffmpeg(), "-y", "-v", "error",
+                          "-ss", f"{max(0.0, float(t)):.3f}", "-i", str(source),
+                          "-frames:v", "1", "-vf", f"scale={width}:-2",
+                          "-q:v", "3", str(target)])
+        if proc.returncode != 0 or not target.exists() or target.stat().st_size < 1000:
+            target.unlink(missing_ok=True)
+            raise HTTPException(400, "Не удалось взять кадр из видео")
+    return FileResponse(target, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/api/projects/{pid}/frame-info")
+def project_frame_info(pid: str, t: float = -1.0, aspect: str = "9:16"):
+    """Случайное время и окно кадрирования для предпросмотра."""
+    import random
+
+    from . import reframe, render, utils
+
+    project = db.get_project(pid)
+    if not project or not project.get("source"):
+        raise HTTPException(404, "Исходное видео не найдено")
+    source = Path(project["source"])
+    if not source.exists():
+        raise HTTPException(404, "Исходное видео не найдено")
+    duration = float(project.get("duration") or 0) or utils.media_duration(source)
+    if duration <= 0:
+        raise HTTPException(400, "Не удалось определить длительность видео")
+    if t < 0:
+        t = random.uniform(0.05, 0.95) * duration
+    t = max(0.0, min(max(0.0, duration - 0.2), float(t)))
+    if aspect not in render.ASPECTS:
+        aspect = "9:16"
+    box = reframe.frame_box(source, t, aspect)
+    return {"time": round(t, 2), "duration": round(duration, 2), "box": box}
 
 
 @app.get("/api/clips/{cid}/subtitles.srt")

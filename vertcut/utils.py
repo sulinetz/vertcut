@@ -266,6 +266,43 @@ def named_exports(clips: List[Dict[str, Any]], order: str = "chrono") -> List[tu
     return out
 
 
+def group_sibling_files(folder: Path, video: Path) -> List[Dict[str, Any]]:
+    """Файлы-спутники одного видео: 1.avi + 1.srt + 1.mka + 1.ru.srt.
+
+    Сравниваем по основе имени: точное совпадение или «основа.язык».
+    Возвращает список {path, name, kind, suffix}, kind = subtitles/audio/video.
+    """
+    folder = Path(folder)
+    video = Path(video)
+    stem = video.stem.lower()
+    subtitle_suffixes = {".srt", ".ass", ".ssa", ".vtt"}
+    audio_suffixes = {".mka", ".m4a", ".mp3", ".wav", ".ogg", ".flac", ".opus",
+                      ".aac", ".ac3", ".eac3", ".dts"}
+    video_suffixes = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi", ".ts"}
+    out: List[Dict[str, Any]] = []
+    try:
+        entries = sorted(folder.iterdir())
+    except OSError:
+        return out
+    for path in entries:
+        if not path.is_file() or path.resolve() == video.resolve():
+            continue
+        name_stem = path.stem.lower()
+        if not (name_stem == stem or name_stem.startswith(stem + ".")):
+            continue
+        suffix = path.suffix.lower()
+        if suffix in subtitle_suffixes:
+            kind = "subtitles"
+        elif suffix in audio_suffixes:
+            kind = "audio"
+        elif suffix in video_suffixes:
+            kind = "video"
+        else:
+            continue
+        out.append({"path": str(path), "name": path.name, "kind": kind, "suffix": suffix})
+    return out
+
+
 def ass_time(seconds: float) -> str:
     seconds = max(0.0, float(seconds))
     cs = int(round(seconds * 100))

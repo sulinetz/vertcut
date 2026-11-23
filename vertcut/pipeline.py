@@ -55,6 +55,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "layout": "",
     "select": "smart",
     "subtitle_source": "auto",
+    "subtitle_track": -1,
     "max_height": 1080,
     "segments": False,
     "force_hd": False,
@@ -190,6 +191,10 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if opts.get("subtitle_source") not in ("auto", "whisper"):
         opts["subtitle_source"] = "auto"
     try:
+        opts["subtitle_track"] = max(-1, min(64, int(opts.get("subtitle_track", -1))))
+    except (TypeError, ValueError):
+        opts["subtitle_track"] = -1
+    try:
         opts["audio_track"] = max(-1, min(64, int(opts.get("audio_track", -1))))
     except (TypeError, ValueError):
         opts["audio_track"] = -1
@@ -309,6 +314,10 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     duration = info["duration"] or meta.get("duration") or 0
     if duration < 5:
         raise RuntimeError("Видео слишком короткое для нарезки.")
+    try:
+        subtitle_tracks = utils.subtitle_streams(source)
+    except Exception:  # noqa: BLE001
+        subtitle_tracks = []
     _update(pid, title=meta.get("title") or project["title"], duration=round(duration, 2),
             source=str(source), thumb=None)
     db.merge_meta(pid, {
@@ -324,6 +333,7 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
         "fallback_reason": meta.get("fallback_reason"),
         "uploader": meta.get("uploader"), "extractor": meta.get("extractor"),
         "audio_tracks": info.get("audio_streams") or [],
+        "subtitle_tracks": subtitle_tracks,
     })
     return source
 
@@ -589,7 +599,8 @@ def _hook_allowed(transcript: Dict[str, Any]) -> bool:
 
 
 def _existing_subtitles(source: Path, workdir: Path,
-                        dub: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+                        dub: Optional[Path] = None,
+                        track: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Готовые субтитры: приложенные вручную, в дубляже или вшитые в видео.
 
     При включённом дубляже вшитые субтитры исходника не берём: они на языке
@@ -610,11 +621,16 @@ def _existing_subtitles(source: Path, workdir: Path,
             return embedded
         return None
 
-    cached = workdir / "source_subs.srt"
+    index = max(0, int(track)) if track is not None and int(track) >= 0 else 0
+    cached = workdir / (f"source_subs_{index}.srt" if index else "source_subs.srt")
     if not cached.exists() or cached.stat().st_size < 8:
-        if not utils.subtitle_streams(source):
+        tracks = utils.subtitle_streams(source)
+        if not tracks:
             return None
-        if not utils.extract_subtitles(source, cached):
+        if track is not None and int(track) >= 0 and not any(
+                int(item.get("index", -1)) == index for item in tracks):
+            return None
+        if not utils.extract_subtitles(source, cached, index=index):
             return None
     segs = utils.parse_subtitles(cached)
     if not segs:
@@ -694,7 +710,8 @@ def process_project(pid: str) -> None:
         dub_offset = float(opts.get("audio_offset", 0.0) or 0.0)
         if need_text and opts.get("subtitle_source", "auto") != "whisper":
             try:
-                prepared = _existing_subtitles(source, workdir, dub=dub)
+                prepared = _existing_subtitles(source, workdir, dub=dub,
+                                             track=opts.get("subtitle_track"))
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
         if prepared is not None:

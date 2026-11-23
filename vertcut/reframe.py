@@ -81,7 +81,12 @@ def _detect(detector: Tuple[str, Any], frame) -> List[Dict[str, float]]:
     if not hasattr(cv2, "CascadeClassifier"):
         return out
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
+    if cascade.empty():
+        return out
+    try:
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
+    except Exception:  # noqa: BLE001
+        return out
     for (x, y, fw, fh) in faces:
         out.append({"cx": x + fw / 2, "cy": y + fh / 2, "w": float(fw), "h": float(fh), "score": 1.0})
     return out
@@ -263,6 +268,57 @@ def _smooth(values: List[Optional[float]], alpha: float = 0.25,
             current = (out[-1] if out else current) + math.copysign(limit, delta)
         out.append(current)
     return out
+
+
+def frame_box(source: Path, at: float, aspect: str = "9:16") -> Optional[Dict[str, Any]]:
+    """Окно кадрирования для одного кадра: показать его в мастере до рендера."""
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        info = utils.probe(source)
+    except Exception:  # noqa: BLE001
+        return None
+    src_w, src_h = info["width"], info["height"]
+    try:
+        aw, ah = [int(v) for v in str(aspect).split(":")]
+    except Exception:  # noqa: BLE001
+        aw, ah = 9, 16
+    if src_w / max(1, src_h) > aw / max(1, ah):
+        crop_h = src_h
+        crop_w = max(2, int(round(src_h * aw / ah)))
+    else:
+        crop_w = src_w
+        crop_h = max(2, int(round(src_w * ah / aw)))
+    cap = cv2.VideoCapture(str(source))
+    if not cap.isOpened():
+        return None
+    try:
+        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, float(at)) * 1000.0)
+        ok, frame = cap.read()
+        if not ok:
+            return None
+        height, width = frame.shape[:2]
+        scale = min(1.0, 960 / max(1, width))
+        small = cv2.resize(frame, (int(width * scale), int(height * scale))) if scale < 1 else frame
+        faces = _detect(_make_detector(), small)
+        if scale < 1:
+            for face in faces:
+                for key in ("cx", "cy", "w", "h"):
+                    face[key] /= scale
+        cx, cy = src_w / 2.0, src_h * 0.42
+        if faces:
+            biggest = max(faces, key=lambda f: float(f.get("w", 0)) * float(f.get("h", 0)))
+            cx, cy = float(biggest["cx"]), float(biggest["cy"])
+        x = max(0, min(src_w - crop_w, int(round(cx - crop_w / 2.0))))
+        y = max(0, min(src_h - crop_h, int(round(cy - crop_h * 0.45))))
+        return {"x": x, "y": y, "crop_w": int(crop_w), "crop_h": int(crop_h),
+                "source_w": int(src_w), "source_h": int(src_h), "faces": len(faces)}
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        cap.release()
 
 
 def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16",

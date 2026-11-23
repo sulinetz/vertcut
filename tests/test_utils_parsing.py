@@ -9,6 +9,19 @@ from unittest import mock
 from vertcut import utils
 
 
+class SiblingFilesTest(unittest.TestCase):
+    def test_group_by_stem_and_language(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            video = folder / "1.avi"
+            video.write_bytes(b"x")
+            for name in ("1.srt", "1.ru.srt", "1.mka", "1.en.ass", "2.srt", "notes.txt"):
+                (folder / name).write_bytes(b"x")
+            found = {item["name"]: item["kind"] for item in utils.group_sibling_files(folder, video)}
+        self.assertEqual(found, {"1.srt": "subtitles", "1.ru.srt": "subtitles",
+                                 "1.mka": "audio", "1.en.ass": "subtitles"})
+
+
 class SrtTest(unittest.TestCase):
     def test_numeric_lines_survive(self):
         raw = ("1\n00:00:01,000 --> 00:00:02,000\n1990\n\n"
