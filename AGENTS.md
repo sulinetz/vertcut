@@ -10,7 +10,7 @@
 ## Тесты
 
 ```powershell
-cd viralcut
+cd vertcut
 .\.venv-win\Scripts\python.exe -m pytest tests -q
 ```
 
@@ -23,12 +23,12 @@ cd viralcut
 ## Запуск приложения
 
 ```powershell
-cd viralcut
+cd vertcut
 .\.venv-win\Scripts\python.exe desktop\main.py
 ```
 
 Только сервер: `.\.venv-win\Scripts\python.exe -m vertcut --port 8765`.
-Данные лежат в `%APPDATA%\VertCut`, код — в `viralcut\`.
+Данные лежат в `%APPDATA%\VertCut`, код — в `vertcut\`.
 
 ## Архитектурные правила
 

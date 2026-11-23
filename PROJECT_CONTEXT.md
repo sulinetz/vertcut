@@ -11,7 +11,7 @@
 
 ```powershell
 # приложение целиком (окно)
-cd viralcut
+cd vertcut
 .\.venv-win\Scripts\python.exe desktop\main.py
 
 # только сервер, UI в браузере
@@ -21,7 +21,7 @@ cd viralcut
 Данные (база, проекты, модели, логи): `%APPDATA%\VertCut`.
 Тяжёлые проекты можно вынести на другой диск: `VERTCUT_PROJECTS` или строка пути
 в `%APPDATA%\VertCut\projects_dir.txt`. База и модели остаются на системном диске.
-Код и окружение: `viralcut\`.
+Код и окружение: `vertcut\`.
 
 ## Стек
 
@@ -158,7 +158,7 @@ payload только известные ключи. Новую настройк�
 ## Тесты
 
 ```powershell
-cd viralcut
+cd vertcut
 .\.venv-win\Scripts\python.exe -m pytest tests -q
 ```
 
@@ -192,5 +192,4 @@ cd viralcut
 
 Точки отката: `v0.2.0`, `v0.2.1`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0`,
 `v0.6.0` (уникализация и split-screen). Ветка `stable` — рабочая.
-Старые теги `v1.2.0`–`v1.4.1` остались от upstream ViralCut и к VertCut
-отношения не имеют.
+Старые теги `v1.2.0`–`v1.4.1` удалены при ребрендинге.

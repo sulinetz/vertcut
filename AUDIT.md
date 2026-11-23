@@ -22,7 +22,7 @@ vertcut/main.py            FastAPI: 25 роутов в одном файле, м
         │      └── render.py       ffmpeg: кроп/блюр, субтитры, thumb, preview
         ├── live.py          запись HLS-эфиров, нарезка окон, реклама
         ├── db.py            SQLite, WAL, SCHEMA_VERSION=2, connect() на каждый вызов
-        ├── config.py        пути, env (VERTCUT_* + fallback VIRALCUT_*), ffmpeg()
+        ├── config.py        пути, env (VERTCUT_*), ffmpeg()
         └── updater.py       отключён для локальной сборки (DEFAULT_API = "")
 web/  app.js (1880) + styles.css (1267) + index.html — без сборки, глобальный state
 tests/  test_analyze.py (13) + test_reframe.py — только 2 модуля из 17
@@ -76,7 +76,7 @@ tests/  test_analyze.py (13) + test_reframe.py — только 2 модуля �
 | M10 | `test_edge_cases.py` — ручной скрипт с macOS-путём ffmpeg, на Windows не работает | `tests/test_edge_cases.py:13` |
 | M11 | Фронтенд: монолит 1880 строк, глобальный `state`, полная перерисовка `innerHTML` каждые 1.3 с | `web/app.js:228, 288, 841` |
 | M12 | Нет обработки обрыва связи: `poll()` тихо замирает на последнем состоянии | `web/app.js:717-724` |
-| M13 | Брендинг upstream: `docs/index.html` ведёт на `t.me/ivanAI22` и релизы ViralCut; `docs/promo/*`, `RELEASE_NOTES.md:9-24`, `CHANGELOG.md:134` | `docs/`, корень |
+| M13 | Брендинг upstream: ссылки на Telegram и релизы в документации; `docs/promo/*`, `RELEASE_NOTES.md:9-24`, `CHANGELOG.md:134` | `docs/`, корень | удалено |
 
 ### Низко / полировка
 

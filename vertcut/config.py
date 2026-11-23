@@ -12,12 +12,6 @@ WEB_DIR = ROOT / "web"
 ASSETS_DIR = ROOT / "assets"
 FONTS_DIR = ASSETS_DIR / "fonts"
 
-# Совместимость: старые переменные VIRALCUT_* продолжают работать,
-# если новая VERTCUT_* не задана.
-for _key in list(os.environ):
-    if _key.startswith("VIRALCUT_"):
-        os.environ.setdefault("VERTCUT_" + _key[len("VIRALCUT_"):], os.environ[_key])
-
 DATA_DIR = Path(os.environ.get("VERTCUT_DATA", ROOT / "data")).resolve()
 
 
