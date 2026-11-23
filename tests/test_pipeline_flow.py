@@ -74,7 +74,7 @@ class ProcessProjectCase(unittest.TestCase):
         pipeline.clear_cancel("p1")
         self.tmp.cleanup()
 
-    def _run(self, transcript_error=True, fetch=None, find=None):
+    def _run(self, transcript_error=True, fetch=None, find=None, probe=None):
         candidate = {
             "start": 0.0, "end": 10.0, "score": 0.5, "title": "Момент",
             "hook": "", "caption": "",
@@ -84,11 +84,15 @@ class ProcessProjectCase(unittest.TestCase):
         def boom(*_a, **_k):
             raise transcribe.TranscriptionError("речи нет")
 
+        def fake_render(_source, _workdir, clip, _settings, _progress=None):
+            self.db.update_clip(clip["id"], status="ready", error=None)
+
         patches = [
             mock.patch.object(pipeline, "db", self.db),
             mock.patch.object(pipeline, "PROJECTS_DIR", self.dir),
             mock.patch.object(pipeline.utils, "probe",
-                              lambda _p: {"duration": 20.0, "width": 640, "height": 360}),
+                              probe or (lambda _p: {"duration": 20.0, "width": 640,
+                                                    "height": 360})),
             mock.patch.object(pipeline, "_existing_subtitles", lambda *a, **k: None),
             mock.patch.object(pipeline, "_heartbeat",
                               lambda *a, **k: (threading.Event(), _NoThread())),
@@ -100,7 +104,7 @@ class ProcessProjectCase(unittest.TestCase):
                                                 "words": [{"word": "слово", "start": 0.2,
                                                            "end": 1.0}]}],
                                   "engine": "whisper-test"})),
-            mock.patch.object(pipeline, "_render_one", lambda *a, **k: None),
+            mock.patch.object(pipeline, "_render_one", fake_render),
             mock.patch.object(pipeline, "_render_workers", lambda: 1),
             mock.patch.object(pipeline.analyze, "find_segments",
                               lambda *a, **k: find or [candidate]),
@@ -131,6 +135,22 @@ class ProcessProjectCase(unittest.TestCase):
         # у локального файла нет страницы-источника: качать субтитры неоткуда
         fetcher = self._run(transcript_error=True)
         fetcher.assert_not_called()
+
+    def test_transcription_error_falls_back_to_even_split(self):
+        # речи нет и субтитров нет: режем на равные части, а не падаем на None
+        self._run(transcript_error=True)
+        self.assertEqual(self.db.project["status"], "done")
+        self.assertIsNone(self.db.project.get("language"))
+        self.assertEqual(len(self.db.clips), 1)
+        self.assertEqual(self.db.clips[0]["status"], "ready")
+
+    def test_probe_error_is_reported_not_raised(self):
+        def broken(_path):
+            raise pipeline.utils.MediaError("файл повреждён")
+
+        self._run(transcript_error=True, probe=broken)
+        self.assertEqual(self.db.project["status"], "error")
+        self.assertIn("повреждён", self.db.project.get("error") or "")
 
 
 if __name__ == "__main__":

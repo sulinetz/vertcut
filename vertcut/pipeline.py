@@ -661,10 +661,10 @@ def process_project(pid: str) -> None:
                 _update(pid, status="error", error=str(exc)[:600], stage="Ошибка")
             return
 
-    info = utils.probe(source)
-    duration = info["duration"]
-
     try:
+        info = utils.probe(source)
+        duration = info["duration"]
+
         select = opts.get("select") or "smart"
         transcript: Optional[Dict[str, Any]] = None
         need_text = (select != "even" or bool(opts.get("subtitles"))
@@ -731,11 +731,11 @@ def process_project(pid: str) -> None:
                 elif transcript is None:
                     raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
 
-            _update(pid, language=transcript.get("language"))
-            hook_ok = _hook_allowed(transcript)
+            _update(pid, language=(transcript or {}).get("language"))
+            hook_ok = _hook_allowed(transcript or {})
             db.merge_meta(pid, {
-                "engine": transcript.get("engine"),
-                "segments": len(transcript.get("segments") or []),
+                "engine": (transcript or {}).get("engine"),
+                "segments": len((transcript or {}).get("segments") or []),
             })
         else:
             _update(pid, language=None)
