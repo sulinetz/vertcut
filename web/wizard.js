@@ -1,0 +1,590 @@
+/* Мастер настройки: источник → кадр → субтитры → количество. */
+(() => {
+  const UI_KEY = "vertcut.interface";
+  const MODE_WIZARD = "wizard";
+  const MODE_CLASSIC = "classic";
+  const wizard = {
+    pid: null,
+    step: 1,
+    detail: null,
+    timer: null,
+    opts: {},
+    frameT: -1,
+    frameUrl: "",
+    ready: false,
+    picked: null
+  };
+
+  const uiMode = () => (localStorage.getItem(UI_KEY) || MODE_WIZARD);
+  const setUiMode = (mode) => localStorage.setItem(UI_KEY, mode);
+  const usesWizard = () => uiMode() === MODE_WIZARD;
+
+  const defaults = () => ({
+    aspect: "9:16", mode: "auto", platform: "universal", layout: "",
+    split_ratio: 0.5, bg_video: "random",
+    subtitles: true, uppercase: true, show_hook: true,
+    sub_font: "montserrat", sub_size: 118, sub_position: "bottom",
+    sub_offset: 0, sub_speed: "calm", line_gap: 0, accent: "yellow",
+    export_subs: false, keep_fps: true,
+    look: "none", vignette: false, grain: false, zoom: 100, bitrate: 0,
+    music_volume: 8, hflip: false, tilt: 0, speed: 1, pitch: 1,
+    jump_cuts: false, cut_zoom: false,
+    count: 10, min_dur: 15, max_dur: 60, target_dur: 32,
+    select: "smart", export_order: "chrono",
+    audio_track: -1, subtitle_track: -1, subtitle_source: "auto",
+    external_audio: false, external_audio_track: -1, audio_offset: 0,
+    cookies_browser: "", language: "auto", max_height: 1080, segments: false,
+    force_hd: false
+  });
+
+  function mergeOptions(project) {
+    const o = project.options || {};
+    wizard.opts = {
+      ...defaults(),
+      ...o,
+      count: o.count == null ? 10 : o.count,
+      audio_track: o.audio_track == null ? -1 : o.audio_track,
+      subtitle_track: o.subtitle_track == null ? -1 : o.subtitle_track
+    };
+  }
+
+  function closeWizard() {
+    clearTimeout(wizard.timer);
+    wizard.pid = null;
+    wizard.detail = null;
+    wizard.ready = false;
+    $("#modal").classList.add("hidden");
+    $("#modal").innerHTML = "";
+  }
+
+  function stepper() {
+    const names = ["Источник", "Кадр", "Субтитры", "Нарезка"];
+    return `<div class="wz-steps">${names.map((name, i) =>
+      `<span class="wz-step ${wizard.step === i + 1 ? "active" : ""} ${wizard.step > i + 1 ? "done" : ""}">${i + 1}. ${name}</span>`
+    ).join("")}</div>`;
+  }
+
+  function openWizard(pid) {
+    wizard.pid = pid;
+    wizard.step = 1;
+    wizard.frameT = -1;
+    wizard.frameUrl = "";
+    wizard.picked = null;
+    $("#modal").innerHTML = `
+      <div class="modal-backdrop" data-wz-close></div>
+      <div class="modal-panel wz-panel">
+        <div class="modal-head">
+          <h3>Настройка нарезки</h3>
+          <button class="icon-btn" data-wz-close>${ICONS.close}</button>
+        </div>
+        <div id="wzSteps">${stepper()}</div>
+        <div id="wzBody" class="wz-body"><span class="spinner"></span></div>
+        <div class="modal-foot">
+          <button class="btn-ghost" id="wzBack" disabled>Назад</button>
+          <button class="btn-primary" id="wzNext">Далее</button>
+        </div>
+      </div>`;
+    $("#modal").classList.remove("hidden");
+    $$("[data-wz-close]").forEach((b) => b.addEventListener("click", closeWizard));
+    $("#wzBack").addEventListener("click", () => { if (wizard.step > 1) { wizard.step -= 1; render(); } });
+    $("#wzNext").addEventListener("click", next);
+    poll();
+  }
+
+  function poll() {
+    clearTimeout(wizard.timer);
+    if (!wizard.pid) return;
+    api(`/api/projects/${wizard.pid}`).then((detail) => {
+      wizard.detail = detail;
+      const project = detail.project;
+      if (project.status === "draft") {
+        if ((project.url || "").startsWith("http")) {
+          api(`/api/projects/${project.id}/retry`, {
+            method: "POST",
+            body: JSON.stringify({ force_hd: false, prepare_only: true, options: wizard.opts })
+          }).then(() => { wizard.timer = setTimeout(poll, 900); });
+          render();
+          return;
+        }
+        render();
+        return;
+      }
+      if (["queued", "preparing", "running"].includes(project.status)) {
+        render();
+        wizard.timer = setTimeout(poll, 1200);
+        return;
+      }
+      if (project.status === "review") {
+        if (!wizard.ready) mergeOptions(project);
+        wizard.ready = true;
+        render();
+        return;
+      }
+      render();
+    }).catch((err) => {
+      const body = $("#wzBody");
+      if (body) body.innerHTML = `<div class="tmpl-error">${esc(err.message)}</div>`;
+    });
+  }
+
+  function render() {
+    const steps = $("#wzSteps");
+    if (steps) steps.innerHTML = stepper();
+    const body = $("#wzBody");
+    if (!body) return;
+    const project = wizard.detail && wizard.detail.project;
+    const back = $("#wzBack");
+    const next = $("#wzNext");
+    if (back) back.disabled = wizard.step <= 1;
+    if (next) {
+      next.disabled = wizard.step === 1 && !(project && project.status === "review");
+      next.textContent = wizard.step === 4 ? "Сделать нарезки" : "Далее";
+    }
+    if (!project) { body.innerHTML = `<span class="spinner"></span>`; return; }
+    if (wizard.step === 1) body.innerHTML = stepSource(project);
+    if (wizard.step === 2) { body.innerHTML = stepFrame(project); bindFrame(); loadFrame(); }
+    if (wizard.step === 3) { body.innerHTML = stepSubs(project); bindSubs(); }
+    if (wizard.step === 4) { body.innerHTML = stepCount(project); bindCount(); }
+    bindSource(project);
+  }
+
+  const progress = (project) => `
+    <div class="wz-progress">
+      <div class="spinner"></div>
+      <div><b>${esc(project.stage || "Подготовка")}</b><br><span>${Math.round(project.progress || 0)}%</span></div>
+      <div class="bar"><i style="width:${Math.max(2, project.progress || 0)}%"></i></div>
+    </div>`;
+
+  function stepSource(project) {
+    if (["queued", "preparing", "running"].includes(project.status)) return progress(project);
+    const meta = project.meta || {};
+    const audio = project.audio_tracks || meta.audio_tracks || [];
+    const subs = project.subtitle_tracks || meta.subtitle_tracks || [];
+    const audioRows = audio.length ? audio.map((t, i) => {
+      const value = Number(t.index == null ? i : t.index);
+      return `<label class="wz-row"><input type="radio" name="wzAudio" value="${value}" ${Number(wizard.opts.audio_track) === value || (Number(wizard.opts.audio_track) < 0 && t.default) ? "checked" : ""}/> <b>${esc(t.language || "дорожка " + (i + 1))}</b> <span>${esc(t.codec || "")}</span></label>`;
+    }).join("") : `<div class="opt-hint">Дополнительных аудиодорожек нет.</div>`;
+    const subRows = subs.length ? subs.map((t) => `
+      <label class="wz-row"><input type="radio" name="wzSub" value="${Number(t.index)}" ${Number(wizard.opts.subtitle_track) === Number(t.index) ? "checked" : ""}/> <b>${esc(t.language || "без языка")}</b> <span>${esc(t.codec || "")}</span></label>`).join("") : `<div class="opt-hint">Вшитых субтитров нет.</div>`;
+    const dub = project.dub ? `<span class="wz-ok">подключён: ${esc(project.dub.name || "файл")}</span>` : `<span class="muted">не подключён</span>`;
+    const draftLocal = project.status === "draft" && (project.url || "").startsWith("local:");
+    return `
+      <div class="wz-source">
+        <div class="wz-info"><b>${esc(project.title || project.url)}</b>
+          <span>${project.duration ? fmtDur(project.duration) + " · " : ""}${esc(meta.vcodec || "")} ${meta.height ? meta.height + "p" : ""}</span>
+        </div>
+        ${draftLocal ? `<div class="wz-block"><b>Файл ещё не выбран</b><div class="wz-actions">
+          <button class="btn-ghost" id="wzUpload">Загрузить файлом</button>
+          <button class="btn-ghost hidden" id="wzNative">Выбрать файл на диске</button></div>
+          <div id="wzPicked"></div></div>` : ""}
+        <div class="wz-block"><b>Аудиодорожки</b>${audioRows}</div>
+        <div class="wz-block"><b>Субтитры внутри файла</b>${subRows}
+          <label class="toggle"><input type="checkbox" id="wzForceAsr" ${wizard.opts.subtitle_source === "whisper" ? "checked" : ""}/><span class="track"></span><span>Распознать заново (Whisper)</span></label>
+        </div>
+        <div class="wz-block"><b>Дубляж</b> ${dub}
+          <div class="wz-actions"><button class="link-btn" id="wzDub">подключить дубляж</button>
+          <button class="link-btn" id="wzSubs">приложить субтитры</button>
+          <button class="link-btn" id="wzMusic">добавить музыку</button></div>
+        </div>
+      </div>`;
+  }
+
+  function bindSource(project) {
+    const audio = $("#wzBody");
+    if (!audio) return;
+    $$('input[name="wzAudio"]', audio).forEach((el) => el.addEventListener("change", () => {
+      wizard.opts.audio_track = Number(el.value);
+    }));
+    $$('input[name="wzSub"]', audio).forEach((el) => el.addEventListener("change", () => {
+      wizard.opts.subtitle_track = Number(el.value);
+    }));
+    const asr = $("#wzForceAsr");
+    if (asr) asr.addEventListener("change", () => {
+      wizard.opts.subtitle_source = asr.checked ? "whisper" : "auto";
+    });
+    const upload = $("#wzUpload");
+    if (upload) upload.addEventListener("click", () => {
+      wizard.picked = "video";
+      $("#fileInput").click();
+    });
+    const native = $("#wzNative");
+    if (native) native.addEventListener("click", pickNative);
+    const dub = $("#wzDub");
+    if (dub) dub.addEventListener("click", () => { wizard.picked = "dub"; $("#dubInput").click(); });
+    const subs = $("#wzSubs");
+    if (subs) subs.addEventListener("click", () => { wizard.picked = "subs"; $("#subsInput").click(); });
+    const music = $("#wzMusic");
+    if (music) music.addEventListener("click", () => { wizard.picked = "music"; $("#musicInput").click(); });
+    if (native && window.pywebview && window.pywebview.api && window.pywebview.api.pick_source) {
+      native.classList.remove("hidden");
+    }
+  }
+
+  async function pickNative() {
+    try {
+      const res = await window.pywebview.api.pick_source();
+      if (!res || !res.ok) { if (res && !res.cancelled) toast(res.error || "Не удалось выбрать файл", "err"); return; }
+      wizard.pickedFile = res;
+      const group = res.group || [];
+      const options = (kind, label) => {
+        const items = group.filter((g) => g.kind === kind);
+        if (!items.length) return `<div class="opt-hint">${label}: рядом ничего не найдено</div>`;
+        return `<label class="mini-field"><span>${label}</span><select id="wzPick_${kind}">
+          <option value="">не подключать</option>
+          ${items.map((g) => `<option value="${esc(g.path)}">${esc(g.name)}</option>`).join("")}
+        </select></label>`;
+      };
+      const box = $("#wzPicked");
+      if (box) {
+        box.innerHTML = `<div class="wz-block"><b>Найдено рядом с «${esc(res.name)}»</b>
+          ${options("subtitles", "Субтитры")}${options("audio", "Звук/дубляж")}
+          <div class="wz-actions"><button class="btn-primary" id="wzAttach">Подключить</button></div></div>`;
+        $("#wzAttach").addEventListener("click", async () => {
+          const subs = ($("#wzPick_subtitles") || {}).value || "";
+          const dub = ($("#wzPick_audio") || {}).value || "";
+          const attached = await window.pywebview.api.attach_source(wizard.pid, res.video, subs, dub, "");
+          if (!attached || !attached.ok) { toast((attached && attached.error) || "Не удалось подключить", "err"); return; }
+          toast("Файл и дорожки подключены");
+          poll();
+        });
+      }
+    } catch (err) { toast(err.message || "Не удалось выбрать файл", "err"); }
+  }
+
+  function frameCards() {
+    const opt = (group, val, label, extra = "") =>
+      `<button type="button" class="wz-card ${String(wizard.opts[group]) === String(val) ? "active" : ""}" data-wz-group="${group}" data-wz-val="${val}">${label}${extra}</button>`;
+    return {
+      aspect: ["9:16", "1:1", "16:9"].map((a) => opt("aspect", a, ASPECT_META[a].short)).join(""),
+      platform: PLATFORM_OPTIONS.map(([k, v]) => opt("platform", k, v)).join(""),
+      mode: [["auto", "Умный кроп"], ["blur", "Размытый фон"], ["crop", "По центру"]].map(([k, v]) => opt("mode", k, v)).join("")
+    };
+  }
+
+  function stepFrame() {
+    const c = frameCards();
+    return `
+      <div class="wz-frame-layout">
+        <div class="wz-preview"><img id="wzFrame" alt="кадр из видео"><div id="wzCrop"></div>
+          <div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
+          <button type="button" class="wz-reroll" id="wzReroll">Другой кадр</button>
+        </div>
+        <div class="wz-controls">
+          <div class="wz-block"><b>Формат</b><div class="wz-cards">${c.aspect}</div></div>
+          <div class="wz-block"><b>Площадка</b><div class="wz-cards">${c.platform}</div></div>
+          <div class="wz-block"><b>Кадр</b><div class="wz-cards">${c.mode}</div></div>
+          <div class="wz-block"><b>Пресет стрима</b>
+            <select id="wzLayout">
+              <option value="">Выключен</option>
+              <option value="band">Лицо крупно снизу</option>
+              <option value="band_top">Лицо крупно сверху</option>
+              <option value="adhd">Сплит-скрин</option>
+            </select>
+          </div>
+          <div class="wz-block"><b>Индивидуализация</b>
+            <label class="toggle"><input type="checkbox" id="wzHflip" ${wizard.opts.hflip ? "checked" : ""}/><span class="track"></span><span>Зеркало</span></label>
+            <label class="toggle"><input type="checkbox" id="wzCuts" ${wizard.opts.jump_cuts ? "checked" : ""}/><span class="track"></span><span>Склейки пауз</span></label>
+            <label class="toggle"><input type="checkbox" id="wzCutZoom" ${wizard.opts.cut_zoom ? "checked" : ""}/><span class="track"></span><span>Зум на склейках</span></label>
+            <label class="mini-field"><span>Наклон <b id="wzTiltVal">${wizard.opts.tilt}</b>°</span><input type="range" id="wzTilt" min="0" max="3" step="0.5" value="${wizard.opts.tilt}"/></label>
+            <label class="mini-field"><span>Скорость <b id="wzSpeedVal">${Number(wizard.opts.speed).toFixed(2)}</b>×</span><input type="range" id="wzSpeed" min="1" max="1.1" step="0.01" value="${wizard.opts.speed}"/></label>
+            <label class="mini-field"><span>Питч <b id="wzPitchVal">${Number(wizard.opts.pitch).toFixed(2)}</b>×</span><input type="range" id="wzPitch" min="0.95" max="1.05" step="0.01" value="${wizard.opts.pitch}"/></label>
+            <label class="mini-field"><span>Цвет</span><select id="wzLook">
+              <option value="none">Без обработки</option><option value="warm">Тёплый</option>
+              <option value="cool">Холодный</option><option value="contrast">Контрастный</option>
+              <option value="cinematic">Кинематографичный</option><option value="soft">Мягкий</option>
+            </select></label>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function bindFrame() {
+    $("#wzLayout").value = wizard.opts.layout || "";
+    $("#wzLayout").addEventListener("change", (e) => { wizard.opts.layout = e.target.value; });
+    $("#wzLook").value = wizard.opts.look || "none";
+    $("#wzLook").addEventListener("change", (e) => { wizard.opts.look = e.target.value; applyFrameStyle(); });
+    $("#wzHflip").addEventListener("change", (e) => { wizard.opts.hflip = e.target.checked; applyFrameStyle(); });
+    $("#wzCuts").addEventListener("change", (e) => { wizard.opts.jump_cuts = e.target.checked; });
+    $("#wzCutZoom").addEventListener("change", (e) => { wizard.opts.cut_zoom = e.target.checked; });
+    $("#wzTilt").addEventListener("input", (e) => { wizard.opts.tilt = Number(e.target.value); $("#wzTiltVal").textContent = e.target.value; applyFrameStyle(); });
+    $("#wzSpeed").addEventListener("input", (e) => { wizard.opts.speed = Number(e.target.value); $("#wzSpeedVal").textContent = Number(e.target.value).toFixed(2); });
+    $("#wzPitch").addEventListener("input", (e) => { wizard.opts.pitch = Number(e.target.value); $("#wzPitchVal").textContent = Number(e.target.value).toFixed(2); });
+    $$("#wzBody .wz-card").forEach((btn) => btn.addEventListener("click", () => {
+      const group = btn.dataset.wzGroup;
+      wizard.opts[group] = btn.dataset.wzVal;
+      $$(`#wzBody .wz-card[data-wz-group="${group}"]`).forEach((b) => b.classList.toggle("active", b === btn));
+      if (group === "aspect" || group === "mode") loadFrame();
+      if (group === "platform") applyFrameStyle();
+    }));
+    $("#wzReroll").addEventListener("click", () => { wizard.frameT = -1; loadFrame(); });
+  }
+
+  function applyFrameStyle() {
+    const cap = $("#wzCap");
+    if (!cap) return;
+    const transforms = [];
+    if (Number(wizard.opts.tilt) > 0) transforms.push("scale(1.04)", `rotate(${wizard.opts.tilt}deg)`);
+    if (wizard.opts.hflip) transforms.push("scaleX(-1)");
+    cap.style.transform = transforms.join(" ");
+    const looks = { warm: "saturate(1.1)", cool: "saturate(1.05) hue-rotate(-8deg)",
+                    contrast: "contrast(1.12) saturate(1.1)", cinematic: "contrast(1.08) saturate(0.92)",
+                    soft: "contrast(0.96) brightness(1.02)" };
+    cap.style.filter = looks[wizard.opts.look] || "";
+  }
+
+  function loadFrame() {
+    const img = $("#wzFrame");
+    if (!img || !wizard.pid) return;
+    const t = wizard.frameT < 0 ? "" : `&t=${wizard.frameT}`;
+    api(`/api/projects/${wizard.pid}/frame-info?aspect=${encodeURIComponent(wizard.opts.aspect)}${t}`)
+      .then((info) => {
+        wizard.frameT = info.time;
+        wizard.frameUrl = `/api/projects/${wizard.pid}/frame.jpg?t=${info.time}&w=720`;
+        img.onload = () => { drawCrop(info.box); applyFrameStyle(); };
+        img.src = wizard.frameUrl;
+      }).catch(() => {});
+  }
+
+  function drawCrop(box) {
+    const img = $("#wzFrame");
+    const crop = $("#wzCrop");
+    if (!img || !crop || !box) { if (crop) crop.style.display = "none"; return; }
+    const w = img.clientWidth, h = img.clientHeight;
+    const k = Math.min(w / box.source_w, h / box.source_h);
+    crop.style.display = wizard.opts.mode === "auto" ? "block" : "none";
+    crop.style.left = `${(w - box.source_w * k) / 2 + box.x * k}px`;
+    crop.style.top = `${(h - box.source_h * k) / 2 + box.y * k}px`;
+    crop.style.width = `${box.crop_w * k}px`;
+    crop.style.height = `${box.crop_h * k}px`;
+  }
+
+  function stepSubs() {
+    return `
+      <div class="wz-frame-layout">
+        <div class="wz-preview"><img id="wzFrame" alt="кадр"><div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
+          <button type="button" class="wz-reroll" id="wzReroll">Другой кадр</button></div>
+        <div class="wz-controls">
+          <div class="wz-block">
+            <label class="toggle"><input type="checkbox" id="wzSubs" ${wizard.opts.subtitles ? "checked" : ""}/><span class="track"></span><span>Субтитры</span></label>
+            <label class="toggle"><input type="checkbox" id="wzUpper" ${wizard.opts.uppercase ? "checked" : ""}/><span class="track"></span><span>КАПСОМ</span></label>
+            <label class="toggle"><input type="checkbox" id="wzHook" ${wizard.opts.show_hook ? "checked" : ""}/><span class="track"></span><span>Хук сверху</span></label>
+          </div>
+          <div class="wz-block"><b>Шрифт и цвет</b>
+            <label class="mini-field"><span>Шрифт</span><select id="wzFont">${fontOptionsHTML(wizard.opts.sub_font)}</select></label>
+            <div class="swatches" id="wzAccents">${swatchesHTML(wizard.opts.accent)}</div>
+          </div>
+          <div class="wz-block">
+            <label class="mini-field"><span>Размер <b id="wzSizeVal">${wizard.opts.sub_size}</b></span><input type="range" id="wzSize" min="70" max="180" step="2" value="${wizard.opts.sub_size}"/></label>
+            <label class="mini-field"><span>Положение</span><select id="wzPos">${SUB_POSITIONS.map(([k, l]) => `<option value="${k}" ${wizard.opts.sub_position === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+            <label class="mini-field"><span>Сдвиг по вертикали <b id="wzOffVal">${wizard.opts.sub_offset}</b></span><input type="range" id="wzOff" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${wizard.opts.sub_offset}"/></label>
+            <label class="mini-field"><span>Межстрочный интервал <b id="wzGapVal">${wizard.opts.line_gap}</b></span><input type="range" id="wzGap" min="0" max="80" step="2" value="${wizard.opts.line_gap}"/></label>
+            <label class="mini-field"><span>Темп</span><select id="wzSpeedSel">${SUB_SPEEDS.map(([k, l]) => `<option value="${k}" ${wizard.opts.sub_speed === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+            <label class="toggle"><input type="checkbox" id="wzExport" ${wizard.opts.export_subs ? "checked" : ""}/><span class="track"></span><span>Файлы субтитров отдельно</span></label>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function bindSubs() {
+    wizard.frameT = wizard.frameT < 0 ? -1 : wizard.frameT;
+    loadFrame();
+    const on = (id, key, prop = "checked") => {
+      const el = $("#" + id);
+      if (!el) return;
+      el.addEventListener("input", () => {
+        wizard.opts[key] = prop === "checked" ? el.checked : Number(el.value);
+        if (key === "sub_size") $("#wzSizeVal").textContent = el.value;
+        if (key === "sub_offset") { $("#wzOffVal").textContent = el.value; }
+        if (key === "line_gap") $("#wzGapVal").textContent = el.value;
+        updateCaption();
+      });
+    };
+    on("wzSubs", "subtitles"); on("wzUpper", "uppercase"); on("wzHook", "show_hook");
+    on("wzSize", "sub_size"); on("wzOff", "sub_offset"); on("wzGap", "line_gap");
+    $("#wzPos").addEventListener("change", (e) => { wizard.opts.sub_position = e.target.value; updateCaption(); });
+    $("#wzSpeedSel").addEventListener("change", (e) => { wizard.opts.sub_speed = e.target.value; });
+    $("#wzFont").addEventListener("change", (e) => { wizard.opts.sub_font = e.target.value; updateCaption(); });
+    $("#wzExport").addEventListener("change", (e) => { wizard.opts.export_subs = e.target.checked; });
+    $("#wzAccents").addEventListener("click", (e) => {
+      const b = e.target.closest(".swatch");
+      if (!b) return;
+      wizard.opts.accent = b.dataset.val;
+      $$("#wzAccents .swatch").forEach((x) => x.classList.toggle("active", x === b));
+      updateCaption();
+    });
+    $("#wzReroll").addEventListener("click", () => { wizard.frameT = -1; loadFrame(); });
+    updateCaption();
+  }
+
+  function updateCaption() {
+    const cap = $("#wzCap");
+    if (!cap) return;
+    const img = $("#wzFrame");
+    const words = (wizard.opts.uppercase ? "ПРИМЕР СУБТИТРОВ" : "Пример субтитров").split(" ");
+    cap.innerHTML = words.map((w, i) => `<span class="w ${i === 0 ? "hl" : ""}">${esc(w)}</span>`).join(" ");
+    const size = Number(wizard.opts.sub_size || 118) * 0.45 * ((img && img.clientWidth) || 360) / 1080;
+    cap.style.fontFamily = FONT_CSS[wizard.opts.sub_font] || "VCMontserrat";
+    cap.style.fontSize = `${Math.max(9, size)}px`;
+    cap.style.setProperty("--hl", ACCENT_HEX[wizard.opts.accent] || ACCENT_HEX.yellow);
+    cap.style.lineHeight = (1.15 + Number(wizard.opts.line_gap || 0) / 90).toFixed(2);
+    cap.style.display = wizard.opts.subtitles ? "block" : "none";
+    const zone = PLATFORM_ZONES[wizard.opts.platform] || PLATFORM_ZONES.universal;
+    const h = (img && img.clientHeight) || 640;
+    const k = h / 1920;
+    const off = Number(wizard.opts.sub_offset || 0) * k;
+    cap.style.top = ""; cap.style.bottom = ""; cap.style.transform = "";
+    if (wizard.opts.sub_position === "top") cap.style.top = `${pxClamp(zone.top * k - off, 4, h - 10)}px`;
+    else if (wizard.opts.sub_position === "middle") {
+      cap.style.top = `${pxClamp(h / 2 - off, 4, h - 10)}px`;
+      cap.style.transform = "translateY(-50%)";
+    } else cap.style.bottom = `${pxClamp(zone.bottom * k + off, 4, h - 10)}px`;
+    applyFrameStyle();
+  }
+
+  function stepCount() {
+    const dur = Object.entries(DUR_PRESETS).find(([, v]) =>
+      Number(v.min) === Number(wizard.opts.min_dur) && Number(v.max) === Number(wizard.opts.max_dur));
+    return `
+      <div class="wz-count">
+        <div class="wz-block"><b>Сколько нарезок</b>
+          <div class="count-pick">
+            <div class="seg" id="wzCountSeg">
+              ${[5, 10, 20, 50, 0].map((c) => `<button type="button" data-val="${c}" class="${Number(wizard.opts.count) === c ? "active" : ""}">${c === 0 ? "Все" : c}</button>`).join("")}
+            </div>
+            <label class="count-manual"><input type="number" id="wzCount" min="1" max="200" value="${wizard.opts.count > 0 ? wizard.opts.count : ""}" placeholder="своё"/><span>шт.</span></label>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Длительность клипа</label>
+            <select id="wzDur">${Object.entries(DUR_PRESETS).map(([k, v]) => `<option value="${k}" ${dur && dur[0] === k ? "selected" : ""}>${v.label}</option>`).join("")}</select>
+          </div>
+          <div class="field"><label>Что делать</label>
+            <select id="wzSelect">
+              <option value="smart" ${wizard.opts.select === "smart" ? "selected" : ""}>Умные моменты</option>
+              <option value="even" ${wizard.opts.select === "even" ? "selected" : ""}>Просто порезать</option>
+            </select>
+          </div>
+          <div class="field"><label>Порядок экспорта</label>
+            <select id="wzOrder"><option value="chrono" ${wizard.opts.export_order === "chrono" ? "selected" : ""}>По хронологии</option><option value="score" ${wizard.opts.export_order === "score" ? "selected" : ""}>Топ моменты</option></select>
+          </div>
+        </div>
+        <div class="opt-hint">Склейки пауз и скорость пересчитают субтитры автоматически. Хук и текст можно поправить после рендера в редакторе клипа.</div>
+      </div>`;
+  }
+
+  function bindCount() {
+    const input = $("#wzCount");
+    input.addEventListener("input", () => {
+      if (input.value === "") wizard.opts.count = 0;
+      else {
+        const value = pxClamp(Math.round(Number(input.value) || 1), 1, 200);
+        wizard.opts.count = value;
+        if (input.value !== String(value)) input.value = String(value);
+      }
+      $$("#wzCountSeg button").forEach((b) => b.classList.toggle("active", Number(b.dataset.val) === wizard.opts.count));
+    });
+    $("#wzCountSeg").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-val]");
+      if (!btn) return;
+      wizard.opts.count = Number(btn.dataset.val);
+      $$("#wzCountSeg button").forEach((b) => b.classList.toggle("active", b === btn));
+      input.value = wizard.opts.count > 0 ? String(wizard.opts.count) : "";
+    });
+    $("#wzDur").addEventListener("change", (e) => {
+      const preset = DUR_PRESETS[e.target.value];
+      if (preset) Object.assign(wizard.opts, { min_dur: preset.min, max_dur: preset.max, target_dur: preset.target });
+    });
+    $("#wzSelect").addEventListener("change", (e) => { wizard.opts.select = e.target.value; });
+    $("#wzOrder").addEventListener("change", (e) => { wizard.opts.export_order = e.target.value; });
+  }
+
+  async function next() {
+    if (wizard.step < 4) { wizard.step += 1; render(); return; }
+    const btn = $("#wzNext");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span> Запуск`;
+    try {
+      await api(`/api/projects/${wizard.pid}/options`, {
+        method: "POST", body: JSON.stringify({ options: wizard.opts })
+      });
+      await api(`/api/projects/${wizard.pid}/start`, {
+        method: "POST", body: JSON.stringify({ options: wizard.opts })
+      });
+      const pid = wizard.pid;
+      closeWizard();
+      toast("Нарезка запущена");
+      await loadProjects();
+      openProject(pid);
+      schedulePoll(500);
+    } catch (err) {
+      toast(err.message || "Не удалось запустить", "err");
+      btn.disabled = false;
+      btn.textContent = "Сделать нарезки";
+    }
+  }
+
+  /* Настройки: вкладка «Интерфейс» и место под будущие. */
+  function openSettings() {
+    $("#modal").innerHTML = `
+      <div class="modal-backdrop" data-wz-close></div>
+      <div class="modal-panel settings-panel">
+        <div class="modal-head"><h3>Настройки</h3><button class="icon-btn" data-wz-close>${ICONS.close}</button></div>
+        <div class="settings-layout">
+          <div class="settings-tabs">
+            <button class="active" data-tab="interface">Интерфейс</button>
+            <button disabled title="Появится позже">Папки</button>
+            <button disabled title="Появится позже">Обновления</button>
+            <button disabled title="Появится позже">Горячие клавиши</button>
+          </div>
+          <div class="settings-body">
+            <div class="field"><label>Экран создания клипов</label>
+              <label class="wz-row"><input type="radio" name="wzUi" value="wizard" ${usesWizard() ? "checked" : ""}/> <b>Мастер по шагам</b>
+                <span>источник → кадр → субтитры → количество</span></label>
+              <label class="wz-row"><input type="radio" name="wzUi" value="classic" ${!usesWizard() ? "checked" : ""}/> <b>Старый экран</b>
+                <span>все настройки одной страницей</span></label>
+            </div>
+            <div class="opt-hint">Остальные вкладки появятся позже — место под них уже готово.</div>
+          </div>
+        </div>
+      </div>`;
+    $("#modal").classList.remove("hidden");
+    $$("[data-wz-close]").forEach((b) => b.addEventListener("click", () => {
+      $("#modal").classList.add("hidden"); $("#modal").innerHTML = "";
+    }));
+    $$('input[name="wzUi"]').forEach((el) => el.addEventListener("change", () => {
+      setUiMode(el.value);
+      toast(el.value === "wizard" ? "Включён мастер по шагам" : "Включён старый экран");
+    }));
+  }
+
+  $("#settingsBtn").addEventListener("click", openSettings);
+
+  /* Все точки входа вызывают openTemplate — подменяем на мастер по настройке. */
+  const classicOpen = openTemplate;
+  openTemplate = function (pid) {
+    if (usesWizard()) openWizard(pid);
+    else classicOpen(pid);
+  };
+
+  /* Файлы, выбранные в шаге 1, уходят в обычные загрузчики app.js. */
+  document.addEventListener("change", (e) => {
+    if (!wizard.pid || !e.target || e.target.type !== "file") return;
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const kind = wizard.picked;
+    wizard.picked = null;
+    e.target.value = "";
+    if (!kind) return;
+    const endpoints = { video: "upload", subs: "subtitles", dub: "dub", music: "music" };
+    const endpoint = endpoints[kind];
+    if (!endpoint) return;
+    const form = new FormData();
+    form.append("file", file);
+    api(`/api/projects/${wizard.pid}/${endpoint}`, { method: "POST", body: form })
+      .then(() => { toast("Файл подключён"); poll(); })
+      .catch((err) => toast(err.message || "Не удалось загрузить файл", "err"));
+  });
+
+  window.openWizard = openWizard;
+  window.openSettings = openSettings;
+})();
