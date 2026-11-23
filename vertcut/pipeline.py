@@ -65,6 +65,34 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "export_order": "chrono",
 }
 
+# Единый список настроек, которые попадают в клип. Его используют
+# _clip_settings, process_project, rerender_clip, live._settings и ClipEdit.
+CLIP_SETTING_KEYS = (
+    "aspect", "mode", "subtitles", "accent", "uppercase", "show_hook",
+    "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "line_gap",
+    "platform", "layout", "look", "vignette", "grain", "zoom", "bitrate",
+    "music_volume", "hflip", "tilt", "speed", "pitch", "jump_cuts", "cut_zoom",
+    "bg_video", "split_ratio", "segments", "export_subs",
+    "audio_track", "external_audio", "external_audio_track", "audio_offset",
+)
+
+_TRUE = {"1", "true", "yes", "on", "да", "y", "t"}
+_FALSE = {"0", "false", "no", "off", "нет", "n", "f", ""}
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """bool("false") — это True; для настроек из JSON/форм нужен явный разбор."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value if value is not None else "").strip().lower()
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    return bool(default)
+
 
 def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     opts = dict(DEFAULT_OPTIONS)
@@ -92,7 +120,7 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     try:
         size = int(opts.get("sub_size", 118))
         if size < 70:
-            size = 118
+            size = 70
         opts["sub_size"] = max(70, min(180, size))
     except Exception:
         opts["sub_size"] = 118
@@ -105,12 +133,15 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["sub_position"] = "middle"
     if opts.get("sub_speed") not in subtitles.SPEEDS:
         opts["sub_speed"] = "calm"
-    opts["keep_fps"] = bool(opts.get("keep_fps", True))
-    opts["export_subs"] = bool(opts.get("export_subs", False))
+    opts["keep_fps"] = _as_bool(opts.get("keep_fps", True), True)
+    opts["export_subs"] = _as_bool(opts.get("export_subs", False), False)
+    opts["subtitles"] = _as_bool(opts.get("subtitles", True), True)
+    opts["uppercase"] = _as_bool(opts.get("uppercase", True), True)
+    opts["show_hook"] = _as_bool(opts.get("show_hook", True), True)
     if opts.get("look") not in ("none", "warm", "cool", "contrast", "cinematic", "soft"):
         opts["look"] = "none"
-    opts["vignette"] = bool(opts.get("vignette", False))
-    opts["grain"] = bool(opts.get("grain", False))
+    opts["vignette"] = _as_bool(opts.get("vignette", False), False)
+    opts["grain"] = _as_bool(opts.get("grain", False), False)
     try:
         opts["zoom"] = max(100, min(120, int(opts.get("zoom", 100))))
     except (TypeError, ValueError):
@@ -123,9 +154,9 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["music_volume"] = max(0, min(50, int(opts.get("music_volume", 8))))
     except (TypeError, ValueError):
         opts["music_volume"] = 8
-    opts["hflip"] = bool(opts.get("hflip", False))
-    opts["jump_cuts"] = bool(opts.get("jump_cuts", False))
-    opts["cut_zoom"] = bool(opts.get("cut_zoom", False))
+    opts["hflip"] = _as_bool(opts.get("hflip", False), False)
+    opts["jump_cuts"] = _as_bool(opts.get("jump_cuts", False), False)
+    opts["cut_zoom"] = _as_bool(opts.get("cut_zoom", False), False)
     try:
         opts["tilt"] = max(0.0, min(3.0, round(float(opts.get("tilt", 0.0) or 0.0), 2)))
     except (TypeError, ValueError):
@@ -170,7 +201,7 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["audio_offset"] = round(max(-300.0, min(300.0, float(opts.get("audio_offset", 0.0) or 0.0))), 2)
     except (TypeError, ValueError):
         opts["audio_offset"] = 0.0
-    opts["external_audio"] = bool(opts.get("external_audio", False))
+    opts["external_audio"] = _as_bool(opts.get("external_audio", False), False)
     if opts.get("export_order") not in ("chrono", "score"):
         opts["export_order"] = "chrono"
     try:
@@ -182,8 +213,8 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     except Exception:
         mh = 1080
     opts["max_height"] = mh if mh in (2160, 1440, 1080, 720, 480, 360) else 1080
-    opts["segments"] = bool(opts.get("segments"))
-    opts["force_hd"] = bool(opts.get("force_hd"))
+    opts["segments"] = _as_bool(opts.get("segments"), False)
+    opts["force_hd"] = _as_bool(opts.get("force_hd"), False)
     opts["language"] = str(opts.get("language") or "auto")
     if opts["language"] == "auto":
         opts["language"] = ""
@@ -298,29 +329,10 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
 
 
 def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "aspect": opts["aspect"], "mode": opts["mode"], "subtitles": opts["subtitles"],
-        "accent": opts["accent"], "uppercase": opts["uppercase"],
-        "show_hook": opts["show_hook"], "focus_x": 0.5, "sub_size": opts["sub_size"],
-        "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
-        "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
-        "line_gap": opts["line_gap"],
-        "platform": opts["platform"], "layout": opts["layout"],
-        "fps": None if opts.get("keep_fps", True) else 30.0,
-        "export_subs": bool(opts.get("export_subs", False)),
-        "look": opts["look"], "vignette": opts["vignette"], "grain": opts["grain"],
-        "zoom": opts["zoom"], "bitrate": opts["bitrate"],
-        "music_volume": opts["music_volume"],
-        "hflip": opts["hflip"], "tilt": opts["tilt"],
-        "speed": opts["speed"], "pitch": opts["pitch"],
-        "jump_cuts": opts["jump_cuts"], "cut_zoom": opts["cut_zoom"],
-        "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
-        "segments": bool(opts.get("segments")),
-        "audio_track": int(opts.get("audio_track", -1)),
-        "external_audio": bool(opts.get("external_audio", False)),
-        "external_audio_track": int(opts.get("external_audio_track", -1)),
-        "audio_offset": float(opts.get("audio_offset", 0.0) or 0.0),
-    }
+    settings = {key: opts[key] for key in CLIP_SETTING_KEYS if key in opts}
+    settings["focus_x"] = 0.5
+    settings["fps"] = None if opts.get("keep_fps", True) else 30.0
+    return settings
 
 
 def _audio_track(opts: Dict[str, Any]) -> Optional[int]:
@@ -769,29 +781,8 @@ def process_project(pid: str) -> None:
         if not found:
             raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")
 
-        clip_settings = {
-            "aspect": opts["aspect"], "mode": opts["mode"], "subtitles": opts["subtitles"],
-            "accent": opts["accent"], "uppercase": opts["uppercase"],
-            "show_hook": bool(opts["show_hook"]) and hook_ok,
-            "focus_x": 0.5, "sub_size": opts["sub_size"],
-            "sub_font": opts["sub_font"], "sub_position": opts["sub_position"],
-            "sub_offset": opts["sub_offset"], "sub_speed": opts["sub_speed"],
-            "line_gap": opts["line_gap"],
-            "platform": opts["platform"], "layout": opts["layout"],
-            "fps": None if opts.get("keep_fps", True) else 30.0,
-            "export_subs": bool(opts.get("export_subs", False)),
-            "look": opts["look"], "vignette": opts["vignette"], "grain": opts["grain"],
-            "zoom": opts["zoom"], "bitrate": opts["bitrate"],
-            "music_volume": opts["music_volume"],
-            "hflip": opts["hflip"], "tilt": opts["tilt"],
-            "speed": opts["speed"], "pitch": opts["pitch"],
-            "jump_cuts": opts["jump_cuts"], "cut_zoom": opts["cut_zoom"],
-            "bg_video": opts["bg_video"], "split_ratio": opts["split_ratio"],
-            "audio_track": int(opts.get("audio_track", -1)),
-            "external_audio": bool(opts.get("external_audio", False)),
-            "external_audio_track": int(opts.get("external_audio_track", -1)),
-            "audio_offset": float(opts.get("audio_offset", 0.0) or 0.0),
-        }
+        clip_settings = _clip_settings(opts)
+        clip_settings["show_hook"] = bool(opts["show_hook"]) and hook_ok
         _check_cancel(pid)
         total = len(found)
         progress(0.60, f"Рендер {total} клипов")
@@ -1159,12 +1150,7 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
     settings = dict(clip["settings"])
     if settings.get("segments"):
         raise RuntimeError("Клип собран в экономном режиме из фрагмента. Шаблон меняется до запуска нарезки.")
-    for key in ("aspect", "mode", "subtitles", "accent", "uppercase", "show_hook", "focus_x",
-                "sub_size", "sub_font", "sub_position", "sub_offset", "sub_speed", "line_gap",
-                "platform", "layout", "look", "vignette", "grain", "zoom", "bitrate",
-                "music_volume", "hflip", "tilt", "speed", "pitch", "jump_cuts", "cut_zoom",
-                "bg_video", "split_ratio", "fps", "audio_track", "external_audio",
-                "external_audio_track", "audio_offset"):
+    for key in (*CLIP_SETTING_KEYS, "fps", "focus_x"):
         if key in payload and payload[key] is not None:
             settings[key] = payload[key]
     if (payload.get("layout") == "adhd" and payload.get("sub_position") is None

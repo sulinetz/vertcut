@@ -444,35 +444,12 @@ def _ad_overlap(start: float, end: float, intervals: List[Dict[str, Any]]) -> fl
 
 
 def _settings(opts: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "aspect": opts.get("aspect", "9:16"), "mode": opts.get("mode", "auto"),
-        "subtitles": opts.get("subtitles", True), "accent": opts.get("accent", "yellow"),
-        "uppercase": opts.get("uppercase", True), "show_hook": opts.get("show_hook", True),
-        "focus_x": 0.5, "sub_size": int(opts.get("sub_size", 118)),
-        "sub_font": opts.get("sub_font", "montserrat"),
-        "sub_position": opts.get("sub_position", "bottom"),
-        "sub_offset": int(opts.get("sub_offset", 0)),
-        "sub_speed": opts.get("sub_speed", "calm"),
-        "line_gap": int(opts.get("line_gap", 0) or 0),
-        "platform": opts.get("platform", "universal"),
-        "layout": opts.get("layout", ""),
-        "fps": None if opts.get("keep_fps", True) else 30.0,
-        "export_subs": bool(opts.get("export_subs", False)),
-        "look": opts.get("look", "none"),
-        "vignette": bool(opts.get("vignette", False)),
-        "grain": bool(opts.get("grain", False)),
-        "zoom": int(opts.get("zoom", 100) or 100),
-        "bitrate": int(opts.get("bitrate", 0) or 0),
-        "music_volume": int(opts.get("music_volume", 8) or 8),
-        "hflip": bool(opts.get("hflip", False)),
-        "tilt": float(opts.get("tilt", 0.0) or 0.0),
-        "speed": float(opts.get("speed", 1.0) or 1.0),
-        "pitch": float(opts.get("pitch", 1.0) or 1.0),
-        "jump_cuts": bool(opts.get("jump_cuts", False)),
-        "cut_zoom": bool(opts.get("cut_zoom", False)),
-        "bg_video": opts.get("bg_video", "random"),
-        "split_ratio": float(opts.get("split_ratio", 0.5) or 0.5),
-    }
+    from .pipeline import CLIP_SETTING_KEYS
+
+    settings = {key: opts.get(key) for key in CLIP_SETTING_KEYS}
+    settings["focus_x"] = 0.5
+    settings["fps"] = None if opts.get("keep_fps", True) else 30.0
+    return settings
 
 
 def _window_label(start: float, end: float) -> str:

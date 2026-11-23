@@ -152,6 +152,9 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
     from . import platforms, render, subtitles
 
     data = {k: v for k, v in body.model_dump().items() if v is not None}
+    allowed = {"text", "start", "end", "hook", "title", "caption", "focus_x"}
+    allowed |= set(pipeline.CLIP_SETTING_KEYS)
+    data = {k: v for k, v in data.items() if k in allowed}
     if "aspect" in data and data["aspect"] not in render.ASPECTS:
         raise HTTPException(400, "Неизвестный формат кадра")
     if "mode" in data and data["mode"] not in ("auto", "blur", "crop"):
