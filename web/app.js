@@ -358,6 +358,38 @@ function syncExamples() {
   if (input) input.value = o.count > 0 ? String(o.count) : "";
 }
 
+// Общие настройки кадра для новых видео: мастер и старый экран берут их при запуске.
+const DEFAULTS_KEY = "vertcut.defaults";
+const FRAME_DEFAULTS = ["aspect", "mode", "platform", "layout"];
+
+function loadFrameDefaults() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(DEFAULTS_KEY) || "{}");
+    const out = {};
+    for (const key of FRAME_DEFAULTS) {
+      if (stored[key] != null && stored[key] !== "") out[key] = stored[key];
+    }
+    return out;
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveFrameDefaults(patch) {
+  const current = { ...loadFrameDefaults(), ...patch };
+  localStorage.setItem(DEFAULTS_KEY, JSON.stringify(current));
+  Object.assign(state.opts, current);
+  return current;
+}
+
+function syncHeroFrameOptions() {
+  for (const key of FRAME_DEFAULTS) {
+    $$(`.seg[data-group="${key}"] button`).forEach((b) => {
+      b.classList.toggle("active", String(b.dataset.val) === String(state.opts[key]));
+    });
+  }
+}
+
 const state = {
   projects: [],
   current: null,
@@ -414,6 +446,9 @@ const state = {
     fontTarget: "#fontSelect"
   }
 };
+
+// Значения по умолчанию из настроек: новые проекты сразу с нужным форматом.
+Object.assign(state.opts, loadFrameDefaults());
 
 /* ---------------- API ---------------- */
 

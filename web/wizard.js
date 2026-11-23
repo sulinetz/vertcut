@@ -576,17 +576,49 @@
         <div class="modal-head"><h3>Настройки</h3><button class="icon-btn" data-wz-close>${ICONS.close}</button></div>
         <div class="settings-layout">
           <div class="settings-tabs">
-            <button class="active" data-tab="interface">Интерфейс</button>
+            <button class="active" data-tab="frame">Кадр и формат</button>
+            <button data-tab="interface">Интерфейс</button>
             <button disabled title="Появится позже">Папки</button>
             <button disabled title="Появится позже">Обновления</button>
             <button disabled title="Появится позже">Горячие клавиши</button>
           </div>
           <div class="settings-body">
+            <div id="settingsFrame">
+              <div class="row2">
+                <div class="field"><label>Формат кадра</label>
+                  <select id="setAspect">${Object.entries(ASPECT_META).map(([k, m]) => `<option value="${k}" ${state.opts.aspect === k ? "selected" : ""}>${k} — ${m.short}</option>`).join("")}</select>
+                </div>
+                <div class="field"><label>Кадрирование</label>
+                  <select id="setMode">
+                    <option value="auto" ${state.opts.mode === "auto" ? "selected" : ""}>Умный кроп (по лицу)</option>
+                    <option value="blur" ${state.opts.mode === "blur" ? "selected" : ""}>Размытый фон</option>
+                    <option value="crop" ${state.opts.mode === "crop" ? "selected" : ""}>По центру</option>
+                  </select>
+                </div>
+              </div>
+              <div class="row2">
+                <div class="field"><label>Площадка</label>
+                  <select id="setPlatform">${PLATFORM_OPTIONS.map(([k, v]) => `<option value="${k}" ${state.opts.platform === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+                </div>
+                <div class="field"><label>Пресет стрима</label>
+                  <select id="setLayout">
+                    <option value="" ${!state.opts.layout ? "selected" : ""}>Выключен</option>
+                    <option value="band" ${state.opts.layout === "band" ? "selected" : ""}>Лицо крупно снизу</option>
+                    <option value="band_top" ${state.opts.layout === "band_top" ? "selected" : ""}>Лицо крупно сверху</option>
+                    <option value="adhd" ${state.opts.layout === "adhd" ? "selected" : ""}>Сплит-скрин</option>
+                  </select>
+                </div>
+              </div>
+              <div class="opt-hint">Эти настройки применяются ко всем новым видео. В мастере на шаге «Кадр» их можно поменять для конкретного проекта.</div>
+              <div class="wz-actions" id="setApplyRow"></div>
+            </div>
+            <div id="settingsInterface" hidden>
             <div class="field"><label>Экран создания клипов</label>
               <label class="wz-row"><input type="radio" name="wzUi" value="wizard" ${usesWizard() ? "checked" : ""}/> <b>Мастер по шагам</b>
                 <span>источник → кадр → субтитры → количество</span></label>
               <label class="wz-row"><input type="radio" name="wzUi" value="classic" ${!usesWizard() ? "checked" : ""}/> <b>Старый экран</b>
                 <span>все настройки одной страницей</span></label>
+            </div>
             </div>
             <div class="opt-hint">Остальные вкладки появятся позже — место под них уже готово.</div>
           </div>
@@ -596,6 +628,55 @@
     $$("[data-wz-close]").forEach((b) => b.addEventListener("click", () => {
       $("#modal").classList.add("hidden"); $("#modal").innerHTML = "";
     }));
+    $$(".settings-tabs button[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
+      $$(".settings-tabs button").forEach((b) => b.classList.toggle("active", b === tab));
+      $("#settingsFrame").hidden = tab.dataset.tab !== "frame";
+      $("#settingsInterface").hidden = tab.dataset.tab !== "interface";
+    }));
+    const saveFrame = () => {
+      saveFrameDefaults({
+        aspect: $("#setAspect").value,
+        mode: $("#setMode").value,
+        platform: $("#setPlatform").value,
+        layout: $("#setLayout").value
+      });
+      syncHeroFrameOptions();
+      toast("Настройки кадра сохранены");
+    };
+    ["setAspect", "setMode", "setPlatform", "setLayout"].forEach((id) => {
+      $("#" + id).addEventListener("change", saveFrame);
+    });
+    const applyRow = $("#setApplyRow");
+    if (applyRow && state.detail) {
+      const done = state.detail.project.status === "done";
+      applyRow.innerHTML = `<button class="btn-ghost" id="applyToProject">Применить к текущему проекту</button>` +
+        (done ? ` <button class="btn-ghost" id="rerenderProject">Перерендерить все клипы</button>` : "");
+      $("#applyToProject").addEventListener("click", async () => {
+        const pid = state.detail.project.id;
+        try {
+          await api(`/api/projects/${pid}/options`, {
+            method: "POST",
+            body: JSON.stringify({ options: loadFrameDefaults() })
+          });
+          toast("Настройки кадра применены к проекту");
+        } catch (err) { toast(err.message || "Не удалось применить", "err"); }
+      });
+      const rerender = $("#rerenderProject");
+      if (rerender) rerender.addEventListener("click", async () => {
+        const ready = (state.detail.clips || []).filter((c) => c.status === "ready");
+        if (!ready.length) { toast("Нет готовых клипов", "err"); return; }
+        if (!confirm(`Перерендерить ${ready.length} клипов с новыми настройками кадра?`)) return;
+        try {
+          for (const clip of ready) {
+            await api(`/api/clips/${clip.id}/rerender`, {
+              method: "POST",
+              body: JSON.stringify(loadFrameDefaults())
+            });
+          }
+          toast(`Перерендер запущен: ${ready.length} клипов`);
+        } catch (err) { toast(err.message || "Не удалось запустить", "err"); }
+      });
+    }
     $$('input[name="wzUi"]').forEach((el) => el.addEventListener("change", () => {
       setUiMode(el.value);
       if (!state.current) { state.mainKey = ""; renderMain(true); }
