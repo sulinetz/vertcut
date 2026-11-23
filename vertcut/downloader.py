@@ -525,8 +525,50 @@ def download_file(url: str, dest_dir: Path, progress: ProgressCb = None) -> Dict
             "height": None}
 
 
-def fetch_subtitles(url: str, dest_dir: Path, browser: Optional[str] = None) -> Optional[str]:
-    """Пробует скачать готовые субтитры (ru/en) — резервный путь без Whisper."""
+def _sub_language(path: Path) -> str:
+    """Язык из имени вида subs.ru.vtt -> ru. Без языкового суффикса — пусто."""
+    parts = Path(path).stem.split(".")
+    if len(parts) < 2:
+        return ""
+    lang = parts[-1].lower()
+    if lang in ("ru", "rus"):
+        return "ru"
+    if lang in ("en", "eng"):
+        return "en"
+    return "" if lang == "subs" else lang
+
+
+def _clear_subtitles(dest_dir: Path) -> None:
+    """Старые субтитры не должны попадать в выдачу новой загрузки."""
+    for path in dest_dir.glob("subs*.vtt"):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _pick_subtitle(dest_dir: Path) -> Optional[tuple[Path, str]]:
+    """Русские субтитры важнее английских, остальные — по имени файла."""
+    files = [p for p in dest_dir.glob("subs*.vtt") if p.stat().st_size > 8]
+    if not files:
+        return None
+
+    def priority(path: Path) -> tuple:
+        lang = _sub_language(path)
+        rank = 0 if lang == "ru" else 1 if lang == "en" else 2
+        return rank, path.name
+
+    path = min(files, key=priority)
+    return path, _sub_language(path)
+
+
+def fetch_subtitles(url: str, dest_dir: Path,
+                    browser: Optional[str] = None) -> Optional[tuple[Path, str]]:
+    """Пробует скачать готовые субтитры (ru/en) — резервный путь без Whisper.
+
+    Возвращает (путь, язык): язык нужен, чтобы не подписывать английские
+    субтитры русскими и не хардкодить «ru» в проекте.
+    """
     import yt_dlp
 
     ensure_path()
@@ -542,6 +584,7 @@ def fetch_subtitles(url: str, dest_dir: Path, browser: Optional[str] = None) -> 
     }
     opts.update(_cookie_opts(browser))
     for client in (None, ["android_vr", "android"]):
+        _clear_subtitles(dest_dir)
         attempt = dict(opts)
         if client:
             attempt["extractor_args"] = {"youtube": {"player_client": client}}
@@ -550,9 +593,9 @@ def fetch_subtitles(url: str, dest_dir: Path, browser: Optional[str] = None) -> 
                 ydl.download([url])
         except Exception:  # noqa: BLE001
             continue
-        files = sorted(dest_dir.glob("subs*.vtt"))
-        if files:
-            return str(files[0])
+        picked = _pick_subtitle(dest_dir)
+        if picked is not None:
+            return picked
     return None
 
 

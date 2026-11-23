@@ -713,13 +713,19 @@ def process_project(pid: str) -> None:
                 stop_hb.set(); hb_thread.join(timeout=1)
             except Exception as exc:  # noqa: BLE001
                 stop_hb.set(); hb_thread.join(timeout=1)
-                sub_path = downloader.fetch_subtitles(project["url"], workdir,
-                                                      browser=opts.get("cookies_browser") or None)
+                sub_path = None
+                sub_lang = ""
+                if not project["url"].startswith("local:"):
+                    found_sub = downloader.fetch_subtitles(
+                        project["url"], workdir,
+                        browser=opts.get("cookies_browser") or None)
+                    if found_sub:
+                        sub_path, sub_lang = found_sub
                 if sub_path:
                     segs = utils.parse_vtt(Path(sub_path))
                     if segs:
-                        transcript = {"language": "ru", "duration": duration, "segments": segs,
-                                      "engine": "source-subtitles"}
+                        transcript = {"language": sub_lang, "duration": duration,
+                                      "segments": segs, "engine": "source-subtitles"}
                 if transcript is None and isinstance(exc, transcribe.TranscriptionError):
                     no_speech = True
                 elif transcript is None:
