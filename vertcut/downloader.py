@@ -518,6 +518,8 @@ def download_file(url: str, dest_dir: Path, progress: ProgressCb = None) -> Dict
                 got += len(chunk)
                 if progress and total:
                     progress(min(got / total, 0.99), f"Скачивание {got/total*100:.0f}%")
+    except Cancelled:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise DownloadError(f"Не удалось скачать файл по ссылке: {exc}") from exc
     return {"path": path, "title": Path(url.split("?")[0]).name or "video", "duration": None,

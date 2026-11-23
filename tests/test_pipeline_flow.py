@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from vertcut import pipeline, transcribe
+from vertcut.errors import Cancelled
 
 
 class FakeDB:
@@ -84,7 +85,22 @@ class ProcessProjectCase(unittest.TestCase):
         def boom(*_a, **_k):
             raise transcribe.TranscriptionError("речи нет")
 
-        def fake_render(_source, _workdir, clip, _settings, _progress=None):
+        def cancelled(*_a, **_k):
+            raise Cancelled()
+
+        def ok(*_a, **_k):
+            return {
+                "language": "ru", "duration": 20.0,
+                "segments": [{"start": 0.2, "end": 1.0, "text": "слово",
+                              "words": [{"word": "слово", "start": 0.2, "end": 1.0}]}],
+                "engine": "whisper-test",
+            }
+
+        worker = {"cancel": cancelled, "error": boom}.get(
+            transcript_error, ok) if isinstance(transcript_error, str) else (
+            boom if transcript_error else ok)
+
+        def fake_render(_source, _workdir, clip, _settings, _progress=None, **_kwargs):
             self.db.update_clip(clip["id"], status="ready", error=None)
 
         patches = [
@@ -97,13 +113,7 @@ class ProcessProjectCase(unittest.TestCase):
             mock.patch.object(pipeline, "_heartbeat",
                               lambda *a, **k: (threading.Event(), _NoThread())),
             mock.patch.object(pipeline.transcribe, "model_cached", lambda: True),
-            mock.patch.object(pipeline.transcribe, "transcribe",
-                              boom if transcript_error else (lambda *a, **k: {
-                                  "language": "ru", "duration": 20.0,
-                                  "segments": [{"start": 0.2, "end": 1.0, "text": "слово",
-                                                "words": [{"word": "слово", "start": 0.2,
-                                                           "end": 1.0}]}],
-                                  "engine": "whisper-test"})),
+            mock.patch.object(pipeline.transcribe, "transcribe", worker),
             mock.patch.object(pipeline, "_render_one", fake_render),
             mock.patch.object(pipeline, "_render_workers", lambda: 1),
             mock.patch.object(pipeline.analyze, "find_segments",
@@ -151,6 +161,12 @@ class ProcessProjectCase(unittest.TestCase):
         self._run(transcript_error=True, probe=broken)
         self.assertEqual(self.db.project["status"], "error")
         self.assertIn("повреждён", self.db.project.get("error") or "")
+
+    def test_recognition_cancelled_stops_project(self):
+        # отмена не должна уходить в ветку «речи нет» с загрузкой субтитров
+        fetcher = self._run(transcript_error="cancel")
+        fetcher.assert_not_called()
+        self.assertEqual(self.db.project["status"], "cancelled")
 
 
 if __name__ == "__main__":

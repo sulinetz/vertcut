@@ -55,6 +55,9 @@ def _guarded(pid: str, target) -> None:
         _running[pid] = 1
 
     def work() -> None:
+        # Флаг отмены мог остаться от предыдущего запуска: ретрай ставит задачу
+        # в очередь, не сбрасывая его, поэтому чистим ровно перед новым стартом.
+        pipeline.clear_cancel(pid)
         try:
             target()
         except Exception as exc:  # noqa: BLE001

@@ -460,7 +460,8 @@ def _process_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
             # к нему неприменим, как и внешний дубляж: он разложен по всему видео.
             _render_one(part, workdir, virtual,
                         {**settings, "audio_track": -1, "external_audio": False},
-                        lambda p, _i=i: progress(0.55 + (_i + p) / total * 0.45, label))
+                        lambda p, _i=i: progress(0.55 + (_i + p) / total * 0.45, label),
+                        is_cancelled=lambda: pid in CANCELLED)
             db.update_clip(clip["id"], status="ready", error=None)
             rendered += 1
             shutil.rmtree(sections / clip["id"], ignore_errors=True)
@@ -711,6 +712,9 @@ def process_project(pid: str) -> None:
                         audio_track=_audio_track(opts),
                     )
                 stop_hb.set(); hb_thread.join(timeout=1)
+            except Cancelled:
+                stop_hb.set(); hb_thread.join(timeout=1)
+                raise
             except Exception as exc:  # noqa: BLE001
                 stop_hb.set(); hb_thread.join(timeout=1)
                 sub_path = None
@@ -810,7 +814,8 @@ def process_project(pid: str) -> None:
                     state["cancel"] = True
                 return False
             try:
-                _render_one(source, workdir, clip, clip_settings, lambda p: None)
+                _render_one(source, workdir, clip, clip_settings, lambda p: None,
+                            is_cancelled=lambda: pid in CANCELLED)
             except Cancelled:
                 with lock:
                     state["cancel"] = True
@@ -931,7 +936,8 @@ def _adhd_bg_file(choice: str) -> Optional[Path]:
 
 
 def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
-                settings: Dict[str, Any], on_progress: Optional[Callable[[float], None]] = None) -> None:
+                settings: Dict[str, Any], on_progress: Optional[Callable[[float], None]] = None,
+                is_cancelled: Optional[Callable[[], bool]] = None) -> None:
     out_dir = workdir / "clips"
     ass_dir = workdir / "ass"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1081,6 +1087,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         external_audio=_external_audio_path(workdir, settings),
         audio_offset=float(settings.get("audio_offset", 0.0) or 0.0),
         external_audio_track=_track_index(settings.get("external_audio_track")),
+        is_cancelled=is_cancelled,
     )
     settings = {**settings, "render_encoder": result.get("encoder", "libx264")}
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"
@@ -1138,7 +1145,8 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
                    settings=settings, error=None)
     updated = db.get_clip(clip_id)
     if project.get("source"):
-        _render_one(Path(project["source"]), workdir, updated, settings, on_progress)
+        _render_one(Path(project["source"]), workdir, updated, settings, on_progress,
+                    is_cancelled=lambda: clip["project_id"] in CANCELLED)
     else:
         from . import live
         # клип из прямого эфира: берём фрагмент из записанных сегментов

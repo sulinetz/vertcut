@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import utils
 from .config import (DATA_DIR, MODELS_DIR, WHISPER_COMPUTE, WHISPER_CUDA_COMPUTE,
                      WHISPER_DEVICE, WHISPER_LOCAL_DIR, WHISPER_MODEL, ffmpeg)
+from .errors import Cancelled
 
 # Всё, что качает HuggingFace, держим внутри папки проекта.
 os.environ.setdefault("HF_HOME", str(DATA_DIR / "hf"))
@@ -589,6 +590,9 @@ def transcribe(media: Path, workdir: Path, language: Optional[str] = None,
             if not detected_language and getattr(tinfo, "language", None):
                 detected_language = tinfo.language
                 language_probability = round(float(getattr(tinfo, "language_probability", 0.0) or 0.0), 3)
+        except Cancelled:
+            # Отмена пользователя не должна превращаться в «пропускаю часть».
+            raise
         except Exception:  # noqa: BLE001
             traceback.print_exc()
             continue

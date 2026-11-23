@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import ffmpeg
 from . import custom_fonts
+from .errors import Cancelled
 from .reframe import crop_expressions
 from .timeline import dub_pieces, offsets as timeline_offsets
 from .utils import MediaError, probe, probe_audio, run, subprocess_kwargs
@@ -258,7 +259,10 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 bg_path: Optional[Path] = None, bg_start: float = 0.0,
                 split_ratio: float = 0.5, audio_track: Optional[int] = None,
                 external_audio: Optional[Path] = None, audio_offset: float = 0.0,
-                external_audio_track: Optional[int] = None) -> Dict[str, Any]:
+                external_audio_track: Optional[int] = None,
+                is_cancelled: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
+    if is_cancelled is not None and is_cancelled():
+        raise Cancelled()
     speed = max(1.0, min(1.25, float(speed or 1.0)))
     pitch = max(0.85, min(1.15, float(pitch or 1.0)))
     tilt = max(0.0, min(5.0, float(tilt or 0.0)))
@@ -556,7 +560,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     assert proc.stdout is not None and proc.stderr is not None
 
     tail: list = []
-    killed = {"hit": False, "reason": ""}
+    killed = {"hit": False, "cancel": False, "reason": ""}
 
     def _drain_stderr() -> None:
         for line in proc.stderr:  # type: ignore[union-attr]
@@ -585,6 +589,15 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     timer.start()
     try:
         for line in proc.stdout:
+            if is_cancelled is not None and is_cancelled():
+                killed["hit"] = True
+                killed["cancel"] = True
+                killed["reason"] = "отменено"
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+                break
             line = line.strip()
             if line.startswith("out_time_us=") and on_progress:
                 try:
@@ -597,6 +610,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         timer.cancel()
         reader.join(timeout=2)
 
+    if killed.get("cancel"):
+        out_path.unlink(missing_ok=True)
+        raise Cancelled()
     if killed["hit"]:
         out_path.unlink(missing_ok=True)
         raise MediaError(f"Рендер остановлен: {killed['reason']}. Попробуйте ещё раз.")

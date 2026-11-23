@@ -654,7 +654,8 @@ def project_retry(pid: str, body: RetryIn = RetryIn()) -> Dict[str, Any]:
         pipeline.request_cancel(pid)
     options = pipeline.normalize_options(body.options or project.get("options"))
     options["force_hd"] = bool(body.force_hd)
-    pipeline.clear_cancel(pid)
+    # Флаг отмены снимает jobs._guarded перед стартом новой задачи: иначе
+    # текущая (ещё останавливающаяся) обработка потеряет сигнал отмены.
     db.clear_clips(pid)
     db.update_project(pid, status="queued", stage="В очереди", progress=0, error=None,
                       options=options)
