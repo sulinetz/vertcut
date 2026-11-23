@@ -459,7 +459,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 source_rate = int(dub_streams[dub_track].get("sample_rate") or source_rate)
             elif dub_info and dub_info.get("sample_rate"):
                 source_rate = int(dub_info["sample_rate"])
-            audio += _dub_audio_filters(dub_src, segs or [(0.0, src_dur)],
+            audio += _dub_audio_filters(dub_src,
+                                        [(float(clip_start) + a, float(clip_start) + b)
+                                         for a, b in (segs or [(0.0, src_dur)])],
                                         float(audio_offset or 0.0),
                                         float((dub_info or {}).get("duration") or 0.0),
                                         source_rate)

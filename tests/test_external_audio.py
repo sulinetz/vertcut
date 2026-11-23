@@ -149,7 +149,7 @@ class ExternalAudioRenderTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _render(self, dub_info=None, **kwargs):
+    def _render(self, dub_info=None, clip_start=0.0, **kwargs):
         made = []
 
         def fake(cmd, **kw):
@@ -165,8 +165,46 @@ class ExternalAudioRenderTest(unittest.TestCase):
              mock.patch.object(render, "subprocess") as sub:
             sub.Popen.side_effect = fake
             sub.PIPE = -1
-            render.render_clip(self.src, 0.0, 10.0, self.out, **kwargs)
+            render.render_clip(self.src, clip_start, clip_start + 10.0, self.out, **kwargs)
         return made[0]
+
+    def test_dub_pieces_use_absolute_clip_time(self):
+        # клип начинается на 100-й секунде: atrim должен брать те же секунды
+        # из полной дорожки дубляжа, а не 0..3 от начала файла.
+        info = dict(DUB_PROBE)
+        info["duration"] = 200.0
+        cmd = self._render(dub_info=info, clip_start=100.0,
+                           external_audio=self.dub, segments=[(0.0, 3.0), (5.0, 6.0)])
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("[1:a]atrim=start=100.000:end=103.000", graph)
+        self.assertIn("[1:a]atrim=start=105.000:end=106.000", graph)
+
+    def test_absolute_time_respects_positive_offset(self):
+        info = dict(DUB_PROBE)
+        info["duration"] = 200.0
+        cmd = self._render(dub_info=info, clip_start=100.0, external_audio=self.dub,
+                           segments=[(0.0, 3.0), (5.0, 6.0)], audio_offset=2.0)
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("[1:a]atrim=start=98.000:end=101.000", graph)
+        self.assertIn("[1:a]atrim=start=103.000:end=104.000", graph)
+
+    def test_absolute_time_respects_negative_offset(self):
+        info = dict(DUB_PROBE)
+        info["duration"] = 200.0
+        cmd = self._render(dub_info=info, clip_start=100.0, external_audio=self.dub,
+                           segments=[(0.0, 3.0), (5.0, 6.0)], audio_offset=-1.5)
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("[1:a]atrim=start=101.500:end=104.500", graph)
+
+    def test_short_dub_pads_absolute_segments(self):
+        info = dict(DUB_PROBE)
+        info["duration"] = 102.5
+        cmd = self._render(dub_info=info, clip_start=100.0, external_audio=self.dub,
+                           segments=[(0.0, 3.0), (5.0, 6.0)])
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("atrim=start=100.000:end=102.500", graph)
+        self.assertIn("aevalsrc=0|0:s=44100:d=0.500", graph)
+        self.assertIn("aevalsrc=0|0:s=44100:d=1.000", graph)
 
     def test_dub_replaces_source_audio(self):
         cmd = self._render(external_audio=self.dub)
