@@ -11,8 +11,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import (analyze, db, downloader, platforms, reframe, render, subtitles,
-               timeline, transcribe, utils)
+from . import (analyze, db, downloader, platforms, reframe, render, semantic,
+               subtitles, timeline, transcribe, utils)
 from .errors import Cancelled
 from .config import PROJECTS_DIR
 
@@ -54,6 +54,9 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
+    "picker": "local",
+    "mood_filter": [],
+    "min_score": 0.0,
     "subtitle_source": "auto",
     "subtitle_track": -1,
     "max_height": 1080,
@@ -188,6 +191,19 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["layout"] = ""
     if opts.get("select") not in ("smart", "even"):
         opts["select"] = "smart"
+    if opts.get("picker") not in semantic.PICKERS:
+        opts["picker"] = "local"
+    raw_moods = opts.get("mood_filter")
+    if isinstance(raw_moods, str):
+        raw_moods = re.split(r"[,\s]+", raw_moods)
+    if not isinstance(raw_moods, (list, tuple)):
+        raw_moods = []
+    opts["mood_filter"] = [m for m in (str(x).strip().lower() for x in raw_moods)
+                           if m in semantic.MOODS]
+    try:
+        opts["min_score"] = round(max(0.0, min(1.0, float(opts.get("min_score") or 0.0))), 2)
+    except (TypeError, ValueError):
+        opts["min_score"] = 0.0
     if opts.get("subtitle_source") not in ("auto", "whisper"):
         opts["subtitle_source"] = "auto"
     try:
@@ -789,7 +805,6 @@ def process_project(pid: str) -> None:
             progress(0.55, "Нарезка на равные части")
             found = _even_segments(duration, opts, transcript)
         else:
-            progress(0.55, "Поиск вирусных моментов")
             wav = workdir / "audio16k.wav"
             energy_offset = 0.0
             if dub is not None:
@@ -798,13 +813,25 @@ def process_project(pid: str) -> None:
                     energy_offset = dub_offset
                 else:
                     wav = None
-            found = analyze.find_segments(
-                transcript["segments"], source, duration,
-                count=opts["count"] or 0,
-                min_dur=opts["min_dur"], max_dur=opts["max_dur"],
-                target_dur=opts["target_dur"],
-                wav=wav, energy_offset=energy_offset,
-            )
+            found = None
+            picker = opts.get("picker") or "local"
+            if picker != "local":
+                progress(0.55, "Нейросеть выбирает моменты")
+                found = semantic.find_segments(
+                    transcript["segments"], source, duration, opts=opts,
+                    workdir=workdir, wav=wav, energy_offset=energy_offset,
+                )
+                if found:
+                    db.merge_meta(pid, {"picker": found[0].get("source") or picker})
+            if not found:
+                progress(0.55, "Поиск вирусных моментов")
+                found = analyze.find_segments(
+                    transcript["segments"], source, duration,
+                    count=opts["count"] or 0,
+                    min_dur=opts["min_dur"], max_dur=opts["max_dur"],
+                    target_dur=opts["target_dur"],
+                    wav=wav, energy_offset=energy_offset,
+                )
         if not found:
             raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")
 
@@ -818,7 +845,10 @@ def process_project(pid: str) -> None:
             clip = db.add_clip(
                 pid, i, cand["start"], cand["end"], cand["score"], cand["title"],
                 cand["hook"], cand["caption"], cand["words"],
-                {**clip_settings, "score_parts": cand.get("parts") or {}},
+                {**clip_settings, "score_parts": cand.get("parts") or {},
+                 "mood": cand.get("mood") or "",
+                 "why": cand.get("why") or "",
+                 "picker": cand.get("source") or ""},
             )
             clips.append(clip)
 

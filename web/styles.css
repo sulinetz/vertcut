@@ -1019,6 +1019,11 @@ select option, select optgroup { background: #16161c; color: var(--text); }
   border: 1px solid var(--separator);
   white-space: nowrap;
 }
+.clip-parts span.mood-tag {
+  color: var(--accent);
+  border-color: var(--accent-soft, var(--separator));
+  font-weight: 600;
+}
 
 .clip-tools { display: block; margin-top: auto; padding-top: 8px; }
 

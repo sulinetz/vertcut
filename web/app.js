@@ -393,7 +393,7 @@ function applyTheme(mode) {
   localStorage.setItem(THEME_KEY, theme);
   document.documentElement.dataset.theme = theme;
   const link = document.getElementById("themeCss");
-  if (link) link.href = theme === "light" ? "/static/styles-light.css?v=1" : "/static/styles.css?v=23";
+  if (link) link.href = theme === "light" ? "/static/styles-light.css?v=2" : "/static/styles.css?v=24";
   const label = document.getElementById("themeLabel");
   if (label) label.textContent = theme === "light" ? "Тёмная тема" : "Светлая тема";
   $$('input[name="wzTheme"]').forEach((el) => { el.checked = el.value === theme; });
@@ -438,6 +438,9 @@ const state = {
     aspect: "9:16",
     mode: "auto",
     select: "smart",
+    picker: "local",
+    moods: "any",
+    minScore: 0,
     subtitles: true,
     accent: "yellow",
     subFont: "montserrat",
@@ -607,6 +610,36 @@ function heroHTML() {
         <div class="seg" data-group="select">
           <button data-val="smart" class="${o.select === "smart" ? "active" : ""}">Умные моменты</button>
           <button data-val="even" class="${o.select === "even" ? "active" : ""}">Просто порезать</button>
+        </div>
+      </div>
+      <div class="opt">
+        ${optIcon("count", "ico-purple")}
+        <div>
+          <span class="opt-label">Кто выбирает моменты</span>
+          <span class="opt-hint">Локально — эвристики по речи, офлайн и бесплатно. Нейросеть читает весь текст выпуска и ищет моменты по смыслу. Ключи — в «Настройки → Нейросеть».</span>
+        </div>
+        <div class="opt-control">
+          <select id="aiPicker">
+            <option value="local" ${o.picker === "local" ? "selected" : ""}>Локально</option>
+            <option value="auto" ${o.picker === "auto" ? "selected" : ""}>Авто: DeepSeek → Gemini</option>
+            <option value="deepseek" ${o.picker === "deepseek" ? "selected" : ""}>DeepSeek</option>
+            <option value="gemini" ${o.picker === "gemini" ? "selected" : ""}>Gemini</option>
+          </select>
+          <select id="aiMoods">
+            <option value="any" ${o.moods === "any" ? "selected" : ""}>Любые настроения</option>
+            <option value="funny" ${o.moods === "funny" ? "selected" : ""}>Только весёлое</option>
+            <option value="sad" ${o.moods === "sad" ? "selected" : ""}>Только грустное</option>
+            <option value="drama" ${o.moods === "drama" ? "selected" : ""}>Только драма</option>
+            <option value="shock" ${o.moods === "shock" ? "selected" : ""}>Только шок</option>
+            <option value="insight" ${o.moods === "insight" ? "selected" : ""}>Только мысль</option>
+          </select>
+          <select id="aiMinScore">
+            <option value="0" ${Number(o.minScore) === 0 ? "selected" : ""}>Оценка любая</option>
+            <option value="0.5" ${Number(o.minScore) === 0.5 ? "selected" : ""}>Оценка ≥ 50</option>
+            <option value="0.6" ${Number(o.minScore) === 0.6 ? "selected" : ""}>Оценка ≥ 60</option>
+            <option value="0.7" ${Number(o.minScore) === 0.7 ? "selected" : ""}>Оценка ≥ 70</option>
+            <option value="0.8" ${Number(o.minScore) === 0.8 ? "selected" : ""}>Оценка ≥ 80</option>
+          </select>
         </div>
       </div>
       <div class="opt">
@@ -844,6 +877,13 @@ function bindHero() {
     });
   });
 
+  const aiPicker = $("#aiPicker");
+  if (aiPicker) aiPicker.addEventListener("change", () => { state.opts.picker = aiPicker.value; });
+  const aiMoods = $("#aiMoods");
+  if (aiMoods) aiMoods.addEventListener("change", () => { state.opts.moods = aiMoods.value; });
+  const aiMinScore = $("#aiMinScore");
+  if (aiMinScore) aiMinScore.addEventListener("change", () => { state.opts.minScore = Number(aiMinScore.value); });
+
   const examples = $("#examples");
   if (examples) examples.addEventListener("click", (ev) => {
     const btn = ev.target.closest(".ex-opt");
@@ -1077,6 +1117,9 @@ function heroOptions() {
     aspect: state.opts.aspect,
     mode: state.opts.mode,
     select: state.opts.select,
+    picker: state.opts.picker,
+    mood_filter: state.opts.moods && state.opts.moods !== "any" ? [state.opts.moods] : [],
+    min_score: Number(state.opts.minScore || 0),
     subtitles: state.opts.subtitles,
     accent: state.opts.accent,
     sub_font: state.opts.subFont,
@@ -1505,6 +1548,11 @@ function errorHTML(project) {
   <div class="error-box"><strong>Не получилось обработать видео.</strong><br>${esc(project.error || "Неизвестная ошибка")}</div>`;
 }
 
+const MOOD_LABELS = {
+  funny: "весёлое", sad: "грустное", drama: "драма", shock: "шок",
+  insight: "мысль", wholesome: "тёплое", intense: "жёсткое"
+};
+
 function clipsGridHTML() {
   const clips = (state.detail && state.detail.clips) || [];
   const project = state.detail && state.detail.project;
@@ -1525,6 +1573,9 @@ function clipsGridHTML() {
       ["конкретика", sp.specificity], ["завершённость", sp.completeness],
     ].filter(([, v]) => typeof v === "number")
       .map(([k, v]) => `<span>${k} ${Math.round(v * 100)}</span>`).join("") : "";
+    const moodLabel = MOOD_LABELS[c.settings?.mood] || "";
+    const moodLine = moodLabel
+      ? `<span class="mood-tag" title="${esc(c.settings?.why || "")}">${moodLabel}</span>` : "";
     if (c.status === "error") {
       return `<div class="clip-card${wide}">
         <div class="clip-media" style="display:grid;place-items:center;padding:16px;text-align:center">
@@ -1552,7 +1603,7 @@ function clipsGridHTML() {
       </div>
       <div class="clip-body">
         <div class="clip-title">${esc(c.title || "Без названия")}</div>
-        ${partsLine ? `<div class="clip-parts">${partsLine}</div>` : ""}
+        ${(partsLine || moodLine) ? `<div class="clip-parts">${moodLine}${partsLine}</div>` : ""}
         <div class="clip-tools">
           <a class="download-btn" href="/api/clips/${c.id}/download" download data-download-clip="${c.id}" title="Скачать MP4">
             ${ICONS.download}<span>Скачать MP4</span>

@@ -15,6 +15,18 @@
     picked: null
   };
 
+  const MOODS = [
+    ["funny", "весёлое"], ["sad", "грустное"], ["drama", "драма"],
+    ["shock", "шок"], ["insight", "мысль"], ["wholesome", "тёплое"],
+    ["intense", "жёсткое"]
+  ];
+  const PICKER_OPTIONS = [
+    ["local", "Локально — быстро и бесплатно"],
+    ["auto", "Авто: DeepSeek → Gemini"],
+    ["deepseek", "DeepSeek"],
+    ["gemini", "Gemini"]
+  ];
+
   const uiMode = () => (localStorage.getItem(UI_KEY) || MODE_WIZARD);
   const setUiMode = (mode) => localStorage.setItem(UI_KEY, mode);
   const usesWizard = () => uiMode() === MODE_WIZARD;
@@ -31,6 +43,7 @@
     jump_cuts: false, cut_zoom: false,
     count: 10, min_dur: 15, max_dur: 60, target_dur: 32,
     select: "smart", export_order: "chrono",
+    picker: "local", mood_filter: [], min_score: 0,
     audio_track: -1, subtitle_track: -1, subtitle_source: "auto",
     external_audio: false, external_audio_track: -1, audio_offset: 0,
     cookies_browser: "", language: "auto", max_height: 1080, segments: false,
@@ -513,6 +526,20 @@
             <select id="wzOrder"><option value="chrono" ${wizard.opts.export_order === "chrono" ? "selected" : ""}>По хронологии</option><option value="score" ${wizard.opts.export_order === "score" ? "selected" : ""}>Топ моменты</option></select>
           </div>
         </div>
+        <div class="row2">
+          <div class="field"><label>Кто выбирает моменты</label>
+            <select id="wzPicker">${PICKER_OPTIONS.map(([k, v]) => `<option value="${k}" ${wizard.opts.picker === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+          </div>
+          <div class="field"><label>Минимальная оценка</label>
+            <select id="wzMinScore">${[[0, "Любая"], [0.5, "≥ 50"], [0.6, "≥ 60"], [0.7, "≥ 70"], [0.8, "≥ 80"]].map(([v, label]) => `<option value="${v}" ${Number(wizard.opts.min_score || 0) === v ? "selected" : ""}>${label}</option>`).join("")}</select>
+          </div>
+        </div>
+        <div class="field" id="wzMoodField"><label>Настроения <span class="muted">(пусто — любые)</span></label>
+          <div class="seg" id="wzMoods">
+            ${MOODS.map(([k, label]) => `<button type="button" data-mood="${k}" class="${(wizard.opts.mood_filter || []).includes(k) ? "active" : ""}">${label}</button>`).join("")}
+          </div>
+        </div>
+        <div class="opt-hint" id="wzPickerHint">Локально — эвристики по речи, офлайн и бесплатно. DeepSeek и Gemini читают весь текст выпуска и выбирают моменты по смыслу и настроению. Ключи — в «Настройки → Нейросеть».</div>
         <div class="opt-hint">Склейки пауз и скорость пересчитают субтитры автоматически. Хук и текст можно поправить после рендера в редакторе клипа.</div>
       </div>`;
   }
@@ -541,6 +568,16 @@
     });
     $("#wzSelect").addEventListener("change", (e) => { wizard.opts.select = e.target.value; });
     $("#wzOrder").addEventListener("change", (e) => { wizard.opts.export_order = e.target.value; });
+    $("#wzPicker").addEventListener("change", (e) => { wizard.opts.picker = e.target.value; });
+    $("#wzMinScore").addEventListener("change", (e) => { wizard.opts.min_score = Number(e.target.value); });
+    $("#wzMoods").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-mood]");
+      if (!btn) return;
+      const mood = btn.dataset.mood;
+      const list = Array.isArray(wizard.opts.mood_filter) ? wizard.opts.mood_filter : [];
+      wizard.opts.mood_filter = list.includes(mood) ? list.filter((m) => m !== mood) : [...list, mood];
+      btn.classList.toggle("active", wizard.opts.mood_filter.includes(mood));
+    });
   }
 
   async function next() {
@@ -577,6 +614,7 @@
         <div class="settings-layout">
           <div class="settings-tabs">
             <button class="active" data-tab="frame">Кадр и формат</button>
+            <button data-tab="ai">Нейросеть</button>
             <button data-tab="interface">Интерфейс</button>
             <button disabled title="Появится позже">Папки</button>
             <button disabled title="Появится позже">Обновления</button>
@@ -612,6 +650,35 @@
               <div class="opt-hint">Эти настройки применяются ко всем новым видео. В мастере на шаге «Кадр» их можно поменять для конкретного проекта.</div>
               <div class="wz-actions" id="setApplyRow"></div>
             </div>
+            <div id="settingsAi" hidden>
+              <div class="row2">
+                <div class="field"><label>Ключ DeepSeek</label>
+                  <input type="password" id="setDeepseekKey" autocomplete="off" spellcheck="false" placeholder="не задан" />
+                  <div class="opt-hint" id="deepseekState"></div>
+                </div>
+                <div class="field"><label>Модель DeepSeek</label>
+                  <select id="setDeepseekModel"></select>
+                </div>
+              </div>
+              <div class="row2">
+                <div class="field"><label>Ключ Gemini (Google AI Studio)</label>
+                  <input type="password" id="setGeminiKey" autocomplete="off" spellcheck="false" placeholder="не задан" />
+                  <div class="opt-hint" id="geminiState"></div>
+                </div>
+                <div class="field"><label>Модель Gemini</label>
+                  <select id="setGeminiModel"></select>
+                </div>
+              </div>
+              <div class="field"><label>Прокси для Gemini</label>
+                <input type="text" id="setProxy" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7901 — если нужен" />
+              </div>
+              <div class="wz-actions">
+                <button class="btn-ghost" id="checkDeepseek" type="button">Проверить DeepSeek</button>
+                <button class="btn-ghost" id="checkGemini" type="button">Проверить Gemini</button>
+                <button class="btn-ghost" id="clearAiKeys" type="button">Удалить ключи</button>
+              </div>
+              <div class="opt-hint">Ключи хранятся в папке данных приложения и не попадают ни в проект, ни в репозиторий. Пустое поле не стирает сохранённый ключ. Выбор «кто ищет моменты» — на шаге «Нарезка».</div>
+            </div>
             <div id="settingsInterface" hidden>
             <div class="field"><label>Тема оформления</label>
               <label class="wz-row"><input type="radio" name="wzTheme" value="dark" ${currentTheme() === "dark" ? "checked" : ""}/> <b>Тёмная</b><span>как раньше</span></label>
@@ -636,7 +703,9 @@
       $$(".settings-tabs button").forEach((b) => b.classList.toggle("active", b === tab));
       $("#settingsFrame").hidden = tab.dataset.tab !== "frame";
       $("#settingsInterface").hidden = tab.dataset.tab !== "interface";
+      $("#settingsAi").hidden = tab.dataset.tab !== "ai";
     }));
+    bindAiSettings();
     const saveFrame = () => {
       saveFrameDefaults({
         aspect: $("#setAspect").value,
@@ -690,6 +759,70 @@
       if (!state.current) { state.mainKey = ""; renderMain(true); }
       toast(el.value === "wizard" ? "Включён мастер по шагам" : "Включён старый экран");
     }));
+  }
+
+  /* Вкладка «Нейросеть»: ключи, модели и проверка доступа. */
+  function bindAiSettings() {
+    const fillModels = (selector, list, value) => {
+      const el = $(selector);
+      if (!el) return;
+      el.innerHTML = (list || []).map((m) => `<option value="${m}">${m}</option>`).join("");
+      if (value && !(list || []).includes(value)) el.innerHTML += `<option value="${value}">${value}</option>`;
+      if (value) el.value = value;
+    };
+    const applyState = (s) => {
+      if (!s) return;
+      $("#deepseekState").textContent = s.deepseek_key_set
+        ? `Ключ сохранён: ${s.deepseek_key_hint}` : "Ключ не задан";
+      $("#geminiState").textContent = s.gemini_key_set
+        ? `Ключ сохранён: ${s.gemini_key_hint}` : "Ключ не задан";
+      fillModels("#setDeepseekModel", (s.model_choices || {}).deepseek, s.deepseek_model);
+      fillModels("#setGeminiModel", (s.model_choices || {}).gemini, s.gemini_model);
+      const proxy = $("#setProxy");
+      if (proxy && document.activeElement !== proxy) proxy.value = s.proxy || "";
+      $("#setDeepseekKey").value = "";
+      $("#setGeminiKey").value = "";
+      $("#setDeepseekKey").placeholder = s.deepseek_key_set ? "ключ сохранён — введите новый, чтобы заменить" : "не задан";
+      $("#setGeminiKey").placeholder = s.gemini_key_set ? "ключ сохранён — введите новый, чтобы заменить" : "не задан";
+    };
+    const save = () => api("/api/app-settings", {
+      method: "POST",
+      body: JSON.stringify({
+        deepseek_key: $("#setDeepseekKey").value.trim(),
+        gemini_key: $("#setGeminiKey").value.trim(),
+        deepseek_model: $("#setDeepseekModel").value,
+        gemini_model: $("#setGeminiModel").value,
+        proxy: $("#setProxy").value.trim()
+      })
+    }).then(applyState).catch((err) => toast(err.message || "Не удалось сохранить", "err"));
+    ["#setDeepseekKey", "#setGeminiKey", "#setDeepseekModel", "#setGeminiModel", "#setProxy"]
+      .forEach((selector) => {
+        const el = $(selector);
+        if (el) el.addEventListener("change", save);
+      });
+    const check = (provider, button) => {
+      const el = $(button);
+      if (!el) return;
+      const restore = el.textContent;
+      el.disabled = true;
+      el.textContent = "Проверяю…";
+      api("/api/app-settings/check", { method: "POST", body: JSON.stringify({ provider }) })
+        .then((res) => toast(res.message || (res.ok ? "Ключ работает" : "Ошибка"), res.ok ? "ok" : "err"))
+        .catch((err) => toast(err.message || "Не удалось проверить", "err"))
+        .finally(() => { el.disabled = false; el.textContent = restore; });
+    };
+    $("#checkDeepseek").addEventListener("click", () => check("deepseek", "#checkDeepseek"));
+    $("#checkGemini").addEventListener("click", () => check("gemini", "#checkGemini"));
+    $("#clearAiKeys").addEventListener("click", () => {
+      if (!confirm("Удалить сохранённые ключи DeepSeek и Gemini?")) return;
+      api("/api/app-settings", {
+        method: "POST",
+        body: JSON.stringify({ clear_deepseek_key: true, clear_gemini_key: true })
+      }).then((s) => { applyState(s); toast("Ключи удалены"); })
+        .catch((err) => toast(err.message || "Не удалось удалить", "err"));
+    });
+    api("/api/app-settings").then(applyState)
+      .catch((err) => toast(err.message || "Не удалось загрузить настройки", "err"));
   }
 
   $("#settingsBtn").addEventListener("click", openSettings);

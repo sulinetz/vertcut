@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import custom_fonts, db, jobs, pipeline, transcribe
+from . import app_settings, custom_fonts, db, jobs, pipeline, semantic, transcribe
 from ._version import __version__
 from .config import ASSETS_DIR, DATA_DIR, PROJECTS_DIR, WEB_DIR, ffmpeg
 
@@ -27,6 +27,20 @@ class ProjectIn(BaseModel):
 
 class UpdateSettingsIn(BaseModel):
     enabled: bool = True
+
+
+class AppSettingsIn(BaseModel):
+    deepseek_key: Optional[str] = None
+    gemini_key: Optional[str] = None
+    deepseek_model: Optional[str] = None
+    gemini_model: Optional[str] = None
+    proxy: Optional[str] = None
+    clear_deepseek_key: bool = False
+    clear_gemini_key: bool = False
+
+
+class CheckKeyIn(BaseModel):
+    provider: str
 
 
 class RetryIn(BaseModel):
@@ -310,6 +324,27 @@ def update_settings(body: UpdateSettingsIn) -> Dict[str, Any]:
     from . import updater
 
     return updater.set_enabled(body.enabled)
+
+
+@app.get("/api/app-settings")
+def app_settings_get() -> Dict[str, Any]:
+    """Модели и подсказки по ключам. Сами ключи наружу не отдаются."""
+    return {
+        **app_settings.public(),
+        "moods": semantic.MOODS,
+        "pickers": list(semantic.PICKERS),
+    }
+
+
+@app.post("/api/app-settings")
+def app_settings_save(body: AppSettingsIn) -> Dict[str, Any]:
+    app_settings.save(body.model_dump(exclude_none=True))
+    return {"ok": True, **app_settings.public()}
+
+
+@app.post("/api/app-settings/check")
+def app_settings_check(body: CheckKeyIn) -> Dict[str, Any]:
+    return semantic.check_key(body.provider)
 
 
 @app.get("/api/fonts")

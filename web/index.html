@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VertCut — вертикальные клипы из длинных видео</title>
-  <link rel="stylesheet" id="themeCss" href="/static/styles.css?v=23" />
+  <link rel="stylesheet" id="themeCss" href="/static/styles.css?v=24" />
   <link rel="stylesheet" id="customFontsCss" href="/api/fonts.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Crect x='10' y='5' width='12' height='22' rx='3.5' fill='white'/%3E%3Cpath d='M14.5 12v8l6-4-6-4z' fill='%232563eb'/%3E%3C/svg%3E" />
   <script id="themeBoot">
@@ -15,7 +15,7 @@
       if (q) localStorage.setItem("vertcut.theme", t);
       document.documentElement.dataset.theme = t;
       var link = document.getElementById("themeCss");
-      if (link && t === "light") link.href = "/static/styles-light.css?v=1";
+      if (link && t === "light") link.href = "/static/styles-light.css?v=2";
     } catch (e) {}
   })();
   </script>
@@ -106,7 +106,7 @@
   <input type="file" id="wzMusicInput" accept=".mp3,.m4a,.aac,.wav,.ogg,.flac,.opus" class="hidden" />
   <input type="file" id="subsInput" accept=".srt,.ass,.ssa,.vtt" class="hidden" />
 
-  <script src="/static/app.js?v=23"></script>
-  <script src="/static/wizard.js?v=5"></script>
+  <script src="/static/app.js?v=24"></script>
+  <script src="/static/wizard.js?v=6"></script>
 </body>
 </html>

@@ -76,7 +76,8 @@ class ProcessProjectCase(unittest.TestCase):
         pipeline.clear_cancel("p1")
         self.tmp.cleanup()
 
-    def _run(self, transcript_error=True, fetch=None, find=None, probe=None):
+    def _run(self, transcript_error=True, fetch=None, find=None, probe=None,
+             semantic_find=None, analyze_fail=False):
         candidate = {
             "start": 0.0, "end": 10.0, "score": 0.5, "title": "Момент",
             "hook": "", "caption": "",
@@ -104,7 +105,16 @@ class ProcessProjectCase(unittest.TestCase):
         def fake_render(_source, _workdir, clip, _settings, _progress=None, **_kwargs):
             self.db.update_clip(clip["id"], status="ready", error=None)
 
+        semantic_mock = mock.Mock(return_value=None)
+        if semantic_find is not None:
+            semantic_mock.side_effect = semantic_find
+
+        analyze_mock = mock.Mock(side_effect=AssertionError("эвристики не должны вызываться")) \
+            if analyze_fail else mock.Mock(return_value=find or [candidate])
+
+        self.semantic_mock = semantic_mock
         patches = [
+            mock.patch.object(pipeline.semantic, "find_segments", semantic_mock),
             mock.patch.object(pipeline, "db", self.db),
             mock.patch.object(pipeline, "PROJECTS_DIR", self.dir),
             mock.patch.object(pipeline.utils, "probe",
@@ -117,8 +127,7 @@ class ProcessProjectCase(unittest.TestCase):
             mock.patch.object(pipeline.transcribe, "transcribe", worker),
             mock.patch.object(pipeline, "_render_one", fake_render),
             mock.patch.object(pipeline, "_render_workers", lambda: 1),
-            mock.patch.object(pipeline.analyze, "find_segments",
-                              lambda *a, **k: find or [candidate]),
+            mock.patch.object(pipeline.analyze, "find_segments", analyze_mock),
         ]
         fetcher = fetch if fetch is not None else mock.Mock(return_value=None)
         patches.append(mock.patch.object(pipeline.downloader, "fetch_subtitles", fetcher))
@@ -187,6 +196,33 @@ class ProcessProjectCase(unittest.TestCase):
             pipeline.prepare_project("p1")
         eco.assert_not_called()
         self.assertEqual(self.db.project["status"], "review")
+
+
+    def test_llm_picker_uses_semantic_before_heuristics(self):
+        llm_clip = {
+            "start": 1.0, "end": 11.0, "score": 0.9, "title": "Смешной момент",
+            "hook": "Смешной момент", "caption": "", "mood": "funny",
+            "why": "панчлайн", "source": "deepseek", "parts": {"hook": 0.9},
+            "words": [{"word": "слово", "start": 1.2, "end": 2.0}],
+        }
+        self.db.project["options"]["picker"] = "deepseek"
+        self._run(transcript_error=False, find=None, analyze_fail=True,
+                  semantic_find=lambda *a, **k: [llm_clip])
+        self.assertEqual(self.db.project["status"], "done")
+        self.assertEqual(len(self.db.clips), 1)
+        settings = self.db.clips[0]["settings"]
+        self.assertEqual(settings["mood"], "funny")
+        self.assertEqual(settings["picker"], "deepseek")
+        self.assertEqual(self.db.project["meta"]["picker"], "deepseek")
+        self.semantic_mock.assert_called_once()
+
+    def test_llm_picker_falls_back_to_heuristics(self):
+        self.db.project["options"]["picker"] = "auto"
+        self._run(transcript_error=False, semantic_find=lambda *a, **k: None)
+        self.assertEqual(self.db.project["status"], "done")
+        self.assertEqual(len(self.db.clips), 1)
+        self.semantic_mock.assert_called_once()
+        self.assertEqual(self.db.clips[0]["settings"].get("picker", ""), "")
 
 
 if __name__ == "__main__":
