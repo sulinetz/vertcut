@@ -4,9 +4,21 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VertCut — вертикальные клипы из длинных видео</title>
-  <link rel="stylesheet" href="/static/styles.css?v=22" />
+  <link rel="stylesheet" id="themeCss" href="/static/styles.css?v=23" />
   <link rel="stylesheet" id="customFontsCss" href="/api/fonts.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Crect x='10' y='5' width='12' height='22' rx='3.5' fill='white'/%3E%3Cpath d='M14.5 12v8l6-4-6-4z' fill='%232563eb'/%3E%3C/svg%3E" />
+  <script id="themeBoot">
+  (function () {
+    try {
+      var q = new URLSearchParams(location.search).get("theme");
+      var t = q || localStorage.getItem("vertcut.theme") || "dark";
+      if (q) localStorage.setItem("vertcut.theme", t);
+      document.documentElement.dataset.theme = t;
+      var link = document.getElementById("themeCss");
+      if (link && t === "light") link.href = "/static/styles-light.css?v=1";
+    } catch (e) {}
+  })();
+  </script>
 </head>
 <body>
   <div class="app">
@@ -31,6 +43,11 @@
       <button class="btn-new" id="settingsBtn">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1z"/></svg>
         Настройки
+      </button>
+
+      <button class="btn-new" id="themeBtn" title="Переключить светлую и тёмную тему">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <span id="themeLabel">Светлая тема</span>
       </button>
 
       <div class="side-label">История</div>
@@ -89,7 +106,7 @@
   <input type="file" id="wzMusicInput" accept=".mp3,.m4a,.aac,.wav,.ogg,.flac,.opus" class="hidden" />
   <input type="file" id="subsInput" accept=".srt,.ass,.ssa,.vtt" class="hidden" />
 
-  <script src="/static/app.js?v=22"></script>
-  <script src="/static/wizard.js?v=4"></script>
+  <script src="/static/app.js?v=23"></script>
+  <script src="/static/wizard.js?v=5"></script>
 </body>
 </html>

@@ -613,6 +613,10 @@
               <div class="wz-actions" id="setApplyRow"></div>
             </div>
             <div id="settingsInterface" hidden>
+            <div class="field"><label>Тема оформления</label>
+              <label class="wz-row"><input type="radio" name="wzTheme" value="dark" ${currentTheme() === "dark" ? "checked" : ""}/> <b>Тёмная</b><span>как раньше</span></label>
+              <label class="wz-row"><input type="radio" name="wzTheme" value="light" ${currentTheme() === "light" ? "checked" : ""}/> <b>Светлая</b><span>новая, тёплая</span></label>
+            </div>
             <div class="field"><label>Экран создания клипов</label>
               <label class="wz-row"><input type="radio" name="wzUi" value="wizard" ${usesWizard() ? "checked" : ""}/> <b>Мастер по шагам</b>
                 <span>источник → кадр → субтитры → количество</span></label>
@@ -677,6 +681,10 @@
         } catch (err) { toast(err.message || "Не удалось запустить", "err"); }
       });
     }
+    $$('input[name="wzTheme"]').forEach((el) => el.addEventListener("change", () => {
+      applyTheme(el.value);
+      toast(el.value === "light" ? "Светлая тема включена" : "Тёмная тема включена");
+    }));
     $$('input[name="wzUi"]').forEach((el) => el.addEventListener("change", () => {
       setUiMode(el.value);
       if (!state.current) { state.mainKey = ""; renderMain(true); }

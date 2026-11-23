@@ -382,6 +382,28 @@ function saveFrameDefaults(patch) {
   return current;
 }
 
+const THEME_KEY = "vertcut.theme";
+
+function currentTheme() {
+  return localStorage.getItem(THEME_KEY) || document.documentElement.dataset.theme || "dark";
+}
+
+function applyTheme(mode) {
+  const theme = mode === "light" ? "light" : "dark";
+  localStorage.setItem(THEME_KEY, theme);
+  document.documentElement.dataset.theme = theme;
+  const link = document.getElementById("themeCss");
+  if (link) link.href = theme === "light" ? "/static/styles-light.css?v=1" : "/static/styles.css?v=23";
+  const label = document.getElementById("themeLabel");
+  if (label) label.textContent = theme === "light" ? "Тёмная тема" : "Светлая тема";
+  $$('input[name="wzTheme"]').forEach((el) => { el.checked = el.value === theme; });
+}
+
+function syncThemeButton() {
+  const label = document.getElementById("themeLabel");
+  if (label) label.textContent = currentTheme() === "light" ? "Тёмная тема" : "Светлая тема";
+}
+
 function syncHeroFrameOptions() {
   for (const key of FRAME_DEFAULTS) {
     $$(`.seg[data-group="${key}"] button`).forEach((b) => {
