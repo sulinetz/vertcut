@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -97,6 +98,21 @@ def _auto_chain(w: int, h: int, crop_path: Dict[str, Any], sharpen: bool = False
 
 _HW_CACHE: Dict[str, Any] = {}
 
+# Сколько секунд без единой строки прогресса считаем зависанием рендера.
+DEFAULT_RENDER_STALL = 120.0
+
+
+def _hw_works(encoder: str) -> bool:
+    """Пробный энкод одного кадра: список энкодеров ещё не гарантирует железо."""
+    try:
+        proc = run([ffmpeg(), "-hide_banner", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=0.2",
+                    "-frames:v", "1", "-c:v", encoder, "-f", "null", "-"],
+                   timeout=20)
+    except Exception:  # noqa: BLE001
+        return False
+    return proc.returncode == 0
+
 
 def hw_encoder() -> Optional[str]:
     """Аппаратный энкодер для быстрого рендера: videotoolbox / nvenc / qsv.
@@ -114,9 +130,10 @@ def hw_encoder() -> Optional[str]:
     try:
         proc = run([ffmpeg(), "-hide_banner", "-encoders"])
         text = (proc.stdout or "") + (proc.stderr or "")
-    except Exception:
+    except Exception:  # noqa: BLE001
         text = ""
-    found = next((name for name in preferred if name in text), None)
+    # Неудача тоже кешируется: пробный энкод не должен повторяться на каждом клипе.
+    found = next((name for name in preferred if name in text and _hw_works(name)), None)
     _HW_CACHE["value"] = found
     return found
 
@@ -239,6 +256,85 @@ def _dub_audio_filters(src: str, segments: List[Tuple[float, float]], offset: fl
         joined = "".join(f"[dp{i}]" for i in range(count))
         filters.append(f"{joined}concat=n={count}:v=0:a=1{out}")
     return filters
+
+
+def _run_ffmpeg(cmd: List[str], duration: float,
+                on_progress: Optional[Callable[[float], None]] = None,
+                is_cancelled: Optional[Callable[[], bool]] = None,
+                stall: Optional[float] = None) -> Dict[str, Any]:
+    """Один запуск ffmpeg: прогресс, дренаж stdout/stderr и watchdog.
+
+    stdout обязателен: ffmpeg пишет туда `-progress pipe:1`. Если его не читать,
+    труба заполняется и процесс встаёт навсегда (так зависал откат энкодера).
+    Watchdog следит за отсутствием прогресса, а не за общим временем: долгий,
+    но живой рендер не убивается.
+    """
+    if stall is None:
+        try:
+            stall = float(os.environ.get("VERTCUT_RENDER_STALL", DEFAULT_RENDER_STALL))
+        except ValueError:
+            stall = DEFAULT_RENDER_STALL
+    stall = max(1.0, float(stall))
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, errors="replace", bufsize=1,
+                            **subprocess_kwargs())
+    tail: List[str] = []
+    state = {"killed": "", "cancel": False, "last": time.monotonic()}
+    stop = threading.Event()
+
+    def drain_stderr() -> None:
+        if proc.stderr is None:
+            return
+        for line in proc.stderr:
+            tail.append(line)
+            if len(tail) > 40:
+                tail.pop(0)
+
+    def watchdog() -> None:
+        while not stop.wait(0.2):
+            if proc.poll() is not None:
+                return
+            if time.monotonic() - state["last"] > stall:
+                state["killed"] = f"нет прогресса больше {stall:.0f} с"
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+
+    reader = threading.Thread(target=drain_stderr, daemon=True)
+    reader.start()
+    pilot = threading.Thread(target=watchdog, daemon=True)
+    pilot.start()
+    returncode: Optional[int] = None
+    try:
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                state["last"] = time.monotonic()
+                if is_cancelled is not None and is_cancelled():
+                    state["cancel"] = True
+                    state["killed"] = state["killed"] or "отменено"
+                    try:
+                        proc.kill()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    break
+                text = line.strip()
+                if text.startswith("out_time_us=") and on_progress:
+                    try:
+                        done = int(text.split("=", 1)[1]) / 1_000_000
+                    except ValueError:
+                        continue
+                    on_progress(round(min(0.99, done / max(0.001, duration)), 3))
+        returncode = proc.wait()
+    finally:
+        stop.set()
+        reader.join(timeout=2)
+        pilot.join(timeout=2)
+    code = returncode if returncode is not None else proc.poll()
+    return {"returncode": code, "tail": "".join(tail),
+            "killed": state["killed"], "cancelled": state["cancel"]}
 
 
 def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path,
@@ -550,77 +646,22 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         out_fps = round(float(fps), 2)
     elif info.get("fps"):
         out_fps = round(float(info["fps"]), 2)
-    cmd += video_args + ["-r", str(out_fps),
+    cmd += video_args + ["-t", f"{duration:.3f}", "-r", str(out_fps),
                          "-map_metadata", "-1", "-map_chapters", "-1",
                          "-movflags", "+faststart", "-shortest", str(out_path)]
 
-    # -progress в cmd даёт машинно-читаемый прогресс: UI не «замирает» на минуту.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            errors="replace", bufsize=1, **subprocess_kwargs())
-    assert proc.stdout is not None and proc.stderr is not None
-
-    tail: list = []
-    killed = {"hit": False, "cancel": False, "reason": ""}
-
-    def _drain_stderr() -> None:
-        for line in proc.stderr:  # type: ignore[union-attr]
-            tail.append(line)
-            if len(tail) > 40:
-                tail.pop(0)
-
-    reader = threading.Thread(target=_drain_stderr, daemon=True)
-    reader.start()
-
-    # Щедрый, но конечный предел: зависший ffmpeg не должен держать клип вечно.
-    limit = max(180.0, max(src_dur, duration) * 8.0)
-
-    def _watchdog() -> None:
-        if proc.poll() is not None:
-            return
-        killed["hit"] = True
-        killed["reason"] = f"нет прогресса больше {limit:.0f} с"
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
-    timer = threading.Timer(limit, _watchdog)
-    timer.daemon = True
-    timer.start()
-    try:
-        for line in proc.stdout:
-            if is_cancelled is not None and is_cancelled():
-                killed["hit"] = True
-                killed["cancel"] = True
-                killed["reason"] = "отменено"
-                try:
-                    proc.kill()
-                except Exception:  # noqa: BLE001
-                    pass
-                break
-            line = line.strip()
-            if line.startswith("out_time_us=") and on_progress:
-                try:
-                    done = int(line.split("=", 1)[1]) / 1_000_000
-                except ValueError:
-                    continue
-                on_progress(round(min(0.99, done / duration), 3))
-        proc.wait()
-    finally:
-        timer.cancel()
-        reader.join(timeout=2)
-
-    if killed.get("cancel"):
+    result = _run_ffmpeg(cmd, duration, on_progress, is_cancelled)
+    if result["cancelled"]:
         out_path.unlink(missing_ok=True)
         raise Cancelled()
-    if killed["hit"]:
+    if result["killed"]:
         out_path.unlink(missing_ok=True)
-        raise MediaError(f"Рендер остановлен: {killed['reason']}. Попробуйте ещё раз.")
+        raise MediaError(f"Рендер остановлен: {result['killed']}. Попробуйте ещё раз.")
     fallback_used = False
-    if hw and (proc.returncode != 0 or not out_path.exists()):
+    if hw and (result["returncode"] != 0 or not out_path.exists()):
         # аппаратный энкодер не завёлся (нет GPU/драйвера) — повторяем на libx264.
         # Заменяем ровно те аргументы, что добавили, иначе срезается хвост команды.
-        hw_error = "".join(tail)[-300:]
+        hw_error = (result["tail"] or "")[-300:]
         print(f"[render] {hw} не сработал, повтор на libx264: {hw_error}",
               file=sys.stderr, flush=True)
         fallback_used = True
@@ -631,17 +672,15 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         idx = cmd.index("-c:v")
         cmd[idx:idx + len(video_args)] = fallback
         out_path.unlink(missing_ok=True)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, errors="replace", bufsize=1, **subprocess_kwargs())
-        tail = []
-        if proc.stderr is not None:
-            for line in proc.stderr:
-                tail.append(line)
-                if len(tail) > 40:
-                    tail.pop(0)
-        proc.wait()
-    if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 10000:
-        raise MediaError("Не удалось отрендерить клип: " + "".join(tail)[-600:])
+        result = _run_ffmpeg(cmd, duration, on_progress, is_cancelled)
+        if result["cancelled"]:
+            out_path.unlink(missing_ok=True)
+            raise Cancelled()
+        if result["killed"]:
+            out_path.unlink(missing_ok=True)
+            raise MediaError(f"Рендер остановлен: {result['killed']}. Попробуйте ещё раз.")
+    if result["returncode"] != 0 or not out_path.exists() or out_path.stat().st_size < 10000:
+        raise MediaError("Не удалось отрендерить клип: " + (result["tail"] or "")[-600:])
 
     if on_progress:
         on_progress(1.0)
