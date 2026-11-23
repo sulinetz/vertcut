@@ -69,6 +69,7 @@
     wizard.step = 1;
     wizard.frameT = -1;
     wizard.frameUrl = "";
+    wizard.lastBox = null;
     wizard.picked = null;
     $("#modal").innerHTML = `
       <div class="modal-backdrop" data-wz-close></div>
@@ -208,22 +209,19 @@
       wizard.opts.subtitle_source = asr.checked ? "whisper" : "auto";
     });
     const upload = $("#wzUpload");
-    if (upload) upload.addEventListener("click", () => {
-      wizard.picked = "video";
-      $("#fileInput").click();
-    });
+    if (upload) upload.addEventListener("click", () => $("#wzFileInput").click());
     const native = $("#wzNative");
     if (native) native.addEventListener("click", pickNative);
     const dub = $("#wzDub");
-    if (dub) dub.addEventListener("click", () => { wizard.picked = "dub"; $("#dubInput").click(); });
+    if (dub) dub.addEventListener("click", () => $("#wzDubInput").click());
     const useDub = $("#wzUseDub");
     if (useDub) useDub.addEventListener("change", () => {
       wizard.opts.external_audio = useDub.checked;
     });
     const subs = $("#wzSubs");
-    if (subs) subs.addEventListener("click", () => { wizard.picked = "subs"; $("#subsInput").click(); });
+    if (subs) subs.addEventListener("click", () => $("#wzSubsInput").click());
     const music = $("#wzMusic");
-    if (music) music.addEventListener("click", () => { wizard.picked = "music"; $("#musicInput").click(); });
+    if (music) music.addEventListener("click", () => $("#wzMusicInput").click());
     if (native && window.pywebview && window.pywebview.api && window.pywebview.api.pick_source) {
       native.classList.remove("hidden");
     }
@@ -274,7 +272,10 @@
     const c = frameCards();
     return `
       <div class="wz-frame-layout">
-        <div class="wz-preview"><img id="wzFrame" alt="кадр из видео"><div id="wzCrop"></div>
+        <div class="wz-preview" id="wzPreview">
+          <div class="wz-blur-bg" id="wzBlurBg"></div>
+          <img id="wzFrame" alt="кадр из видео">
+          <div class="wz-zones" id="wzZones"></div>
           <div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
           <button type="button" class="wz-reroll" id="wzReroll">Другой кадр</button>
         </div>
@@ -322,8 +323,8 @@
       const group = btn.dataset.wzGroup;
       wizard.opts[group] = btn.dataset.wzVal;
       $$(`#wzBody .wz-card[data-wz-group="${group}"]`).forEach((b) => b.classList.toggle("active", b === btn));
-      if (group === "aspect" || group === "mode") loadFrame();
-      if (group === "platform") applyFrameStyle();
+      if (group === "aspect") loadFrame();
+      else applyPreviewLayout(wizard.lastBox);
     }));
     $("#wzReroll").addEventListener("click", () => { wizard.frameT = -1; loadFrame(); });
   }
@@ -344,33 +345,68 @@
   function loadFrame() {
     const img = $("#wzFrame");
     if (!img || !wizard.pid) return;
+    const meta = ASPECT_META[wizard.opts.aspect] || ASPECT_META["9:16"];
+    const preview = $("#wzPreview");
+    if (preview) preview.style.aspectRatio = `${meta.w} / ${meta.h}`;
     const t = wizard.frameT < 0 ? "" : `&t=${wizard.frameT}`;
     api(`/api/projects/${wizard.pid}/frame-info?aspect=${encodeURIComponent(wizard.opts.aspect)}${t}`)
       .then((info) => {
         wizard.frameT = info.time;
-        wizard.frameUrl = `/api/projects/${wizard.pid}/frame.jpg?t=${info.time}&w=720`;
-        img.onload = () => { drawCrop(info.box); applyFrameStyle(); };
+        wizard.lastBox = info.box;
+        wizard.frameUrl = `/api/projects/${wizard.pid}/frame.jpg?t=${info.time}&w=1280`;
+        img.onload = () => { applyPreviewLayout(info.box); applyFrameStyle(); if (wizard.step === 3) updateCaption(); };
         img.src = wizard.frameUrl;
       }).catch(() => {});
   }
 
-  function drawCrop(box) {
+  function applyPreviewLayout(box) {
+    const preview = $("#wzPreview");
     const img = $("#wzFrame");
-    const crop = $("#wzCrop");
-    if (!img || !crop || !box) { if (crop) crop.style.display = "none"; return; }
-    const w = img.clientWidth, h = img.clientHeight;
-    const k = Math.min(w / box.source_w, h / box.source_h);
-    crop.style.display = wizard.opts.mode === "auto" ? "block" : "none";
-    crop.style.left = `${(w - box.source_w * k) / 2 + box.x * k}px`;
-    crop.style.top = `${(h - box.source_h * k) / 2 + box.y * k}px`;
-    crop.style.width = `${box.crop_w * k}px`;
-    crop.style.height = `${box.crop_h * k}px`;
+    if (!preview || !img) return;
+    const meta = ASPECT_META[wizard.opts.aspect] || ASPECT_META["9:16"];
+    preview.style.aspectRatio = `${meta.w} / ${meta.h}`;
+    const W = preview.clientWidth || 360;
+    const zones = $("#wzZones");
+    if (zones) {
+      const zone = PLATFORM_ZONES[wizard.opts.platform] || PLATFORM_ZONES.universal;
+      zones.innerHTML = wizard.opts.platform === "none" ? "" :
+        `<i class="wz-zone top" style="height:${(zone.top / 1920) * 100}%"></i>` +
+        `<i class="wz-zone bottom" style="height:${(zone.bottom / 1920) * 100}%"></i>`;
+    }
+    const blur = $("#wzBlurBg");
+    if (wizard.opts.mode === "blur") {
+      preview.classList.add("is-blur");
+      if (blur) {
+        blur.style.display = "block";
+        blur.style.backgroundImage = wizard.frameUrl ? `url("${wizard.frameUrl}")` : "";
+      }
+      img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:contain;";
+      return;
+    }
+    if (blur) blur.style.display = "none";
+    preview.classList.remove("is-blur");
+    if (!box) {
+      img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;";
+      return;
+    }
+    let bx = Number(box.x), by = Number(box.y);
+    if (wizard.opts.mode === "crop") {
+      bx = (box.source_w - box.crop_w) / 2;
+      by = (box.source_h - box.crop_h) / 2;
+    }
+    const scale = W / Math.max(1, box.crop_w);
+    img.style.cssText = `position:absolute;left:${-bx * scale}px;top:${-by * scale}px;` +
+      `width:${box.source_w * scale}px;height:${box.source_h * scale}px;object-fit:fill;`;
   }
 
   function stepSubs() {
     return `
       <div class="wz-frame-layout">
-        <div class="wz-preview"><img id="wzFrame" alt="кадр"><div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
+        <div class="wz-preview" id="wzPreview">
+          <div class="wz-blur-bg" id="wzBlurBg"></div>
+          <img id="wzFrame" alt="кадр">
+          <div class="wz-zones" id="wzZones"></div>
+          <div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
           <button type="button" class="wz-reroll" id="wzReroll">Другой кадр</button></div>
         <div class="wz-controls">
           <div class="wz-block">
@@ -578,16 +614,13 @@
 
   /* Файлы, выбранные в шаге 1, уходят в обычные загрузчики app.js. */
   document.addEventListener("change", (e) => {
-    if (!wizard.pid || !e.target || e.target.type !== "file") return;
+    const endpoints = { wzFileInput: "upload", wzSubsInput: "subtitles",
+                        wzDubInput: "dub", wzMusicInput: "music" };
+    const endpoint = e.target ? endpoints[e.target.id] : "";
+    if (!wizard.pid || !endpoint) return;
     const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const kind = wizard.picked;
-    wizard.picked = null;
     e.target.value = "";
-    if (!kind) return;
-    const endpoints = { video: "upload", subs: "subtitles", dub: "dub", music: "music" };
-    const endpoint = endpoints[kind];
-    if (!endpoint) return;
+    if (!file) return;
     const form = new FormData();
     form.append("file", file);
     api(`/api/projects/${wizard.pid}/${endpoint}`, { method: "POST", body: form })
