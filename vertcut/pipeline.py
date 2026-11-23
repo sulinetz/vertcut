@@ -1,6 +1,7 @@
 """Оркестрация: скачивание → распознавание → поиск моментов → рендер клипов."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -367,6 +368,7 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
             stop_hb.set(); hb_thread.join(timeout=1)
 
     engine = (transcript or {}).get("engine")
+    save_transcript(workdir, transcript)
     if engine is None and (no_speech or select == "even"):
         engine = "even-split"
     _update(pid, title=audio.get("title") or project["title"], duration=round(duration, 2),
@@ -747,8 +749,9 @@ def process_project(pid: str) -> None:
             _update(pid, language=None)
             db.merge_meta(pid, {"engine": "even-split"})
 
+        save_transcript(workdir, transcript)
+
         if select == "smart" and no_speech:
-            # речи нет (музыка, клип) — не падаем, а режем на равные части
             select = "even"
             progress(0.55, "Речи не нашлось — режу на равные части")
             db.merge_meta(pid, {"engine": "even-split", "no_speech": True})
@@ -935,6 +938,33 @@ def _adhd_bg_file(choice: str) -> Optional[Path]:
     import random
 
     return random.choice(files)
+
+
+def save_transcript(workdir: Path, transcript: Optional[Dict[str, Any]]) -> None:
+    """Кладёт транскрипт рядом с проектом: перерендер может расширить границы.
+
+    Пишем атомарно, чтобы оборванная обработка не оставила половину JSON.
+    """
+    if not transcript:
+        return
+    path = workdir / "transcript.json"
+    part = workdir / "transcript.json.part"
+    try:
+        part.write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
+        os.replace(part, path)
+    except OSError:
+        part.unlink(missing_ok=True)
+
+
+def load_transcript(workdir: Path) -> Optional[Dict[str, Any]]:
+    path = workdir / "transcript.json"
+    if not path.exists() or path.stat().st_size < 8:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def clip_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -1151,7 +1181,15 @@ def rerender_clip(clip_id: str, payload: Dict[str, Any],
         # старые live-клипы хранили слова относительно окна эфира
         words = live._absolute_words(words, float(clip["start"]))
     if start != clip["start"] or end != clip["end"]:
-        words = [w for w in words if float(w["end"]) > start and float(w["start"]) < end]
+        source_words = list(words)
+        if project.get("source"):
+            saved = load_transcript(workdir)
+            if saved:
+                # Расширяем окно по полному транскрипту: в clip.words только
+                # слова, попавшие в исходные границы клипа.
+                source_words = [w for seg in saved.get("segments") or []
+                                for w in seg.get("words") or []]
+        words = [w for w in source_words if float(w["end"]) > start and float(w["start"]) < end]
     # правка текста субтитров: сохраняем тайминги, меняем только слова
     if payload.get("text") is not None and str(payload.get("text")).strip():
         words = subtitles.retime_words(words, str(payload["text"]))

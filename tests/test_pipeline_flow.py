@@ -1,6 +1,7 @@
 """Сценарии process_project: готовые субтитры и отказ распознавания."""
 from __future__ import annotations
 
+import json
 import tempfile
 import threading
 import unittest
@@ -167,6 +168,13 @@ class ProcessProjectCase(unittest.TestCase):
         fetcher = self._run(transcript_error="cancel")
         fetcher.assert_not_called()
         self.assertEqual(self.db.project["status"], "cancelled")
+
+    def test_transcript_is_saved_for_rerender(self):
+        self._run(transcript_error=False)
+        saved = self.dir / "p1" / "transcript.json"
+        self.assertTrue(saved.exists(), "транскрипт нужен для расширения границ клипа")
+        data = json.loads(saved.read_text(encoding="utf-8"))
+        self.assertEqual(len(data.get("segments") or []), 1)
 
 
 if __name__ == "__main__":
