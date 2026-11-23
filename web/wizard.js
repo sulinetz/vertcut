@@ -116,6 +116,10 @@
       }
       if (project.status === "review") {
         if (!wizard.ready) mergeOptions(project);
+        else if (project.dub && project.options && project.options.external_audio) {
+          // Дубляж подключили уже после открытия мастера — включаем замену звука.
+          wizard.opts.external_audio = true;
+        }
         wizard.ready = true;
         render();
         return;
@@ -182,6 +186,7 @@
           <label class="toggle"><input type="checkbox" id="wzForceAsr" ${wizard.opts.subtitle_source === "whisper" ? "checked" : ""}/><span class="track"></span><span>Распознать заново (Whisper)</span></label>
         </div>
         <div class="wz-block"><b>Дубляж</b> ${dub}
+          <label class="toggle"><input type="checkbox" id="wzUseDub" ${wizard.opts.external_audio ? "checked" : ""} ${project.dub ? "" : "disabled"}/><span class="track"></span><span>Заменить звук дубляжом</span></label>
           <div class="wz-actions"><button class="link-btn" id="wzDub">подключить дубляж</button>
           <button class="link-btn" id="wzSubs">приложить субтитры</button>
           <button class="link-btn" id="wzMusic">добавить музыку</button></div>
@@ -211,6 +216,10 @@
     if (native) native.addEventListener("click", pickNative);
     const dub = $("#wzDub");
     if (dub) dub.addEventListener("click", () => { wizard.picked = "dub"; $("#dubInput").click(); });
+    const useDub = $("#wzUseDub");
+    if (useDub) useDub.addEventListener("change", () => {
+      wizard.opts.external_audio = useDub.checked;
+    });
     const subs = $("#wzSubs");
     if (subs) subs.addEventListener("click", () => { wizard.picked = "subs"; $("#subsInput").click(); });
     const music = $("#wzMusic");
