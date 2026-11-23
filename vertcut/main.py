@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from . import custom_fonts, db, jobs, pipeline, transcribe
 from ._version import __version__
@@ -123,6 +124,34 @@ async def _lifespan(_app: FastAPI):
     print(f"[whisper] устройство: {info['device']}/{info['compute']}"
           + (f" ({info['note']})" if info.get("note") else ""), flush=True)
     yield
+
+
+async def _stream_upload(file: UploadFile, target: Path, limit: int,
+                         too_big: str) -> Path:
+    """Потоково пишет загрузку в .part, соблюдая лимит, затем заменяет файл."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + ".part")
+    written = 0
+    try:
+        with open(part, "wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if limit and written > limit:
+                    raise HTTPException(413, too_big)
+                fh.write(chunk)
+        if written <= 0:
+            raise HTTPException(400, "Файл пустой")
+        os.replace(part, target)
+    except HTTPException:
+        part.unlink(missing_ok=True)
+        raise
+    except Exception:
+        part.unlink(missing_ok=True)
+        raise
+    return target
 
 
 # CORS не нужен: страница отдаётся с того же origin, что и API. Без него чужая
@@ -292,15 +321,19 @@ def fonts() -> List[Dict[str, Any]]:
 
 @app.post("/api/fonts")
 async def font_upload(file: UploadFile = File(...)) -> Dict[str, Any]:
-    data = await file.read()
-    if len(data) > MAX_FONT_BYTES:
-        raise HTTPException(413, "Файл шрифта больше 24 МБ")
+    suffix = Path(file.filename or "font.ttf").suffix.lower() or ".ttf"
+    temp = DATA_DIR / f"font_upload{suffix}"
     try:
-        return custom_fonts.save(file.filename or "font.ttf", data)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"Не удалось прочитать шрифт: {str(exc)[:200]}") from exc
+        await _stream_upload(file, temp, MAX_FONT_BYTES, "Файл шрифта больше 24 МБ")
+        data = temp.read_bytes()
+        try:
+            return custom_fonts.save(file.filename or "font.ttf", data)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Не удалось прочитать шрифт: {str(exc)[:200]}") from exc
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 @app.delete("/api/fonts/{key}")
@@ -437,7 +470,7 @@ async def _store_upload(pid: str, file: UploadFile) -> Path:
 
         probed: Dict[str, Any] = {}
         try:
-            probed = utils.probe(part)
+            probed = await run_in_threadpool(utils.probe, part)
         except Exception:  # noqa: BLE001
             probed = {}
         if not probed.get("duration"):
@@ -486,7 +519,7 @@ async def upload_into_project(pid: str, file: UploadFile = File(...)) -> Dict[st
     try:
         from . import utils
 
-        tracks = utils.subtitle_streams(target)
+        tracks = await run_in_threadpool(utils.subtitle_streams, target)
     except Exception:  # noqa: BLE001
         tracks = []
     db.update_project(pid, source=str(target), title=file.filename or project.get("title"),
@@ -530,15 +563,12 @@ async def upload_subtitles(pid: str, file: UploadFile = File(...)) -> Dict[str, 
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUBTITLE_SUFFIXES:
         raise HTTPException(400, "Нужен файл .srt, .ass, .ssa или .vtt")
-    data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(413, "Файл субтитров больше 10 МБ")
     workdir = PROJECTS_DIR / pid
     workdir.mkdir(parents=True, exist_ok=True)
     for old in SUBTITLE_SUFFIXES:
         (workdir / f"subtitles{old}").unlink(missing_ok=True)
     target = workdir / f"subtitles{suffix}"
-    target.write_bytes(data)
+    await _stream_upload(file, target, 10 * 1024 * 1024, "Файл субтитров больше 10 МБ")
     try:
         from . import utils
 
@@ -657,6 +687,8 @@ def project_cancel(pid: str) -> Dict[str, Any]:
     project = db.get_project(pid)
     if not project:
         raise HTTPException(404, "Проект не найден")
+    if project.get("status") not in ("queued", "preparing", "running", "processing"):
+        raise HTTPException(409, "Проект уже не обрабатывается — отменять нечего")
     pipeline.request_cancel(pid)
     db.update_project(pid, status="cancelled", stage="Отменено", error=None)
     return {"ok": True}
@@ -747,9 +779,6 @@ async def upload_adhd_bg(file: UploadFile = File(...)) -> Dict[str, Any]:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ADHD_BG_SUFFIXES:
         raise HTTPException(400, "Нужен видеофайл: mp4, webm, mov, mkv")
-    data = await file.read()
-    if len(data) > ADHD_BG_MAX_BYTES:
-        raise HTTPException(413, "Файл больше 300 МБ")
     ADHD_BG_DIR.mkdir(parents=True, exist_ok=True)
     base = "".join(ch for ch in Path(file.filename or "bg").stem if ch.isalnum() or ch in "-_ ")[:48].strip()
     if not base:
@@ -759,8 +788,8 @@ async def upload_adhd_bg(file: UploadFile = File(...)) -> Dict[str, Any]:
     while target.exists():
         target = ADHD_BG_DIR / f"{base}_{counter}{suffix}"
         counter += 1
-    target.write_bytes(data)
-    return {"ok": True, "name": target.name, "size": len(data)}
+    await _stream_upload(file, target, ADHD_BG_MAX_BYTES, "Файл больше 300 МБ")
+    return {"ok": True, "name": target.name, "size": target.stat().st_size}
 
 
 @app.delete("/api/adhd-bg/{name}")
@@ -787,16 +816,14 @@ async def upload_music(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in MUSIC_SUFFIXES:
         raise HTTPException(400, "Нужен аудиофайл: mp3, m4a, wav, ogg, flac")
-    data = await file.read()
-    if len(data) > 60 * 1024 * 1024:
-        raise HTTPException(413, "Файл больше 60 МБ")
     workdir = PROJECTS_DIR / pid
     workdir.mkdir(parents=True, exist_ok=True)
     for old in MUSIC_SUFFIXES:
         (workdir / f"music{old}").unlink(missing_ok=True)
-    (workdir / f"music{suffix}").write_bytes(data)
+    target = workdir / f"music{suffix}"
+    await _stream_upload(file, target, 60 * 1024 * 1024, "Файл больше 60 МБ")
     db.merge_meta(pid, {"music": True})
-    return {"ok": True, "size": len(data)}
+    return {"ok": True, "size": target.stat().st_size}
 
 
 @app.delete("/api/projects/{pid}/music")
@@ -953,6 +980,14 @@ def clip_rerender(cid: str, body: ClipEdit) -> Dict[str, Any]:
         if body.end and recorded and body.end > recorded + 0.5:
             raise HTTPException(400, "Конец клипа выходит за пределы записанной части эфира")
     payload = _clean_clip_edit(body)
+    start = float(payload.get("start", clip["start"]))
+    end = float(payload.get("end", clip["end"]))
+    if end <= start:
+        raise HTTPException(400, "Конец клипа должен быть позже начала")
+    if project and project.get("source"):
+        limit = float(project.get("duration") or 0)
+        if limit and end > limit + 0.5:
+            raise HTTPException(400, "Конец клипа выходит за пределы видео")
     jobs.submit_rerender(cid, payload)
     return {"ok": True, "clip": db.get_clip(cid)}
 
