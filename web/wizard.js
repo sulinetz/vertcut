@@ -553,6 +553,7 @@
     }));
     $$('input[name="wzUi"]').forEach((el) => el.addEventListener("change", () => {
       setUiMode(el.value);
+      if (!state.current) { state.mainKey = ""; renderMain(true); }
       toast(el.value === "wizard" ? "Включён мастер по шагам" : "Включён старый экран");
     }));
   }

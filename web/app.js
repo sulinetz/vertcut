@@ -7,6 +7,9 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+// Какой экран создания клипов выбран в настройках.
+const wizardInterface = () => (localStorage.getItem("vertcut.interface") || "wizard") === "wizard";
+
 const fmtDur = (sec) => {
   sec = Math.max(0, Math.round(sec || 0));
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -501,15 +504,16 @@ function heroHTML() {
   if (state.homeView === "streams") return streamHomeHTML();
   const o = state.opts;
   const counts = [5, 10, 20, 30, 50, 0];
+  const wizard = wizardInterface();
   return `
-  <section class="hero">
+  <section class="hero ${wizard ? "wz-simple" : ""}">
     <div class="eyebrow">${ICONS.spark} Автонарезка для Shorts · Reels · TikTok</div>
     <h1 class="hero-title">Одно видео —<br><span class="grad">десятки вирусных клипов</span></h1>
     <p class="hero-sub">Вставьте ссылку на YouTube, Twitch, TikTok, Instagram, VK или файл. Приложение найдёт самые цепляющие моменты, обрежет их в вертикаль с умным кадрированием по лицу, наложит субтитры с подсветкой слов и отрендерит готовые ролики.</p>
 
     <div class="url-box">
       <input id="urlInput" type="text" placeholder="https://youtube.com/watch?v=… или https://twitch.tv/videos/…" autocomplete="off" spellcheck="false" />
-      <button class="btn-primary" id="startBtn">Сделать нарезки</button>
+      <button class="btn-primary" id="startBtn">${wizard ? "Далее" : "Сделать нарезки"}</button>
     </div>
     <div class="upload-row">
       <span>или</span>
@@ -521,6 +525,18 @@ function heroHTML() {
       <span id="pendingSubs" class="pending-file hidden"></span>
     </div>
     <div class="hero-note">Twitch: VOD или клип. Прямой эфир — на вкладке «Прямой эфир» слева.</div>
+    ${wizard ? `<div class="wz-start">
+      <label class="mini-field"><span>Доступ к источнику</span>
+        <select id="startCookies">
+          <option value="">Без cookies</option>
+          <option value="chrome">Cookies из Chrome</option>
+          <option value="safari">Cookies из Safari</option>
+          <option value="firefox">Cookies из Firefox</option>
+          <option value="edge">Cookies из Edge</option>
+        </select>
+      </label>
+      <div class="wz-start-note">Дальше по шагам: кадр → субтитры → количество. Длительность, стиль и всё остальное тоже можно поменять.</div>
+    </div>` : ""}
 
     <div class="group-title"><span>Параметры нарезки</span><span class="group-hint">всё можно поменять позже</span></div>
     <div class="options-layout">
@@ -813,6 +829,10 @@ function bindHero() {
 
   const cookies = $("#cookiesSelect");
   if (cookies) cookies.addEventListener("change", () => { state.opts.cookies = cookies.value; });
+  const startCookies = $("#startCookies");
+  if (startCookies) startCookies.addEventListener("change", () => {
+    state.opts.cookies = startCookies.value;
+  });
 
   const addFont = $("#uploadFontBtn");
   if (addFont) addFont.addEventListener("click", () => {
