@@ -68,6 +68,14 @@ def _is_cookie_db_error(exc: Exception) -> bool:
     return ("could not copy" in low and "cookie" in low) or "cookie database" in low
 
 
+def _has_word(text: str, *phrases: str) -> bool:
+    """Подстрока по границам слов: «design» не должно срабатывать на «sign in»."""
+    for phrase in phrases:
+        if re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text):
+            return True
+    return False
+
+
 def _fmt_err(exc: Exception) -> str:
     msg = str(exc)
     low = msg.lower()
@@ -75,30 +83,30 @@ def _fmt_err(exc: Exception) -> str:
         return ("Браузер не отдал cookies: его база занята запущенным процессом. "
                 "Закройте Chrome (или выберите Edge/Firefox) и повторите. "
                 "Можно также скачать без cookies — тогда доступны только открытые видео.")
-    if "sign in" in low or "login" in low or "cookies" in low or "not a bot" in low:
+    if _has_word(low, "sign in", "login", "cookies", "not a bot"):
         return ("Сайт требует авторизацию. Включите «Cookies из браузера» в настройках "
                 "или загрузите видео файлом.")
-    if "needs to be reloaded" in low:
+    if _has_word(low, "needs to be reloaded"):
         return ("YouTube запросил повторную загрузку страницы (антибот-проверка). "
                 "Нажмите «Повторить обработку»; если не помогает — включите cookies из браузера.")
-    if "requested format is not available" in low:
+    if _has_word(low, "requested format is not available"):
         return ("Источник не отдал выбранное качество. Перезапустите загрузку — "
-                "Вайралкат подберёт формат заново.")
-    if "no video formats found" in low:
+                "приложение подберёт формат заново.")
+    if _has_word(low, "no video formats found"):
         return "Источник не отдал ни одного видеоформата. Попробуйте другую ссылку или файл."
-    if "private" in low:
+    if _has_word(low, "private"):
         return "Видео приватное — доступ запрещён."
-    if "age" in low and ("confirm" in low or "restricted" in low):
+    if _has_word(low, "age") and _has_word(low, "confirm", "restricted"):
         return ("Видео с возрастным ограничением: включите «Cookies из браузера» "
                 "или загрузите файл вручную.")
-    if "unavailable" in low or "not available" in low:
+    if _has_word(low, "unavailable", "not available"):
         return "Видео недоступно: удалено, скрыто или заблокировано по региону."
-    if "unsupported url" in low:
+    if _has_word(low, "unsupported url"):
         return "Ссылка не поддерживается. Проверьте адрес или загрузите файл."
-    if "http error 403" in low or "forbidden" in low:
+    if _has_word(low, "http error 403", "forbidden"):
         return ("Источник отклонил загрузку (403). Обычно помогает повторная попытка "
                 "или cookies из браузера.")
-    if "ffmpeg" in low:
+    if _has_word(low, "ffmpeg"):
         return f"Ошибка склейки видео через ffmpeg: {msg[-300:]}"
     return msg[-500:]
 
@@ -110,7 +118,8 @@ def _cookie_opts(browser: Optional[str]) -> Dict[str, Any]:
 
 
 def _clean_partials(dest_dir: Path) -> None:
-    for pattern in ("source.*.part", "source.*.ytdl", "source.part", "source.mp4.part"):
+    for pattern in ("source.*.part", "source.*.ytdl", "source.part", "source.mp4.part",
+                    "source.f*"):
         for path in dest_dir.glob(pattern):
             try:
                 path.unlink()
@@ -487,6 +496,7 @@ def download(url: str, dest_dir: Path, progress: ProgressCb = None,
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             failed_reasons.append(_fmt_err(exc))
+            _clean_partials(dest_dir)
             print(f"download attempt {label} failed: {exc}", file=sys.stderr)
             if idx == len(attempts) - 1:
                 break

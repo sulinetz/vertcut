@@ -41,6 +41,37 @@ class PickFormatTest(unittest.TestCase):
         self.assertEqual(fmt, "137+140")
 
 
+class FmtErrTest(unittest.TestCase):
+    def test_word_boundaries_do_not_misfire(self):
+        text = downloader._fmt_err(Exception("Design in CSS is broken"))
+        self.assertEqual(text, "Design in CSS is broken")
+        text = downloader._fmt_err(Exception("package page not found"))
+        self.assertNotIn("возраст", text)
+
+    def test_auth_and_private_messages(self):
+        self.assertIn("авторизацию", downloader._fmt_err(Exception("Sign in to confirm")))
+        self.assertIn("приватное", downloader._fmt_err(Exception("Private video")))
+
+    def test_no_old_brand_in_format_error(self):
+        text = downloader._fmt_err(Exception("Requested format is not available"))
+        self.assertNotIn("Вайралкат", text)
+        self.assertIn("приложение", text)
+
+
+class CleanPartialsTest(unittest.TestCase):
+    def test_fragments_are_removed_but_valid_source_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp)
+            keep = dest / "source.mp4"
+            keep.write_bytes(b"x" * 2048)
+            for name in ("source.f137.mp4", "source.f251.webm", "source.f137.mp4.part",
+                         "source.f251.webm.ytdl"):
+                (dest / name).write_bytes(b"x")
+            downloader._clean_partials(dest)
+            self.assertTrue(keep.exists())
+            self.assertFalse(list(dest.glob("source.f*")))
+
+
 class FetchSubtitlesTest(unittest.TestCase):
     """Готовые субтитры: русские в приоритете, старые файлы не подхватываются."""
 
