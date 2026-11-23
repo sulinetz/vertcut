@@ -505,9 +505,10 @@ def download_file(url: str, dest_dir: Path, progress: ProgressCb = None) -> Dict
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     path = dest_dir / "source.mp4"
+    part = dest_dir / "source.mp4.part"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp, open(path, "wb") as fh:
+        with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as fh:
             total = int(resp.headers.get("Content-Length") or 0)
             got = 0
             while True:
@@ -516,11 +517,20 @@ def download_file(url: str, dest_dir: Path, progress: ProgressCb = None) -> Dict
                     break
                 fh.write(chunk)
                 got += len(chunk)
-                if progress and total:
-                    progress(min(got / total, 0.99), f"Скачивание {got/total*100:.0f}%")
+                if progress:
+                    if total:
+                        progress(min(got / total, 0.99), f"Скачивание {got/total*100:.0f}%")
+                    else:
+                        # Без Content-Length процент не посчитать: показываем объём.
+                        mb = got / 1024 / 1024
+                        progress(min(0.9, mb / 512.0), f"Скачивание {mb:.1f} МБ")
+        os.replace(part, path)
     except Cancelled:
+        part.unlink(missing_ok=True)
         raise
     except Exception as exc:  # noqa: BLE001
+        # Недокачанный файл не должен выглядеть как готовый исходник.
+        part.unlink(missing_ok=True)
         raise DownloadError(f"Не удалось скачать файл по ссылке: {exc}") from exc
     return {"path": path, "title": Path(url.split("?")[0]).name or "video", "duration": None,
             "uploader": None, "webpage_url": url, "extractor": "direct", "quality": "file",

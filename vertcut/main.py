@@ -399,9 +399,10 @@ async def _store_upload(pid: str, file: UploadFile) -> Path:
     workdir = PROJECTS_DIR / pid
     workdir.mkdir(parents=True, exist_ok=True)
     target = workdir / f"source{suffix}"
+    part = workdir / f"source{suffix}.part"
     written = 0
     try:
-        with open(target, "wb") as fh:
+        with open(part, "wb") as fh:
             while True:
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
@@ -417,26 +418,32 @@ async def _store_upload(pid: str, file: UploadFile) -> Path:
                         "или поднимите VERTCUT_MAX_UPLOAD_GB",
                     )
                 fh.write(chunk)
-    except HTTPException:
-        target.unlink(missing_ok=True)
-        raise
-    if target.stat().st_size < 1024:
-        target.unlink(missing_ok=True)
-        raise HTTPException(400, "Файл пустой или повреждён")
-    # Проверяем, что это действительно медиа: иначе в списке появлялся бы
-    # проект, который сразу уходит в error.
-    try:
+        if part.stat().st_size < 1024:
+            raise HTTPException(400, "Файл пустой или повреждён")
+        # Проверяем временный файл: рабочий исходник подменяем только после
+        # успешной проверки, иначе сбойный upload убивает прошлое видео.
         from . import utils
 
-        probed = utils.probe(target)
+        probed: Dict[str, Any] = {}
+        try:
+            probed = utils.probe(part)
+        except Exception:  # noqa: BLE001
+            probed = {}
         if not probed.get("duration"):
-            raise ValueError("нет длительности")
-        tracks = probed.get("audio_streams") or []
-        if tracks:
-            db.merge_meta(pid, {"audio_tracks": tracks})
-    except Exception:  # noqa: BLE001
-        target.unlink(missing_ok=True)
-        raise HTTPException(400, "Файл не похож на видео или аудио — проверьте содержимое") from None
+            raise HTTPException(400, "Файл не похож на видео или аудио — проверьте содержимое")
+        os.replace(part, target)
+        for other in workdir.glob("source.*"):
+            if other != target and not other.name.endswith(".part"):
+                other.unlink(missing_ok=True)
+    except HTTPException:
+        part.unlink(missing_ok=True)
+        raise
+    except Exception:
+        part.unlink(missing_ok=True)
+        raise
+    tracks = probed.get("audio_streams") or []
+    if tracks:
+        db.merge_meta(pid, {"audio_tracks": tracks})
     return target
 
 
@@ -821,9 +828,10 @@ async def upload_dub(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]:
     workdir = PROJECTS_DIR / pid
     workdir.mkdir(parents=True, exist_ok=True)
     target = workdir / f"dub{suffix}"
+    part = workdir / f"dub{suffix}.part"
     written = 0
     try:
-        with open(target, "wb") as fh:
+        with open(part, "wb") as fh:
             while True:
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
@@ -835,24 +843,30 @@ async def upload_dub(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]:
                                  else f"{MAX_UPLOAD_BYTES / 1024 ** 2:.0f} МБ")
                     raise HTTPException(413, f"Файл больше {size_hint} — поднимите VERTCUT_MAX_UPLOAD_GB")
                 fh.write(chunk)
-    except HTTPException:
-        target.unlink(missing_ok=True)
-        raise
-    try:
+        # Проверяем временный файл: старый дубляж остаётся, пока новый не прошёл
+        # проверку. Иначе сбойная загрузка оставляет проект без звука.
         from . import utils
 
-        info = utils.probe_audio(target)
+        info: Dict[str, Any] = {}
+        try:
+            info = utils.probe_audio(part)
+        except Exception:  # noqa: BLE001
+            info = {}
         if not info.get("has_audio") or float(info.get("duration") or 0) < 1:
-            raise ValueError("нет звука")
-    except Exception:  # noqa: BLE001
-        target.unlink(missing_ok=True)
-        raise HTTPException(400, "В файле нет звуковой дорожки — проверьте содержимое") from None
-    for old in DUB_SUFFIXES:
-        path = workdir / f"dub{old}"
-        if path != target:
-            path.unlink(missing_ok=True)
-    for cached in workdir.glob("dub_subs_*.srt"):
-        cached.unlink(missing_ok=True)
+            raise HTTPException(400, "В файле нет звуковой дорожки — проверьте содержимое")
+        os.replace(part, target)
+        for old in DUB_SUFFIXES:
+            path = workdir / f"dub{old}"
+            if path != target:
+                path.unlink(missing_ok=True)
+        for cached in workdir.glob("dub_subs_*.srt"):
+            cached.unlink(missing_ok=True)
+    except HTTPException:
+        part.unlink(missing_ok=True)
+        raise
+    except Exception:
+        part.unlink(missing_ok=True)
+        raise
     meta = {
         "name": file.filename or target.name,
         "duration": round(float(info.get("duration") or 0), 2),
