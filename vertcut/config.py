@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
@@ -132,3 +133,51 @@ def ensure_path() -> None:
     bin_dir = str(ffmpeg_bin_dir())
     if bin_dir not in os.environ.get("PATH", "").split(os.pathsep):
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+
+
+# --- Возможности ffmpeg -----------------------------------------------------
+
+_caps_cache: Optional[Dict[str, Any]] = None
+
+
+def _version_tuple(text: str) -> tuple:
+    match = re.search(r"ffmpeg version (?:n)?(\d+)\.(\d+)", text or "")
+    if not match:
+        return (0, 0)
+    return int(match.group(1)), int(match.group(2))
+
+
+def ffmpeg_capabilities() -> Dict[str, Any]:
+    """Что умеет установленный ffmpeg: версия, ass, loudnorm, amix normalize.
+
+    Считается один раз за запуск. Нужны фильтры и amix:normalize=0, которого
+    не было до 4.4 — на старых сборках миксуем с weights и loudnorm.
+    """
+    global _caps_cache
+    if _caps_cache is not None:
+        return _caps_cache
+    import subprocess
+
+    caps: Dict[str, Any] = {"version": "", "amix_normalize": True,
+                            "ass": True, "loudnorm": True}
+    try:
+        version = subprocess.run(
+            [ffmpeg(), "-hide_banner", "-version"], capture_output=True,
+            text=True, errors="replace", timeout=15)
+        text = version.stdout or ""
+        caps["version"] = text.splitlines()[0] if text else ""
+        major, minor = _version_tuple(text)
+        caps["amix_normalize"] = (major, minor) >= (4, 4)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        filters = subprocess.run(
+            [ffmpeg(), "-hide_banner", "-filters"], capture_output=True,
+            text=True, errors="replace", timeout=15)
+        listing = (filters.stdout or "") + (filters.stderr or "")
+        caps["ass"] = bool(re.search(r"^\s*\S+\s+ass\s", listing, re.M))
+        caps["loudnorm"] = bool(re.search(r"^\s*\S+\s+loudnorm\s", listing, re.M))
+    except Exception:  # noqa: BLE001
+        pass
+    _caps_cache = caps
+    return caps

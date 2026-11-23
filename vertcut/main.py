@@ -111,6 +111,14 @@ async def _lifespan(_app: FastAPI):
     db.init_db()
     db.reset_stale_jobs()
     custom_fonts.sync()
+    from .config import ffmpeg_capabilities
+
+    caps = ffmpeg_capabilities()
+    print("[ffmpeg] " + (caps.get("version") or "версия неизвестна")
+          + " · ass: " + ("да" if caps.get("ass") else "нет")
+          + " · loudnorm: " + ("да" if caps.get("loudnorm") else "нет")
+          + " · amix normalize: " + ("да" if caps.get("amix_normalize") else "нет"),
+          flush=True)
     info = transcribe.device_info()
     print(f"[whisper] устройство: {info['device']}/{info['compute']}"
           + (f" ({info['note']})" if info.get("note") else ""), flush=True)

@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .config import ffmpeg
+from .config import ffmpeg, ffmpeg_capabilities
 from . import custom_fonts
 from .errors import Cancelled
 from .reframe import crop_expressions
@@ -337,6 +337,18 @@ def _run_ffmpeg(cmd: List[str], duration: float,
             "killed": state["killed"], "cancelled": state["cancel"]}
 
 
+def _amix_filter(normalize: bool) -> str:
+    """Микс музыки с речью без просадки уровня.
+
+    amix по умолчанию делит громкость на число входов; normalize=0 (ffmpeg 4.4+)
+    это отключает. На старых сборках компенсируем weights и loudnorm после микса.
+    """
+    base = "amix=inputs=2:duration=first:dropout_transition=0"
+    if normalize:
+        return base + ":normalize=0"
+    return base + ":weights='1 1',loudnorm=I=-14:TP=-1.5:LRA=11"
+
+
 def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path,
                 ass_path: Optional[Path] = None, aspect: str = "9:16",
                 mode: str = "blur", focus_x: float = 0.5,
@@ -612,7 +624,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 f"[{music_idx}:a]volume={level:.3f},afade=t=in:st=0:d=1.2,"
                 f"afade=t=out:st={end_fade:.3f}:d=1.6[m]"
             )
-            audio.append("[a0][m]amix=inputs=2:duration=first:dropout_transition=0[aout]")
+            audio.append("[a0][m]"
+                         + _amix_filter(bool(ffmpeg_capabilities().get("amix_normalize", True)))
+                         + "[aout]")
             audio_label = "[aout]"
         else:
             audio_label = "[a0]"
