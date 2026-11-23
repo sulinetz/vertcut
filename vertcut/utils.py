@@ -276,21 +276,34 @@ def ass_time(seconds: float) -> str:
 
 
 def parse_vtt(path: Path) -> List[Dict[str, Any]]:
-    """Простой парсер WebVTT в сегменты с приблизительными таймингами слов."""
+    """Парсер WebVTT: понимает и HH:MM:SS.mmm, и MM:SS.mmm.
+
+    Автосубтитры YouTube «плывут»: каждая следующая реплика повторяет
+    предыдущую строку и добавляет новую. Такие реплики схлопываем.
+    """
     raw = Path(path).read_text(encoding="utf-8", errors="replace")
     blocks = re.split(r"\n\s*\n", raw.replace("\r\n", "\n"))
+    ts = re.compile(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})")
     segs: List[Dict[str, Any]] = []
-    ts = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})")
+
+    def stamp_of(text: str) -> Optional[float]:
+        m = ts.search(text or "")
+        if not m:
+            return None
+        hours = int(m.group(1) or 0)
+        return hours * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + int(m.group(4)) / 1000
+
     for block in blocks:
-        lines = [ln for ln in block.split("\n") if ln.strip() and not ln.startswith(("WEBVTT", "NOTE", "Kind:", "Language:"))]
+        lines = [ln for ln in block.split("\n")
+                 if ln.strip() and not ln.startswith(("WEBVTT", "NOTE", "Kind:", "Language:"))]
         stamp = None
         text_lines = []
         for ln in lines:
-            m = ts.search(ln)
-            if m:
-                g = list(map(int, m.groups()))
-                stamp = (g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 1000,
-                         g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 1000)
+            if "-->" in ln:
+                left, right = ln.split("-->", 1)
+                start, end = stamp_of(left), stamp_of(right)
+                if start is not None and end is not None and end > start:
+                    stamp = (start, end)
             elif stamp:
                 text_lines.append(re.sub(r"<[^>]+>", "", ln).strip())
         if not stamp or not text_lines:
@@ -301,23 +314,50 @@ def parse_vtt(path: Path) -> List[Dict[str, Any]]:
             continue
         span = max(0.05, stamp[1] - stamp[0])
         step = span / len(words_raw)
-        words = [{"word": w, "start": stamp[0] + i * step, "end": stamp[0] + (i + 1) * step}
+        words = [{"word": w, "start": round(stamp[0] + i * step, 3),
+                  "end": round(stamp[0] + (i + 1) * step, 3)}
                  for i, w in enumerate(words_raw)]
-        segs.append({"start": stamp[0], "end": stamp[1], "text": text, "words": words})
-    # склейка дублей (автосубтитры YouTube дают «плывущие» строки)
-    out: List[Dict[str, Any]] = []
-    for s in segs:
-        if out and s["text"] == out[-1]["text"]:
-            out[-1]["end"] = s["end"]
+        seg = {"start": stamp[0], "end": stamp[1], "text": text, "words": words}
+        if segs and _merge_rolling(segs[-1], seg):
             continue
-        out.append(s)
-    return out
+        segs.append(seg)
+    return segs
+
+
+def _norm_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _merge_rolling(prev: Dict[str, Any], seg: Dict[str, Any]) -> bool:
+    """Схлопывает «плывущую» реплику автосубтитров в предыдущую.
+
+    Новая реплика обычно содержит предыдущую строку целиком и добавляет
+    следующую: берём более полный текст, но оставляем раннее начало.
+    """
+    a, b = _norm_text(prev.get("text")), _norm_text(seg.get("text"))
+    if not a or not b:
+        return False
+    if a == b:
+        prev["end"] = max(float(prev["end"]), float(seg["end"]))
+        return True
+    if b.startswith(a):
+        start = min(float(prev["start"]), float(seg["start"]))
+        prev["text"] = seg["text"]
+        prev["words"] = list(seg.get("words") or [])
+        prev["start"] = start
+        prev["end"] = max(float(prev["end"]), float(seg["end"]))
+        return True
+    if a.endswith(b):
+        prev["end"] = max(float(prev["end"]), float(seg["end"]))
+        return True
+    return False
 
 
 # --- Субтитры ---------------------------------------------------------------
 
 _SUB_STREAM_RE = re.compile(
-    r"Stream #\d+:\d+(?:\(([a-z]{2,3})\))?.*?: Subtitle: ([a-zA-Z0-9_]+)")
+    r"Stream #\d+:\d+(?:\[[^\]]+\])?(?:\(([a-z]{2,3})\))?(?:\[[^\]]+\])?"
+    r".*?: Subtitle: ([a-zA-Z0-9_]+)")
 
 
 def subtitle_streams(path: Path) -> List[Dict[str, Any]]:
@@ -397,7 +437,7 @@ def parse_srt(path: Path) -> List[Dict[str, Any]]:
     raw = Path(path).read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
     cues: List[tuple] = []
     for block in re.split(r"\n\s*\n", raw):
-        lines = [ln for ln in block.split("\n") if ln.strip()]
+        lines = block.split("\n")
         stamp = None
         text_lines: List[str] = []
         for ln in lines:
@@ -405,8 +445,12 @@ def parse_srt(path: Path) -> List[Dict[str, Any]]:
             if m:
                 g = m.groups()
                 stamp = (_stamp(*g[:4]), _stamp(*g[4:]))
-            elif stamp and not ln.strip().isdigit():
-                text_lines.append(ln)
+                continue
+            if stamp is None:
+                # до таймкода идёт только номер реплики — его и пропускаем
+                continue
+            if ln.strip():
+                text_lines.append(ln.strip())
         if stamp and text_lines:
             cues.append((stamp[0], stamp[1], " ".join(text_lines)))
     return _segments_from_cues(cues)
