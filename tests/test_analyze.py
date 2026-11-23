@@ -25,6 +25,41 @@ def make_segment(sentences, step=0.32, pause=0.45, start_at=0.0):
              "text": " ".join(w["word"] for w in words), "words": words}]
 
 
+class EnergyCurveTest(unittest.TestCase):
+    def test_tone_and_silence(self):
+        import tempfile
+        import wave
+        from pathlib import Path
+
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audio16k.wav"
+            rate = 16000
+            tone = (np.sin(2 * np.pi * 440 * np.arange(rate) / rate) * 12000).astype(np.int16)
+            silence = np.zeros(rate, dtype=np.int16)
+            data = np.concatenate([tone, silence]).tobytes()
+            with wave.open(str(path), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(rate)
+                wf.writeframes(data)
+            with mock.patch.object(analyze.utils, "read_audio_mono",
+                                   side_effect=AssertionError("не читать весь файл")):
+                curve, mean = analyze.energy_curve(Path("unused.mp4"), hop=0.25, wav=path)
+        self.assertEqual(len(curve), 8)
+        self.assertGreater(curve[0], curve[-1] + 40)
+        self.assertLess(curve[-1], -60)
+        self.assertGreater(mean, -70)
+
+    def test_keywords_are_cached(self):
+        analyze._keywords_cached.cache_clear()
+        first = analyze._keywords("продукт продукт команда команда команда")
+        second = analyze._keywords("продукт продукт команда команда команда")
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(analyze._keywords_cached.cache_info().hits, 1)
+
+
 class ContextHelpersTest(unittest.TestCase):
     def test_filler_start_uses_word_boundaries(self):
         self.assertFalse(analyze._has_filler_start("Нужно проверить"))

@@ -399,6 +399,7 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
             transcript["segments"], audio["path"], duration,
             count=opts["count"] or 0, min_dur=opts["min_dur"],
             max_dur=opts["max_dur"], target_dur=opts["target_dur"],
+            wav=workdir / "audio16k.wav",
         )
     if not found:
         raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")
@@ -777,6 +778,7 @@ def process_project(pid: str) -> None:
                 count=opts["count"] or 0,
                 min_dur=opts["min_dur"], max_dur=opts["max_dur"],
                 target_dur=opts["target_dur"],
+                wav=None if dub is not None else workdir / "audio16k.wav",
             )
         if not found:
             raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")

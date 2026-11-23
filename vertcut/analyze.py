@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import difflib
 import re
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import utils
+
+# Сколько окон вообще пробуем оценить: длинные записи иначе дают O(n^2) памяти.
+MAX_CANDIDATES = 4000
 
 # --- Лексиконы ---------------------------------------------------------------
 
@@ -207,8 +211,55 @@ def build_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sentences
 
 
-def energy_curve(media: Path, hop: float = 0.25) -> Tuple[List[float], float]:
-    """RMS-громкость по кадрам (дБ) и средний уровень."""
+def _wav_energy(path: Path, hop: float) -> Tuple[List[float], float]:
+    """RMS по кадрам из готового audio16k.wav: читаем блоками, а не всю запись."""
+    import wave
+
+    import numpy as np
+
+    values: List[float] = []
+    total = 0.0
+    with wave.open(str(path), "rb") as wf:
+        if wf.getsampwidth() != 2:
+            raise ValueError("ожидается 16-bit PCM")
+        rate = wf.getframerate()
+        channels = wf.getnchannels()
+        hint = max(1, int(round(rate * 30)))
+        n = max(1, int(hop * rate))
+        carry = np.zeros(0, dtype=np.float32)
+        while True:
+            raw = wf.readframes(hint)
+            if not raw:
+                break
+            block = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            if channels > 1:
+                block = block.reshape(-1, channels).mean(axis=1)
+            data = np.concatenate([carry, block]) if carry.size else block
+            frames = len(data) // n
+            carry = data[frames * n:]
+            if not frames:
+                continue
+            rms = np.sqrt(np.mean(data[:frames * n].reshape(frames, n) ** 2, axis=1) + 1e-12)
+            db = 20 * np.log10(np.maximum(rms, 1e-6))
+            values.extend(float(x) for x in db)
+            total += float(np.sum(db))
+    if not values:
+        return [], -60.0
+    return values, total / len(values)
+
+
+def energy_curve(media: Path, hop: float = 0.25,
+                 wav: Optional[Path] = None) -> Tuple[List[float], float]:
+    """RMS-громкость по кадрам (дБ) и средний уровень.
+
+    Предпочитает готовый audio16k.wav (он уже 16 кГц/моно) и читает его
+    блоками: часовая запись больше не занимает сотни мегабайт памяти.
+    """
+    if wav is not None and Path(wav).exists():
+        try:
+            return _wav_energy(Path(wav), hop)
+        except Exception:  # noqa: BLE001
+            pass
     try:
         import numpy as np
 
@@ -346,7 +397,8 @@ def _score_window(sents: List[Dict[str, Any]], media_duration: float,
     return round(min(1.0, max(0.0, score)), 4), parts
 
 
-def _keywords(text: str, limit: int = 6) -> List[str]:
+@lru_cache(maxsize=4096)
+def _keywords_cached(text: str, limit: int) -> Tuple[str, ...]:
     counts: Dict[str, int] = {}
     for w in _WORD_RE.findall(text):
         low = w.lower()
@@ -354,7 +406,11 @@ def _keywords(text: str, limit: int = 6) -> List[str]:
             continue
         counts[low] = counts.get(low, 0) + 1
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], -len(kv[0])))
-    return [w for w, _ in ranked[:limit]]
+    return tuple(w for w, _ in ranked[:limit])
+
+
+def _keywords(text: str, limit: int = 6) -> List[str]:
+    return list(_keywords_cached(text, int(limit)))
 
 
 def _title_score(text: str) -> float:
@@ -413,17 +469,21 @@ def _text_similar(a: str, b: str, threshold: float = 0.74) -> bool:
 
 def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                   count: int = 10, min_dur: float = 15, max_dur: float = 60,
-                  target_dur: float = 32, platform: str = "shorts") -> List[Dict[str, Any]]:
+                  target_dur: float = 32, platform: str = "shorts",
+                  wav: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Возвращает список клипов: тайминги, score, заголовок, объяснение."""
     sents = build_sentences(segments)
     if not sents:
         return []
-    curve, mean_db = energy_curve(media)
+    curve, mean_db = energy_curve(media, wav=wav)
     hop = 0.25
 
     candidates: List[Dict[str, Any]] = []
     n = len(sents)
+    capped = False
     for i in range(n):
+        if capped:
+            break
         start = sents[i]["start"]
         if start + min_dur > duration:
             break
@@ -450,6 +510,9 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                     "words": [w for x in window for w in x["words"]],
                     "title": _make_title(window),
                 })
+                if len(candidates) >= MAX_CANDIDATES:
+                    capped = True
+                    break
                 break
 
     if not candidates and sents and duration <= 180:
