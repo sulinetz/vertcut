@@ -80,6 +80,15 @@ CONTINUATION_END = [
     "because", "so", "and", "but", "or", "which", "that", "if", "when", "while",
 ]
 
+# Реклама и заставки в начале/конце выпуска — плохие моменты для нарезки.
+SPONSOR_MARKERS = (
+    "промокод", "промо", "спонсор", "реклама", "подписывай", "подписывайтесь",
+    "бусти", "boosty", "patreon", "донат", "donation", "купон", "скидка",
+    "ссылке в описании", "description", "канал спонсора",
+)
+INTRO_GUARD = 20.0
+OUTRO_GUARD = 20.0
+
 _NUM_RE = re.compile(r"\d+[.,]?\d*|%|₽|\$|€|руб|тысяч|миллион|миллиард|процент", re.I)
 _SENT_END = re.compile(r"[.!?…]+[\"'»)]*\s*$")
 _WORD_RE = re.compile(r"[\w\-']+", re.U)
@@ -102,6 +111,20 @@ def _count_patterns(text: str, patterns: List[str]) -> int:
 def _has_filler_start(text: str) -> bool:
     low = _norm(text).strip(" «\"'—-")
     return bool(_FILLER_RE.match(low))
+
+
+def _sponsor_penalty(text: str) -> float:
+    low = _norm(text)
+    hits = sum(1 for marker in SPONSOR_MARKERS if marker in low)
+    return min(0.35, hits * 0.18)
+
+
+def _weak_share(sents: List[Dict[str, Any]]) -> float:
+    """Доля предложений с низкой уверенностью Whisper."""
+    values = [float(s["conf"]) for s in sents if s.get("conf") is not None]
+    if not values:
+        return 0.0
+    return sum(1 for value in values if value < -0.8) / len(values)
 
 
 def _starts_with_context(sent: Dict[str, Any]) -> bool:
@@ -174,10 +197,14 @@ def build_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Склеивает слова в предложения по пунктуации и паузам."""
     words: List[Dict[str, Any]] = []
     for seg in segments:
+        confidence = (seg.get("quality") or {}).get("avg_logprob")
         for w in seg.get("words") or []:
             token = (w.get("word") or "").strip()
             if token:
-                words.append({"word": token, "start": float(w["start"]), "end": float(w["end"])})
+                item = {"word": token, "start": float(w["start"]), "end": float(w["end"])}
+                if confidence is not None:
+                    item["conf"] = float(confidence)
+                words.append(item)
     if not words:
         return []
 
@@ -189,12 +216,16 @@ def build_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             return
         text = " ".join(w["word"] for w in cur)
         text = re.sub(r"\s+([,.!?…:;])", r"\1", text).strip()
-        sentences.append({
+        sentence = {
             "start": cur[0]["start"],
             "end": cur[-1]["end"],
             "text": text,
             "words": list(cur),
-        })
+        }
+        confs = [w["conf"] for w in cur if "conf" in w]
+        if confs:
+            sentence["conf"] = sum(confs) / len(confs)
+        sentences.append(sentence)
         cur.clear()
 
     for i, w in enumerate(words):
@@ -277,11 +308,16 @@ def energy_curve(media: Path, hop: float = 0.25,
         return [], -30.0
 
 
-def _energy_stats(curve: List[float], mean_db: float, start: float, end: float, hop: float) -> Tuple[float, float]:
-    """Средняя громкость и доля тишины в окне."""
+def _energy_stats(curve: List[float], mean_db: float, start: float, end: float,
+                  hop: float, offset: float = 0.0) -> Tuple[float, float]:
+    """Средняя громкость и доля тишины в окне.
+
+    offset — сдвиг дубляжа: кривая построена по его дорожке, а времена клипа
+    уже пересчитаны в шкалу видео.
+    """
     if not curve:
         return 0.0, 0.0
-    a, b = int(start / hop), int(end / hop)
+    a, b = int((start - offset) / hop), int((end - offset) / hop)
     a = max(0, min(a, len(curve) - 1))
     b = max(a + 1, min(b, len(curve)))
     window = curve[a:b]
@@ -295,26 +331,30 @@ def _energy_stats(curve: List[float], mean_db: float, start: float, end: float, 
 
 
 def _nearest_quiet(curve: List[float], mean_db: float, t: float, hop: float,
-                   window: float = 0.6) -> float:
+                   window: float = 0.6, offset: float = 0.0) -> float:
     """Сдвигает границу к ближайшей тихой точке — стык звучит чище."""
     if not curve:
         return t
-    lo = max(0, int((t - window) / hop))
-    hi = min(len(curve) - 1, int((t + window) / hop))
+    lo = max(0, int((t - window - offset) / hop))
+    hi = min(len(curve) - 1, int((t + window - offset) / hop))
     best, best_score = t, 1e9
     for i in range(lo, hi + 1):
-        score = abs(curve[i] - (mean_db - 20)) + abs(i * hop - t) * 2.0
+        point = i * hop + offset
+        score = abs(curve[i] - (mean_db - 20)) + abs(point - t) * 2.0
         if curve[i] < mean_db - 15 and score < best_score:
-            best, best_score = i * hop, score
+            best, best_score = point, score
     return best
 
 
 def _score_window(sents: List[Dict[str, Any]], media_duration: float,
-                  curve: List[float], mean_db: float, hop: float) -> Tuple[float, Dict[str, float]]:
+                  curve: List[float], mean_db: float, hop: float,
+                  energy_offset: float = 0.0) -> Tuple[float, Dict[str, float]]:
     text = " ".join(s["text"] for s in sents)
     words = [w for s in sents for w in s["words"]]
     n_words = max(1, len(words))
-    dur = sents[-1]["end"] - sents[0]["start"]
+    start = sents[0]["start"]
+    end = sents[-1]["end"]
+    dur = end - start
     first = sents[0]["text"]
     low = _norm(text)
 
@@ -342,7 +382,7 @@ def _score_window(sents: List[Dict[str, Any]], media_duration: float,
         rate_score = 1.0 - abs(speech_rate - 3.2) / 3.2
     else:
         rate_score = max(0.0, 0.5 - abs(speech_rate - 3.2) * 0.25)
-    loud, silence = _energy_stats(curve, mean_db, sents[0]["start"], sents[-1]["end"], hop)
+    loud, silence = _energy_stats(curve, mean_db, start, end, hop, energy_offset)
     retention = 0.55 * rate_score + 0.25 * loud + 0.20 * (1.0 - min(1.0, silence * 2.2))
     retention = max(0.0, min(1.0, retention))
 
@@ -389,10 +429,20 @@ def _score_window(sents: List[Dict[str, Any]], media_duration: float,
         + 0.12 * length_fit
         + 0.06 * payoff
     )
+    # Реклама, слабое распознавание и самые края выпуска — минус к оценке.
+    score -= _sponsor_penalty(text)
+    weak = _weak_share(sents)
+    if weak:
+        score *= 1.0 - 0.4 * weak
+    if media_duration > 120:
+        guard = min(INTRO_GUARD, media_duration * 0.05)
+        if start < guard or end > media_duration - min(OUTRO_GUARD, media_duration * 0.05):
+            score -= 0.08
     parts = {
         "hook": round(hook, 3), "retention": round(retention, 3), "emotion": round(emotion, 3),
         "specificity": round(specificity, 3), "completeness": round(completeness, 3),
         "length_fit": round(length_fit, 3), "payoff": round(payoff, 3),
+        "sponsor": round(_sponsor_penalty(text), 3), "weak_text": round(weak, 3),
     }
     return round(min(1.0, max(0.0, score)), 4), parts
 
@@ -470,7 +520,8 @@ def _text_similar(a: str, b: str, threshold: float = 0.74) -> bool:
 def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                   count: int = 10, min_dur: float = 15, max_dur: float = 60,
                   target_dur: float = 32, platform: str = "shorts",
-                  wav: Optional[Path] = None) -> List[Dict[str, Any]]:
+                  wav: Optional[Path] = None,
+                  energy_offset: float = 0.0) -> List[Dict[str, Any]]:
     """Возвращает список клипов: тайминги, score, заголовок, объяснение."""
     sents = build_sentences(segments)
     if not sents:
@@ -494,25 +545,38 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                 break
             if dur < min_dur:
                 continue
-            # берём окно, близкое к целевому, и следующее за ним
+            # Около целевой длины сравниваем несколько вариантов: чуть короче,
+            # ровно по цели и на одно предложение длиннее.
             if dur >= target_dur or j == n - 1:
-                bi, bj = _extend_window(sents, i, j, max_dur)
-                window = sents[bi:bj + 1]
-                w_start, w_end = window[0]["start"], window[-1]["end"]
-                if w_end - w_start > max_dur:  # перестраховка на длинных фразах
-                    window, w_start, w_end = sents[i:j + 1], start, end
-                score, parts = _score_window(window, duration, curve, mean_db, hop)
-                candidates.append({
-                    "start": round(w_start, 3), "end": round(w_end, 3),
-                    "duration": round(w_end - w_start, 2),
-                    "score": score, "parts": parts,
-                    "text": " ".join(x["text"] for x in window),
-                    "words": [w for x in window for w in x["words"]],
-                    "title": _make_title(window),
-                })
-                if len(candidates) >= MAX_CANDIDATES:
-                    capped = True
-                    break
+                tried = set()
+                for jj in (j - 1, j, j + 1):
+                    if jj < i or jj >= n:
+                        continue
+                    candidate_end = sents[jj]["end"]
+                    long = candidate_end - start
+                    if long < min_dur or long > max_dur:
+                        continue
+                    bi, bj = _extend_window(sents, i, jj, max_dur)
+                    if (bi, bj) in tried:
+                        continue
+                    tried.add((bi, bj))
+                    window = sents[bi:bj + 1]
+                    w_start, w_end = window[0]["start"], window[-1]["end"]
+                    if w_end - w_start > max_dur:  # перестраховка на длинных фразах
+                        window, w_start, w_end = sents[i:jj + 1], start, candidate_end
+                    score, parts = _score_window(window, duration, curve, mean_db, hop,
+                                                 energy_offset)
+                    candidates.append({
+                        "start": round(w_start, 3), "end": round(w_end, 3),
+                        "duration": round(w_end - w_start, 2),
+                        "score": score, "parts": parts,
+                        "text": " ".join(x["text"] for x in window),
+                        "words": [w for x in window for w in x["words"]],
+                        "title": _make_title(window),
+                    })
+                    if len(candidates) >= MAX_CANDIDATES:
+                        capped = True
+                        break
                 break
 
     if not candidates and sents and duration <= 180:
@@ -609,8 +673,10 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
         start = c["start"]
         end = c["end"]
         # аккуратные границы: отступаем в тишину
-        start = max(0.0, _nearest_quiet(curve, mean_db, start - 0.10, hop, window=0.30))
-        end = min(duration, _nearest_quiet(curve, mean_db, end + 0.18, hop))
+        start = max(0.0, _nearest_quiet(curve, mean_db, start - 0.10, hop, window=0.30,
+                                        offset=energy_offset))
+        end = min(duration, _nearest_quiet(curve, mean_db, end + 0.18, hop,
+                                           offset=energy_offset))
         words = [w for w in c["words"] if w["end"] > start + 0.05 and w["start"] < end - 0.05]
         clip_text = " ".join(w["word"] for w in words)
         out.append({

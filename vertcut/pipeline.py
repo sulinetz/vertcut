@@ -790,12 +790,20 @@ def process_project(pid: str) -> None:
             found = _even_segments(duration, opts, transcript)
         else:
             progress(0.55, "Поиск вирусных моментов")
+            wav = workdir / "audio16k.wav"
+            energy_offset = 0.0
+            if dub is not None:
+                # Кривая громкости построена по дублю, а времена клипов — по видео.
+                if str((transcript or {}).get("engine") or "").startswith("whisper"):
+                    energy_offset = dub_offset
+                else:
+                    wav = None
             found = analyze.find_segments(
                 transcript["segments"], source, duration,
                 count=opts["count"] or 0,
                 min_dur=opts["min_dur"], max_dur=opts["max_dur"],
                 target_dur=opts["target_dur"],
-                wav=None if dub is not None else workdir / "audio16k.wav",
+                wav=wav, energy_offset=energy_offset,
             )
         if not found:
             raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")

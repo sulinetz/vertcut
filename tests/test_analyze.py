@@ -59,6 +59,35 @@ class EnergyCurveTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertGreaterEqual(analyze._keywords_cached.cache_info().hits, 1)
 
+    def test_energy_offset_shifts_the_curve(self):
+        curve = [-60.0] * 8
+        curve[4] = -5.0
+        loud_direct, _ = analyze._energy_stats(curve, -30.0, 1.0, 1.25, 0.25)
+        loud_shifted, _ = analyze._energy_stats(curve, -30.0, 1.0, 1.25, 0.25, offset=-1.0)
+        self.assertGreater(loud_direct, loud_shifted)
+        quiet = [-20.0] * 8
+        quiet[4] = -55.0
+        point = analyze._nearest_quiet(quiet, -30.0, 3.0, 0.25, offset=2.0)
+        self.assertAlmostEqual(point, 3.0, places=2)
+
+
+class QualityGuardsTest(unittest.TestCase):
+    def test_sponsor_and_weak_text_penalties(self):
+        self.assertGreater(analyze._sponsor_penalty("Промокод в описании"), 0)
+        self.assertEqual(analyze._sponsor_penalty("Обычная фраза"), 0)
+        weak = [{"conf": -1.0}, {"conf": -1.1}, {"conf": -0.2}]
+        self.assertAlmostEqual(analyze._weak_share(weak), 2 / 3, places=3)
+        self.assertEqual(analyze._weak_share([{"conf": -0.1}]), 0.0)
+
+    def test_confidence_is_carried_to_sentences(self):
+        segments = [{
+            "start": 0.0, "end": 1.0, "text": "привет",
+            "words": [{"word": "привет", "start": 0.0, "end": 1.0}],
+            "quality": {"avg_logprob": -0.9},
+        }]
+        sents = analyze.build_sentences(segments)
+        self.assertAlmostEqual(sents[0]["conf"], -0.9, places=3)
+
 
 class ContextHelpersTest(unittest.TestCase):
     def test_filler_start_uses_word_boundaries(self):
