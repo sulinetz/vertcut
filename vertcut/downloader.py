@@ -371,10 +371,10 @@ def _pick_format(info: Dict[str, Any], max_height: int) -> tuple[str, int]:
     def rank(f: Dict[str, Any]) -> tuple:
         codec = f.get("vcodec") or ""
         return (
+            int(f.get("height") or 0),
             1 if codec.startswith("avc1") else 0,
             1 if f.get("ext") == "mp4" else 0,
             1 if (f.get("acodec") or "none") != "none" else 0,
-            int(f.get("height") or 0),
         )
 
     video = max(fitting, key=rank)
