@@ -255,21 +255,27 @@ def _cues(words: List[Dict[str, Any]], max_chars: int = 32, max_words: int = 6,
 
 def _pos_parts(position: str, offset: int, platform: str = "",
                reserve: int = 0) -> Tuple[int, int, int]:
-    """(выравнивание, x, y) с учётом интерфейса площадки."""
+    """(выравнивание, x, y) с учётом интерфейса площадки.
+
+    Сдвиг применяется после безопасной зоны и ограничивается только рамкой
+    кадра: так им можно провести субтитры от самого низа до самого верха.
+    """
     from . import platforms
 
+    def frame_y(value: float) -> int:
+        return int(max(40, min(PLAY_H - 40, float(value))))
+
     if position == "top":
-        y = max(60, platforms.top_text_y(platform) + 120 - offset)
-        y = platforms.clamp_y(y, platform, anchor="top")
-        return 8, PLAY_W // 2, int(y)
+        base = max(60, platforms.top_text_y(platform) + 120)
+        base = platforms.clamp_y(base, platform, anchor="top")
+        return 8, PLAY_W // 2, frame_y(base - offset)
     if position == "middle":
-        mid = 960 - offset
         _x0, y0, _x1, y1 = platforms.safe_rect(platform)
-        y = max(y0 + 120, min(y1 - 120, mid))
-        return 5, PLAY_W // 2, int(y)
-    y = platforms.bottom_text_y(platform, reserve=reserve) - offset
-    y = platforms.clamp_y(y, platform, anchor="bottom")
-    return 2, PLAY_W // 2, int(y)
+        base = max(y0 + 120, min(y1 - 120, 960))
+        return 5, PLAY_W // 2, frame_y(base - offset)
+    base = platforms.bottom_text_y(platform, reserve=reserve)
+    base = platforms.clamp_y(base, platform, anchor="bottom")
+    return 2, PLAY_W // 2, frame_y(base - offset)
 
 
 def _pos_tag(position: str, offset: int, platform: str = "", reserve: int = 0) -> str:

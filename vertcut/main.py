@@ -214,7 +214,7 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
             raise HTTPException(400, "Некорректная аудиодорожка") from None
     if "sub_offset" in data:
         try:
-            data["sub_offset"] = max(-120, min(180, int(data["sub_offset"])))
+            data["sub_offset"] = max(-1600, min(1600, int(data["sub_offset"])))
         except (TypeError, ValueError):
             raise HTTPException(400, "Некорректное смещение субтитров") from None
     if "text" in data:

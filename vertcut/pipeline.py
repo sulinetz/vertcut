@@ -173,7 +173,7 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if opts.get("export_order") not in ("chrono", "score"):
         opts["export_order"] = "chrono"
     try:
-        opts["sub_offset"] = max(-120, min(180, int(opts.get("sub_offset", 0))))
+        opts["sub_offset"] = max(-1600, min(1600, int(opts.get("sub_offset", 0))))
     except Exception:
         opts["sub_offset"] = 0
     try:
