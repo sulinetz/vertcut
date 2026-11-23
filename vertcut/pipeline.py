@@ -513,7 +513,7 @@ def prepare_project(pid: str) -> None:
     try:
         progress(0.01, "Подготовка")
         _update(pid, status="preparing", error=None)
-        if opts.get("segments"):
+        if opts.get("segments") and not project["url"].startswith("local:"):
             _prepare_segments(pid, project, opts, workdir, progress)
             return
         progress(0.02, "Загрузка видео")
@@ -667,7 +667,7 @@ def process_project(pid: str) -> None:
         _update(pid, progress=round(max(0.0, min(1.0, value)) * 100, 1), stage=stage,
                 status="running")
 
-    if opts.get("segments"):
+    if opts.get("segments") and not project["url"].startswith("local:"):
         pending = [c for c in db.list_clips(pid) if c["status"] == "pending"]
         if pending:
             try:

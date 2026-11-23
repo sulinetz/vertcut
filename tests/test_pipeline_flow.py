@@ -176,6 +176,18 @@ class ProcessProjectCase(unittest.TestCase):
         data = json.loads(saved.read_text(encoding="utf-8"))
         self.assertEqual(len(data.get("segments") or []), 1)
 
+    def test_local_project_ignores_segments_mode(self):
+        self.db.project["options"] = {"segments": True, "count": 1}
+        with mock.patch.object(pipeline, "db", self.db), \
+             mock.patch.object(pipeline, "PROJECTS_DIR", self.dir), \
+             mock.patch.object(pipeline, "_prepare_segments") as eco, \
+             mock.patch.object(pipeline, "_download_phase", return_value=self.src), \
+             mock.patch.object(pipeline.utils, "probe",
+                               lambda _p: {"duration": 20.0, "width": 640, "height": 360}):
+            pipeline.prepare_project("p1")
+        eco.assert_not_called()
+        self.assertEqual(self.db.project["status"], "review")
+
 
 if __name__ == "__main__":
     unittest.main()

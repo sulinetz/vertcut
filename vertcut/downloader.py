@@ -879,6 +879,26 @@ def download_section(url: str, dest_dir: Path, start: float, end: float,
 
     ensure_path()
     dest_dir.mkdir(parents=True, exist_ok=True)
+    if is_direct_media(url):
+        # Прямой mp4: yt-dlp с download_ranges на не-YouTube ссылках падает
+        # (ffmpeg не может резать HTTP-поток его аргументами). Режем сами.
+        out = dest_dir / "section.mp4"
+        seconds = max(0.1, float(end) - float(start))
+        attempts = [
+            ["-ss", f"{max(0.0, float(start)):.3f}", "-i", url,
+             "-t", f"{seconds:.3f}", "-c", "copy"],
+            # Сервер без Range не отдаст кусок по быстрому seek: читаем с начала.
+            ["-i", url, "-ss", f"{max(0.0, float(start)):.3f}",
+             "-t", f"{seconds:.3f}", "-c", "copy"],
+        ]
+        for args in attempts:
+            proc = subprocess.run(
+                [ffmpeg(), "-y", "-v", "error", *args,
+                 "-movflags", "+faststart", str(out)],
+                check=False, **subprocess_kwargs())
+            if proc.returncode == 0 and out.exists() and out.stat().st_size > 1000:
+                return out
+            out.unlink(missing_ok=True)
     outtmpl = str(dest_dir / "section.%(ext)s")
     if max_height <= 360:
         fmt = FORMAT_SD
@@ -953,6 +973,8 @@ def download_section(url: str, dest_dir: Path, start: float, end: float,
                     raise
             if any(p.suffix not in (".part", ".ytdl") for p in dest_dir.glob("section.*")):
                 break
+        except Cancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             if fi + 1 >= len(formats):

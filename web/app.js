@@ -1110,14 +1110,14 @@ function renderQuality(data) {
     <div class="quality-title">${esc(data.title)}</div>
     <div class="quality-meta">${fmtDur(data.duration)} · ${esc(data.uploader || "")}</div>
     <div class="quality-cards">${cards}</div>
-    <label class="toggle eco-row"><input type="checkbox" id="qualityEco" ${data.duration > 600 ? "checked" : ""}/><span class="track"></span><span>Экономно: сначала анализ, потом только выбранные моменты</span></label>
+    <label class="toggle eco-row"><input type="checkbox" id="qualityEco"/><span class="track"></span><span>Экономно: сначала анализ, потом только выбранные моменты</span></label>
     <div class="quality-note" id="qualityNote"></div>
     <div class="modal-foot" style="padding:16px 0 0;border:0">
       <button class="btn-ghost" data-close="probe">Отмена</button>
       <button class="btn-primary" id="qualityStart">Скачать и настроить</button>
     </div>`;
   let chosen = rec;
-  state.segmentsChoice = data.duration > 600;
+  state.segmentsChoice = false;
   const note = $("#qualityNote");
   const updateNote = () => {
     const opt = data.options.find((o) => o.height === chosen);
