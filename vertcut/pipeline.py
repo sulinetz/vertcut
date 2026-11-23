@@ -278,19 +278,21 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     if duration < 5:
         raise RuntimeError("Видео слишком короткое для нарезки.")
     _update(pid, title=meta.get("title") or project["title"], duration=round(duration, 2),
-            source=str(source), thumb=None,
-            meta={"width": info["width"], "height": info["height"],
-                  "source_height": info["height"], "quality": meta.get("quality"),
-                  "max_height": meta.get("max_height"),
-                  "selected_format": meta.get("selected_format"),
-                  "vcodec": meta.get("vcodec"), "fps": meta.get("fps"),
-                  "download_seconds": meta.get("download_seconds"),
-                  "merge_seconds": meta.get("merge_seconds"),
-                  "avg_speed_mbps": meta.get("avg_speed_mbps"),
-                  "fallback": meta.get("fallback"),
-                  "fallback_reason": meta.get("fallback_reason"),
-                  "uploader": meta.get("uploader"), "extractor": meta.get("extractor")})
-    db.merge_meta(pid, {"audio_tracks": info.get("audio_streams") or []})
+            source=str(source), thumb=None)
+    db.merge_meta(pid, {
+        "width": info["width"], "height": info["height"],
+        "source_height": info["height"], "quality": meta.get("quality"),
+        "max_height": meta.get("max_height"),
+        "selected_format": meta.get("selected_format"),
+        "vcodec": meta.get("vcodec"), "fps": meta.get("fps"),
+        "download_seconds": meta.get("download_seconds"),
+        "merge_seconds": meta.get("merge_seconds"),
+        "avg_speed_mbps": meta.get("avg_speed_mbps"),
+        "fallback": meta.get("fallback"),
+        "fallback_reason": meta.get("fallback_reason"),
+        "uploader": meta.get("uploader"), "extractor": meta.get("extractor"),
+        "audio_tracks": info.get("audio_streams") or [],
+    })
     return source
 
 
@@ -368,11 +370,11 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     if engine is None and (no_speech or select == "even"):
         engine = "even-split"
     _update(pid, title=audio.get("title") or project["title"], duration=round(duration, 2),
-            source=str(audio["path"]), language=(transcript or {}).get("language"),
-            meta={"width": 0, "height": 0, "segments_mode": True,
-                  "audio_size": audio.get("size"), "engine": engine,
-                  "no_speech": bool(no_speech),
-                  "segments": len((transcript or {}).get("segments") or [])})
+            source=str(audio["path"]), language=(transcript or {}).get("language"))
+    db.merge_meta(pid, {"width": 0, "height": 0, "segments_mode": True,
+                        "audio_size": audio.get("size"), "engine": engine,
+                        "no_speech": bool(no_speech),
+                        "segments": len((transcript or {}).get("segments") or [])})
 
     if select == "even" or no_speech:
         progress(0.72, "Нарезка на равные части")
