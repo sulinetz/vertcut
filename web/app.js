@@ -200,6 +200,11 @@ const SUB_SPEEDS = [
   ["normal", "Обычно"],
   ["fast", "Быстро"]
 ];
+
+// Сдвиг субтитров — в пикселях кадра 1080x1920: от нижнего края до верхнего.
+const SUB_OFFSET_MIN = -1600;
+const SUB_OFFSET_MAX = 1600;
+const pxClamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const SPEED_MS = { calm: 640, normal: 440, fast: 300 };
 
 const STYLE_PRESETS = [
@@ -286,6 +291,69 @@ const PLATFORM_OPTIONS = [
   ["reels", "Reels"],
   ["none", "Без зон"]
 ];
+
+const EXAMPLE_ASPECTS = ["9:16", "1:1", "16:9"];
+
+function examplesHTML(o) {
+  const aspect = (key) => {
+    const m = ASPECT_META[key];
+    const box = 30;
+    const k = box / Math.max(m.w, m.h);
+    const w = Math.round(m.w * k * 1.7);
+    const h = Math.round(m.h * k * 1.7);
+    return `<button type="button" class="ex-opt ${o.aspect === key ? "active" : ""}" data-group="aspect" data-val="${key}" title="${m.hint}">
+      <span class="ex-frame" style="width:${w}px;height:${h}px"><i class="ex-face"></i></span>
+      <span class="ex-cap">${m.short}</span>
+    </button>`;
+  };
+  const zone = (key, label) => {
+    const z = PLATFORM_ZONES[key] || PLATFORM_ZONES.universal;
+    const top = Math.round((z.top / 1920) * 100);
+    const bottom = Math.round((z.bottom / 1920) * 100);
+    const bands = key === "none" ? "" :
+      `<i class="ex-zone top" style="height:${top}%"></i><i class="ex-zone bottom" style="height:${bottom}%"></i>`;
+    return `<button type="button" class="ex-opt ${o.platform === key ? "active" : ""}" data-group="platform" data-val="${key}" title="${label}">
+      <span class="ex-frame zone">${bands}<i class="ex-caption"></i></span>
+      <span class="ex-cap">${label}</span>
+    </button>`;
+  };
+  const frames = [
+    ["auto", "Умный кроп"],
+    ["blur", "Размытый фон"],
+    ["crop", "По центру"]
+  ];
+  const frame = ([key, label]) => `<button type="button" class="ex-opt ${o.mode === key ? "active" : ""}" data-group="mode" data-val="${key}" title="${label}">
+      <span class="ex-frame zone mode-${key}">
+        ${key === "auto" ? `<i class="ex-crop"></i><i class="ex-face"></i>` : ""}
+        ${key === "blur" ? `<i class="ex-blur"></i>` : ""}
+        ${key === "crop" ? `<i class="ex-crop center"></i>` : ""}
+      </span>
+      <span class="ex-cap">${label}</span>
+    </button>`;
+  return `
+    <div class="ex-card">
+      <div class="ex-head"><b>Формат</b><span>как будет выглядеть кадр</span></div>
+      <div class="ex-row">${EXAMPLE_ASPECTS.map(aspect).join("")}</div>
+    </div>
+    <div class="ex-card">
+      <div class="ex-head"><b>Зоны площадки</b><span>место под интерфейс приложения</span></div>
+      <div class="ex-row">${PLATFORM_OPTIONS.map(([k, v]) => zone(k, v)).join("")}</div>
+    </div>
+    <div class="ex-card">
+      <div class="ex-head"><b>Кадр</b><span>как заполняется вертикаль</span></div>
+      <div class="ex-row">${frames.map(frame).join("")}</div>
+    </div>
+    <div class="ex-note">Нажмите на пример, чтобы выбрать вариант.</div>`;
+}
+
+function syncExamples() {
+  const o = state.opts;
+  $$("#examples .ex-opt").forEach((b) => {
+    b.classList.toggle("active", String(o[b.dataset.group]) === b.dataset.val);
+  });
+  const input = $("#countInput");
+  if (input) input.value = o.count > 0 ? String(o.count) : "";
+}
 
 const state = {
   projects: [],
@@ -455,6 +523,7 @@ function heroHTML() {
     <div class="hero-note">Twitch: VOD или клип. Прямой эфир — на вкладке «Прямой эфир» слева.</div>
 
     <div class="group-title"><span>Параметры нарезки</span><span class="group-hint">всё можно поменять позже</span></div>
+    <div class="options-layout">
     <div class="options">
       <div class="opt">
         ${optIcon("count", "ico-cyan")}
@@ -469,9 +538,18 @@ function heroHTML() {
       </div>
       <div class="opt">
         ${optIcon("count", "ico-purple")}
-        <span class="opt-label">Сколько нарезок</span>
-        <div class="seg" data-group="count">
-          ${counts.map((c) => `<button data-val="${c}" class="${o.count === c ? "active" : ""}">${c === 0 ? "Все" : c}</button>`).join("")}
+        <div>
+          <span class="opt-label">Сколько нарезок</span>
+          <span class="opt-hint">Любое число вручную, хоть 1 — чтобы посмотреть формат. «Все» — без ограничения.</span>
+        </div>
+        <div class="count-pick">
+          <div class="seg" data-group="count">
+            ${counts.map((c) => `<button data-val="${c}" class="${o.count === c ? "active" : ""}">${c === 0 ? "Все" : c}</button>`).join("")}
+          </div>
+          <label class="count-manual" title="Своё количество нарезок: от 1 до 200">
+            <input type="number" id="countInput" min="1" max="200" step="1" value="${o.count > 0 ? o.count : ""}" placeholder="своё" />
+            <span>шт.</span>
+          </label>
         </div>
       </div>
       <div class="opt">
@@ -561,7 +639,7 @@ function heroHTML() {
           </label>
           <label class="mini-field grow">
             <span>Сдвиг <b id="offsetVal">${o.subOffset}</b></span>
-            <input type="range" id="offsetRange" min="-120" max="180" step="5" value="${o.subOffset}" />
+            <input type="range" id="offsetRange" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${o.subOffset}" />
           </label>
           <label class="mini-field">
             <span>Кадры в секунду</span>
@@ -660,6 +738,8 @@ function heroHTML() {
         </select>
       </div>
     </div>
+    <aside class="examples" id="examples">${examplesHTML(o)}</aside>
+    </div>
   </section>`;
 }
 
@@ -687,8 +767,34 @@ function bindHero() {
       const raw = btn.dataset.val;
       state.opts[group] = group === "count" ? Number(raw) : raw;
       $$("button", seg).forEach((b) => b.classList.toggle("active", b === btn));
+      syncExamples();
     });
   });
+
+  const examples = $("#examples");
+  if (examples) examples.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".ex-opt");
+    if (!btn) return;
+    const group = btn.dataset.group;
+    state.opts[group] = btn.dataset.val;
+    $$(`.seg[data-group="${group}"] button`, main).forEach((b) =>
+      b.classList.toggle("active", b.dataset.val === btn.dataset.val));
+    syncExamples();
+  });
+
+  const countInput = $("#countInput");
+  if (countInput) countInput.addEventListener("input", () => {
+    if (countInput.value === "") {
+      state.opts.count = 0;
+    } else {
+      const clamped = pxClamp(Math.round(Number(countInput.value) || 1), 1, 200);
+      state.opts.count = clamped;
+      if (countInput.value !== String(clamped)) countInput.value = String(clamped);
+    }
+    $$('.seg[data-group="count"] button', main).forEach((b) =>
+      b.classList.toggle("active", Number(b.dataset.val) === state.opts.count));
+  });
+  syncExamples();
   const accents = $("#accents");
   if (accents) {
     accents.addEventListener("click", (ev) => {
@@ -2031,16 +2137,16 @@ function updateTemplatePreview() {
   const offsetPct = (offset / 1920) * 100;
   cap.style.transform = "";
   if (pos === "top") {
-    cap.style.top = `calc(${13.5 - offsetPct}% )`;
+    cap.style.top = `${pxClamp(13.5 - offsetPct, 1, 90)}%`;
     cap.style.bottom = "auto";
     cap.style.transform = "translateY(0)";
   } else if (pos === "middle") {
-    cap.style.top = `calc(${50 - offsetPct}%)`;
+    cap.style.top = `${pxClamp(50 - offsetPct, 2, 96)}%`;
     cap.style.bottom = "auto";
     cap.style.transform = "translateY(-50%)";
   } else {
     cap.style.top = "auto";
-    cap.style.bottom = `calc(${17.7 + offsetPct}%)`;
+    cap.style.bottom = `${pxClamp(17.7 + offsetPct, 1, 90)}%`;
     cap.style.transform = "";
   }
   $("#tpSizeVal").textContent = size;
@@ -2197,8 +2303,8 @@ function openTemplate(pid) {
               <input type="range" id="tpSize" min="70" max="180" step="2" value="118" />
             </div>
             <div class="field">
-              <label>Сдвиг <b id="tpOffsetVal">0</b></label>
-              <input type="range" id="tpOffset" min="-120" max="180" step="5" value="0" />
+              <label title="Двигает субтитры по всей высоте кадра: от низа до верха">Сдвиг по вертикали <b id="tpOffsetVal">0</b></label>
+              <input type="range" id="tpOffset" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="0" />
             </div>
           </div>
           <div class="field">
@@ -2593,8 +2699,8 @@ function openEditor(clipId) {
               <input type="range" id="edSize" min="70" max="180" step="2" value="${fontSize}" />
             </div>
             <div class="field">
-              <label>Сдвиг <b id="edOffVal">${fontOffset}</b></label>
-              <input type="range" id="edOffset" min="-120" max="180" step="5" value="${fontOffset}" />
+              <label title="Двигает субтитры по всей высоте кадра: от низа до верха">Сдвиг по вертикали <b id="edOffVal">${fontOffset}</b></label>
+              <input type="range" id="edOffset" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${fontOffset}" />
             </div>
             <div class="field">
               <label>Межстрочный интервал <b id="edLineGapVal">${Number(s.line_gap || 0)}</b></label>
@@ -2783,14 +2889,18 @@ function openEditor(clipId) {
     subView.style.top = "";
     subView.style.bottom = "";
     subView.style.transform = "";
+    const stageH = Math.max(1, stage.clientHeight);
     if (position === "top") {
-      subView.style.top = Math.max(8, (zone.top + 120) * k - offset * k) + "px";
+      const y = (zone.top + 120) * k - offset * k;
+      subView.style.top = pxClamp(y, 8, stageH - 8) + "px";
     } else if (position === "middle") {
-      subView.style.top = "50%";
+      const y = stageH / 2 - offset * k;
+      subView.style.top = pxClamp(y, 8, stageH - 8) + "px";
       subView.style.transform = "translateY(-50%)";
     } else {
       const bandLift = (($("#edLayout") ? $("#edLayout").value : "") === "band") ? 640 * k : 0;
-      subView.style.bottom = Math.max(8, Math.max(320, zone.bottom + 60) * k + offset * k + bandLift) + "px";
+      const fromBottom = Math.max(320, zone.bottom + 60) * k + offset * k + bandLift;
+      subView.style.bottom = pxClamp(fromBottom, 8, stageH - 8) + "px";
     }
     subView.style.setProperty("--hl", ACCENT_HEX[chosenAccent] || ACCENT_HEX.yellow);
 

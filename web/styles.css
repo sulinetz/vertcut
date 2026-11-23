@@ -1646,3 +1646,127 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 12px;
   background: #000;
 }
+
+/* Примеры справа от параметров нарезки */
+.options-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 268px;
+  gap: 16px;
+  align-items: start;
+}
+.hero { max-width: 1120px; }
+.examples {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  top: 18px;
+}
+.ex-card {
+  padding: 12px 13px;
+  border-radius: var(--radius-lg);
+  background: var(--material);
+  border: 1px solid var(--separator);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(34px) saturate(160%);
+}
+.ex-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.ex-head b { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-2); }
+.ex-head span { font-size: 11px; color: var(--muted-2); opacity: 0.8; }
+.ex-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ex-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(235, 235, 245, 0.5);
+  cursor: pointer;
+}
+.ex-opt:hover { background: rgba(255, 255, 255, 0.05); }
+.ex-opt.active { border-color: rgba(59, 130, 246, 0.55); background: rgba(59, 130, 246, 0.14); color: #cfe1ff; }
+.ex-frame {
+  position: relative;
+  display: block;
+  width: 46px;
+  height: 46px;
+  border-radius: 6px;
+  border: 1.5px solid currentColor;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.ex-frame.zone { width: 34px; height: 60px; }
+.ex-cap { font-size: 9.5px; line-height: 1.15; max-width: 62px; text-align: center; }
+.ex-face {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 34%;
+  height: 26%;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+  transform: translate(-50%, -50%);
+}
+.ex-zone { position: absolute; left: 0; right: 0; background: rgba(59, 130, 246, 0.38); }
+.ex-zone.top { top: 0; }
+.ex-zone.bottom { bottom: 0; }
+.ex-caption {
+  position: absolute;
+  left: 15%;
+  right: 15%;
+  bottom: 28%;
+  height: 8%;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: 0.55;
+}
+.ex-crop {
+  position: absolute;
+  left: 10%;
+  top: 18%;
+  width: 80%;
+  height: 58%;
+  border: 1.5px solid #22d3ee;
+  border-radius: 3px;
+}
+.ex-crop.center { left: 18%; width: 64%; }
+.ex-blur {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.22) 0 22%, transparent 22% 78%, rgba(255,255,255,0.22) 78% 100%),
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.10) 0 2px, transparent 2px 5px);
+}
+.ex-note { font-size: 11px; color: var(--muted-2); text-align: center; }
+.count-pick { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.count-manual {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 0 4px;
+  height: 30px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--separator);
+  font-size: 11px;
+  color: var(--muted-2);
+}
+.count-manual input {
+  width: 58px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: center;
+  outline: none;
+}
+@media (max-width: 1180px) {
+  .options-layout { grid-template-columns: 1fr; }
+  .examples { position: static; flex-direction: row; flex-wrap: wrap; }
+  .ex-card { flex: 1 1 240px; }
+}
