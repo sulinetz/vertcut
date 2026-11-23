@@ -1030,7 +1030,9 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
 
     if crop_path and (segs is not None or speed != 1.0):
         span = segs if segs is not None else [(0.0, float(clip["end"]) - float(clip["start"]))]
-        crop_path = timeline.remap_crop_path(crop_path, span, speed)
+        # Кроп применяется к кадру до setpts=PTS/speed, поэтому скорость здесь
+        # учитывать нельзя: иначе окно кадрирования отстаёт от картинки.
+        crop_path = timeline.remap_crop_path(crop_path, span, 1.0)
 
     bg_path = None
     bg_start = 0.0
