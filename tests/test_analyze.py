@@ -26,6 +26,15 @@ def make_segment(sentences, step=0.32, pause=0.45, start_at=0.0):
 
 
 class ContextHelpersTest(unittest.TestCase):
+    def test_filler_start_uses_word_boundaries(self):
+        self.assertFalse(analyze._has_filler_start("Нужно проверить"))
+        self.assertFalse(analyze._has_filler_start("Также добавлю"))
+        self.assertFalse(analyze._has_filler_start("Something went wrong"))
+        self.assertTrue(analyze._has_filler_start("Ну вот и всё"))
+        self.assertTrue(analyze._has_filler_start("So, we tried again"))
+        self.assertTrue(analyze._has_filler_start("Короче, слушай"))
+        self.assertTrue(analyze._has_filler_start("ну"))
+
     def test_starts_with_context(self):
         self.assertTrue(analyze._starts_with_context({"text": "Потому что мы так решили."}))
         self.assertTrue(analyze._starts_with_context({"text": "Это сработало."}))

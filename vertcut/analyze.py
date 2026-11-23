@@ -79,6 +79,11 @@ CONTINUATION_END = [
 _NUM_RE = re.compile(r"\d+[.,]?\d*|%|₽|\$|€|руб|тысяч|миллион|миллиард|процент", re.I)
 _SENT_END = re.compile(r"[.!?…]+[\"'»)]*\s*$")
 _WORD_RE = re.compile(r"[\w\-']+", re.U)
+_FILLER_RE = re.compile(
+    r"^(?:" + "|".join(sorted((re.escape(item) for item in FILLER_START),
+                               key=len, reverse=True)) + r")\b",
+    re.I,
+)
 
 
 def _norm(text: str) -> str:
@@ -92,7 +97,7 @@ def _count_patterns(text: str, patterns: List[str]) -> int:
 
 def _has_filler_start(text: str) -> bool:
     low = _norm(text).strip(" «\"'—-")
-    return any(low.startswith(f) for f in FILLER_START)
+    return bool(_FILLER_RE.match(low))
 
 
 def _starts_with_context(sent: Dict[str, Any]) -> bool:
