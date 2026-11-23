@@ -221,9 +221,20 @@ def plan(words: Sequence[Dict[str, Any]], start: float, end: float,
     speed = max(1.0, float(speed or 1.0))
     segments = speech_segments(words, start, end)
     total = sum(b - a for a, b in segments)
+    # segments считаются от начала клипа, слова — от начала источника:
+    # без сдвига remap_words не находит пересечений и возвращает пустой список.
+    relative: List[Dict[str, Any]] = []
+    for word in words or []:
+        try:
+            item = dict(word)
+            item["start"] = float(word["start"]) - float(start)
+            item["end"] = float(word["end"]) - float(start)
+        except (KeyError, TypeError, ValueError):
+            continue
+        relative.append(item)
     return {
         "segments": segments,
-        "words": remap_words(words, segments, speed),
+        "words": remap_words(relative, segments, speed),
         "duration": round(max(0.4, total / speed), 3),
         "cut": len(segments) > 1,
     }

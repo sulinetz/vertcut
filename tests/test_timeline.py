@@ -64,5 +64,23 @@ class RemapTest(unittest.TestCase):
         self.assertLessEqual(out["times"][-1], 3.0)
 
 
+class PlanClipStartTest(unittest.TestCase):
+    def test_words_are_relative_to_clip_start(self):
+        # клип 100..110 c: слова приходят в абсолютной шкале источника
+        plan = timeline.plan(words((100.2, 101.0), (105.0, 106.0)), 100.0, 110.0)
+        self.assertTrue(plan["cut"])
+        self.assertTrue(plan["words"], "слова не должны теряться из-за сдвига клипа")
+        for item in plan["words"]:
+            self.assertGreaterEqual(item["start"], 0.0)
+            self.assertLessEqual(item["end"], plan["duration"] + 0.5)
+        self.assertEqual([item["start"] for item in plan["words"]],
+                         sorted(item["start"] for item in plan["words"]))
+
+    def test_words_follow_speed(self):
+        plan = timeline.plan(words((100.2, 101.0), (105.0, 106.0)), 100.0, 110.0, speed=1.1)
+        self.assertTrue(plan["words"])
+        self.assertLessEqual(plan["words"][-1]["end"], plan["duration"] + 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()
