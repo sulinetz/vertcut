@@ -937,6 +937,31 @@ def _adhd_bg_file(choice: str) -> Optional[Path]:
     return random.choice(files)
 
 
+def clip_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Слова и длительность клипа после склеек и скорости.
+
+    Одна и та же шкала нужна и для вжигания ASS, и для экспорта SRT:
+    иначе файл субтитров живёт в абсолютном времени источника.
+    """
+    speed = max(1.0, min(1.1, float(settings.get("speed", 1.0) or 1.0)))
+    words = list(clip["words"] or [])
+    segs: Optional[List[Any]] = None
+    base = float(clip["start"])
+    length = float(clip["end"]) - base
+    if settings.get("jump_cuts") and words:
+        plan = timeline.plan(words, clip["start"], clip["end"], speed=speed)
+        if plan["cut"]:
+            segs = plan["segments"]
+            words = plan["words"]
+            base = 0.0
+            length = plan["duration"]
+    if segs is None and speed != 1.0:
+        words = timeline.scale_words(words, clip["start"], speed)
+        base = 0.0
+        length = (float(clip["end"]) - float(clip["start"])) / speed
+    return {"words": words, "segments": segs, "base": base, "length": length, "speed": speed}
+
+
 def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
                 settings: Dict[str, Any], on_progress: Optional[Callable[[float], None]] = None,
                 is_cancelled: Optional[Callable[[], bool]] = None) -> None:
@@ -953,23 +978,12 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     speed = max(1.0, min(1.1, speed))
     pitch = float(settings.get("pitch", 1.0) or 1.0)
     pitch = max(0.95, min(1.05, pitch))
-    segs: Optional[List[Any]] = None
-    words = list(clip["words"] or [])
-    ass_base = float(clip["start"])
-    ass_len = float(clip["end"]) - float(clip["start"])
-
-    if settings.get("jump_cuts") and words:
-        plan = timeline.plan(words, clip["start"], clip["end"], speed=speed)
-        if plan["cut"]:
-            segs = plan["segments"]
-            words = plan["words"]
-            ass_base = 0.0
-            ass_len = plan["duration"]
-    if segs is None and speed != 1.0:
-        words = timeline.scale_words(words, clip["start"], speed)
-        ass_base = 0.0
-        ass_len = (float(clip["end"]) - float(clip["start"])) / speed
-    out_duration = ass_len if (segs is not None or speed != 1.0) else float(clip["end"]) - float(clip["start"])
+    tl = clip_timeline(clip, settings)
+    segs: Optional[List[Any]] = tl["segments"]
+    words = tl["words"]
+    ass_base = float(tl["base"])
+    ass_len = float(tl["length"])
+    out_duration = ass_len
 
     sub_position = settings.get("sub_position", "bottom")
     ass_path = None

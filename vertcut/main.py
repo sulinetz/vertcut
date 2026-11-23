@@ -704,7 +704,8 @@ def clip_srt(cid: str) -> Response:
         raise HTTPException(404, "Клип не найден")
     from . import subtitles
 
-    body = subtitles.to_srt(clip.get("words") or [], float(clip["start"]), float(clip["end"]))
+    data = pipeline.clip_timeline(clip, clip.get("settings") or {})
+    body = subtitles.to_srt(data["words"], data["base"], data["base"] + data["length"])
     if not body.strip():
         raise HTTPException(400, "В клипе нет субтитров")
     title = (clip.get("title") or "clip").replace("/", " ").replace('"', "").strip()[:60] or "clip"
