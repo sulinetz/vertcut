@@ -368,7 +368,7 @@
         wizard.frameT = info.time;
         wizard.lastBox = info.box;
         wizard.frameUrl = `/api/projects/${wizard.pid}/frame.jpg?t=${info.time}&w=1280`;
-        img.onload = () => { applyPreviewLayout(info.box); applyFrameStyle(); if (wizard.step === 3) updateCaption(); };
+        img.onload = () => { applyPreviewLayout(info.box); updateCaption(); };
         img.src = wizard.frameUrl;
       }).catch(() => {});
   }
@@ -477,26 +477,35 @@
 
   function updateCaption() {
     const cap = $("#wzCap");
-    if (!cap) return;
-    const img = $("#wzFrame");
+    const preview = $("#wzPreview");
+    if (!cap || !preview) return;
     const words = (wizard.opts.uppercase ? "ПРИМЕР СУБТИТРОВ" : "Пример субтитров").split(" ");
     cap.innerHTML = words.map((w, i) => `<span class="w ${i === 0 ? "hl" : ""}">${esc(w)}</span>`).join(" ");
-    const size = Number(wizard.opts.sub_size || 118) * 0.45 * ((img && img.clientWidth) || 360) / 1080;
+    // Размер шрифта — от ширины кадра (1080), позиция — от его высоты (1920).
+    // Раньше брали размеры увеличенной картинки и всё уезжало.
+    const w = Math.max(1, preview.clientWidth);
+    const h = Math.max(1, preview.clientHeight);
+    const size = Number(wizard.opts.sub_size || 118) * 0.45 * (w / 1080);
     cap.style.fontFamily = FONT_CSS[wizard.opts.sub_font] || "VCMontserrat";
     cap.style.fontSize = `${Math.max(9, size)}px`;
     cap.style.setProperty("--hl", ACCENT_HEX[wizard.opts.accent] || ACCENT_HEX.yellow);
     cap.style.lineHeight = (1.15 + Number(wizard.opts.line_gap || 0) / 90).toFixed(2);
     cap.style.display = wizard.opts.subtitles ? "block" : "none";
     const zone = PLATFORM_ZONES[wizard.opts.platform] || PLATFORM_ZONES.universal;
-    const h = (img && img.clientHeight) || 640;
     const k = h / 1920;
     const off = Number(wizard.opts.sub_offset || 0) * k;
     cap.style.top = ""; cap.style.bottom = ""; cap.style.transform = "";
-    if (wizard.opts.sub_position === "top") cap.style.top = `${pxClamp(zone.top * k - off, 4, h - 10)}px`;
-    else if (wizard.opts.sub_position === "middle") {
+    if (wizard.opts.sub_position === "top") {
+      cap.style.top = `${pxClamp((zone.top + 120) * k - off, 4, h - 10)}px`;
+      cap.style.bottom = "auto";
+    } else if (wizard.opts.sub_position === "middle") {
       cap.style.top = `${pxClamp(h / 2 - off, 4, h - 10)}px`;
+      cap.style.bottom = "auto";
       cap.style.transform = "translateY(-50%)";
-    } else cap.style.bottom = `${pxClamp(zone.bottom * k + off, 4, h - 10)}px`;
+    } else {
+      cap.style.bottom = `${pxClamp(Math.max(320, zone.bottom + 60) * k + off, 4, h - 10)}px`;
+      cap.style.top = "auto";
+    }
     applyFrameStyle();
   }
 
