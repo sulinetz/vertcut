@@ -36,6 +36,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 _MODEL = None
 _MODEL_LONG = None
+_MODEL_REF = None
 _MODEL_LOCK = threading.Lock()
 ProgressCb = Optional[Callable[[float, str], None]]
 
@@ -247,8 +248,14 @@ def _model_name() -> str:
 
 
 def _get_model(long_audio: bool = False):
-    global _MODEL, _MODEL_LONG
+    global _MODEL, _MODEL_LONG, _MODEL_REF
     with _MODEL_LOCK:
+        name = _model_name()
+        if _MODEL_REF != name:
+            # Модель сменили в настройках — старый кеш больше не подходит.
+            _MODEL = None
+            _MODEL_LONG = None
+            _MODEL_REF = name
         if long_audio and _MODEL_LONG is not None:
             return _MODEL_LONG
         if not long_audio and _MODEL is not None:
