@@ -24,7 +24,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import utils
+from . import app_settings, utils
 from .config import (DATA_DIR, MODELS_DIR, WHISPER_COMPUTE, WHISPER_CUDA_COMPUTE,
                      WHISPER_DEVICE, WHISPER_LOCAL_DIR, WHISPER_MODEL, ffmpeg)
 from .errors import Cancelled
@@ -79,7 +79,7 @@ def model_cached() -> bool:
     if WHISPER_LOCAL_DIR and (Path(WHISPER_LOCAL_DIR) / "model.bin").is_file():
         return True
     try:
-        pattern = f"models--Systran--faster-whisper-{WHISPER_MODEL}"
+        pattern = f"models--Systran--faster-whisper-{_model_name()}"
         for path in MODELS_DIR.glob(pattern + "/snapshots/*/model.bin"):
             if path.stat().st_size > 1024 * 1024:
                 return True
@@ -239,6 +239,13 @@ def _reset_model(long_audio: bool = False) -> None:
             _MODEL = None
 
 
+def _model_name() -> str:
+    """Модель Whisper: настройки приложения, затем env, затем умолчание."""
+    name = (os.environ.get("VERTCUT_WHISPER") or app_settings.whisper_model()
+            or WHISPER_MODEL or "small")
+    return str(name)
+
+
 def _get_model(long_audio: bool = False):
     global _MODEL, _MODEL_LONG
     with _MODEL_LOCK:
@@ -249,7 +256,7 @@ def _get_model(long_audio: bool = False):
         from faster_whisper import WhisperModel
 
         local_dir = Path(WHISPER_LOCAL_DIR) if WHISPER_LOCAL_DIR else None
-        model_ref = str(local_dir) if local_dir and (local_dir / "model.bin").is_file() else WHISPER_MODEL
+        model_ref = str(local_dir) if local_dir and (local_dir / "model.bin").is_file() else _model_name()
         last_exc = None
         model = None
         for device, compute in _device_candidates(long_audio):
@@ -627,7 +634,7 @@ def transcribe(media: Path, workdir: Path, language: Optional[str] = None,
         "language": (detected_language or language or "ru"),
         "duration": duration,
         "segments": out,
-        "engine": f"whisper-{WHISPER_MODEL}",
+        "engine": f"whisper-{_model_name()}",
         "took": round(time.time() - started, 1),
         "quality": {
             "confidence": confidence,

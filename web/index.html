@@ -14,6 +14,7 @@
       var t = q || localStorage.getItem("vertcut.theme") || "dark";
       if (q) localStorage.setItem("vertcut.theme", t);
       document.documentElement.dataset.theme = t;
+      document.documentElement.dataset.motion = localStorage.getItem("vertcut.motion") || "on";
       var link = document.getElementById("themeCss");
       if (link && t === "light") link.href = "/static/styles-light.css?v=2";
     } catch (e) {}
@@ -106,7 +107,7 @@
   <input type="file" id="wzMusicInput" accept=".mp3,.m4a,.aac,.wav,.ogg,.flac,.opus" class="hidden" />
   <input type="file" id="subsInput" accept=".srt,.ass,.ssa,.vtt" class="hidden" />
 
-  <script src="/static/app.js?v=24"></script>
-  <script src="/static/wizard.js?v=8"></script>
+  <script src="/static/app.js?v=25"></script>
+  <script src="/static/wizard.js?v=9"></script>
 </body>
 </html>

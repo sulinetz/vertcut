@@ -682,6 +682,14 @@
               <div class="field"><label>Прокси для нейросетей</label>
                 <input type="text" id="setProxy" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7901 — если нужен" />
               </div>
+              <div class="field"><label>Распознавание речи (Whisper)</label>
+                <select id="setWhisperModel">
+                  <option value="small">small — быстро, ~460 МБ</option>
+                  <option value="medium">medium — баланс, ~1.5 ГБ</option>
+                  <option value="large-v3">large-v3 — лучше для русского, ~3 ГБ</option>
+                </select>
+                <div class="opt-hint">Для финальных субтитров на GPU лучше large-v3, для черновиков — small.</div>
+              </div>
               <div class="wz-actions">
                 <button class="btn-ghost" id="checkDeepseek" type="button">Проверить DeepSeek</button>
                 <button class="btn-ghost" id="checkGemini" type="button">Проверить Gemini</button>
@@ -693,6 +701,10 @@
               <div class="opt-hint">Ключи хранятся в папке данных приложения и не попадают ни в проект, ни в репозиторий. Пустое поле не стирает сохранённый ключ. Выбор «кто ищет моменты» — на шаге «Нарезка».</div>
             </div>
             <div id="settingsInterface" hidden>
+            <div class="field"><label>Анимации интерфейса</label>
+              <label class="toggle"><input type="checkbox" id="setMotion" ${currentMotion() === "on" ? "checked" : ""}/><span class="track"></span><span>Плавные появления и наведения</span></label>
+              <div class="opt-hint">Если система просит «уменьшить движение», анимации можно включить здесь вручную.</div>
+            </div>
             <div class="field"><label>Тема оформления</label>
               <label class="wz-row"><input type="radio" name="wzTheme" value="dark" ${currentTheme() === "dark" ? "checked" : ""}/> <b>Тёмная</b><span>как раньше</span></label>
               <label class="wz-row"><input type="radio" name="wzTheme" value="light" ${currentTheme() === "light" ? "checked" : ""}/> <b>Светлая</b><span>новая, тёплая</span></label>
@@ -763,8 +775,14 @@
         } catch (err) { toast(err.message || "Не удалось запустить", "err"); }
       });
     }
+    const motionBox = $("#setMotion");
+    if (motionBox) motionBox.addEventListener("change", () => {
+      applyMotion(motionBox.checked);
+      toast(motionBox.checked ? "Анимации включены" : "Анимации выключены");
+    });
     $$('input[name="wzTheme"]').forEach((el) => el.addEventListener("change", () => {
       applyTheme(el.value);
+      syncThemeButton();
       toast(el.value === "light" ? "Светлая тема включена" : "Тёмная тема включена");
     }));
     $$('input[name="wzUi"]').forEach((el) => el.addEventListener("change", () => {
@@ -836,6 +854,8 @@
       fillModels("#setGeminiModel", (s.model_choices || {}).gemini, s.gemini_model);
       const proxy = $("#setProxy");
       if (proxy && document.activeElement !== proxy) proxy.value = s.proxy || "";
+      const whisper = $("#setWhisperModel");
+      if (whisper) whisper.value = s.whisper_model || "small";
       $("#setDeepseekKey").value = "";
       $("#setGeminiKey").value = "";
       const orKey = $("#setOpenrouterKey");
@@ -852,10 +872,11 @@
         gemini_model: $("#setGeminiModel").value,
         openrouter_key: ($("#setOpenrouterKey") || {}).value ? $("#setOpenrouterKey").value.trim() : "",
         openrouter_model: $("#setOpenrouterModel") ? $("#setOpenrouterModel").value : "",
-        proxy: $("#setProxy").value.trim()
+        proxy: $("#setProxy").value.trim(),
+        whisper_model: ($("#setWhisperModel") || {}).value || "small"
       })
     }).then(applyState).catch((err) => toast(err.message || "Не удалось сохранить", "err"));
-    ["#setDeepseekKey", "#setGeminiKey", "#setOpenrouterKey", "#setDeepseekModel", "#setGeminiModel", "#setOpenrouterModel", "#setProxy"]
+    ["#setDeepseekKey", "#setGeminiKey", "#setOpenrouterKey", "#setDeepseekModel", "#setGeminiModel", "#setOpenrouterModel", "#setWhisperModel", "#setProxy"]
       .forEach((selector) => {
         const el = $(selector);
         if (el) el.addEventListener("change", save);
@@ -889,6 +910,12 @@
       .catch((err) => toast(err.message || "Не удалось загрузить настройки", "err"));
   }
 
+  const themeBtn = $("#themeBtn");
+  if (themeBtn) themeBtn.addEventListener("click", () => {
+    applyTheme(currentTheme() === "light" ? "dark" : "light");
+    syncThemeButton();
+  });
+  syncThemeButton();
   $("#settingsBtn").addEventListener("click", openSettings);
 
   /* Все точки входа вызывают openTemplate — подменяем на мастер по настройке. */

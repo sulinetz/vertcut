@@ -384,6 +384,20 @@ function saveFrameDefaults(patch) {
 
 const THEME_KEY = "vertcut.theme";
 
+const MOTION_KEY = "vertcut.motion";
+
+function currentMotion() {
+  return localStorage.getItem(MOTION_KEY) || document.documentElement.dataset.motion || "on";
+}
+
+function applyMotion(on) {
+  const value = on ? "on" : "off";
+  localStorage.setItem(MOTION_KEY, value);
+  document.documentElement.dataset.motion = value;
+  const box = document.getElementById("setMotion");
+  if (box) box.checked = value === "on";
+}
+
 function currentTheme() {
   return localStorage.getItem(THEME_KEY) || document.documentElement.dataset.theme || "dark";
 }
@@ -393,7 +407,7 @@ function applyTheme(mode) {
   localStorage.setItem(THEME_KEY, theme);
   document.documentElement.dataset.theme = theme;
   const link = document.getElementById("themeCss");
-  if (link) link.href = theme === "light" ? "/static/styles-light.css?v=2" : "/static/styles.css?v=24";
+  if (link) link.href = theme === "light" ? "/static/styles-light.css?v=3" : "/static/styles.css?v=24";
   const label = document.getElementById("themeLabel");
   if (label) label.textContent = theme === "light" ? "Тёмная тема" : "Светлая тема";
   $$('input[name="wzTheme"]').forEach((el) => { el.checked = el.value === theme; });

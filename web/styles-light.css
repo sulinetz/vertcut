@@ -1836,6 +1836,49 @@ input[type="range"]::-webkit-slider-thumb {
 .wz-zone.top { top: 0; border-top: 0; }
 .wz-zone.bottom { bottom: 0; border-bottom: 0; }
 
+/* ---------- Общие анимации интерфейса ---------- */
+:root {
+  --motion-fast: 150ms;
+  --motion-base: 230ms;
+  --motion-slow: 420ms;
+  --motion-ease: cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes vc-page-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes vc-rise-in { from { opacity: 0; transform: translateY(12px) scale(.99); } to { opacity: 1; transform: none; } }
+@keyframes vc-pop-in { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes vc-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes vc-gradient-flow { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes vc-check-pop { 0% { transform: scale(.92); } 60% { transform: scale(1.05); } 100% { transform: scale(1); } }
+
+.sidebar { animation: vc-page-in .48s var(--motion-ease) both; }
+.brand { animation: vc-rise-in .45s .06s var(--motion-ease) both; }
+.main > * { animation: vc-page-in .48s var(--motion-ease) both; }
+.main > *:nth-child(2) { animation-delay: .05s; }
+.main > *:nth-child(3) { animation-delay: .10s; }
+.main > *:nth-child(4) { animation-delay: .15s; }
+.project-item, .clip-card, .wz-card { animation: vc-rise-in .38s var(--motion-ease) both; }
+.modal:not(.hidden) { animation: vc-pop-in .24s var(--motion-ease) both; }
+.modal-panel, .tmpl-panel, .editor-panel, .wz-panel { animation: vc-rise-in .32s var(--motion-ease) both; }
+#toasts > div, .toast { animation: vc-rise-in .28s var(--motion-ease) both; }
+.btn-primary, .btn-ghost, .btn-new, .link-btn, .project-item, .clip-card, .wz-card, .ex-opt {
+  transition: transform var(--motion-base) var(--motion-ease),
+              box-shadow var(--motion-base) var(--motion-ease),
+              background var(--motion-base) var(--motion-ease),
+              border-color var(--motion-base) var(--motion-ease);
+}
+button:hover:not(:disabled), .btn-primary:hover:not(:disabled), .btn-ghost:hover:not(:disabled),
+.btn-new:hover, .link-btn:hover { transform: translateY(-2px); }
+button:active:not(:disabled), .btn-primary:active:not(:disabled) { transform: translateY(0) scale(.99); }
+.toggle .track { transition: background var(--motion-base) ease; }
+.toggle .track::after { transition: left var(--motion-base) var(--motion-ease); }
+.seg button { transition: color var(--motion-base) ease, background var(--motion-base) ease,
+                           box-shadow var(--motion-base) ease, transform var(--motion-fast) ease; }
+input[type="checkbox"]:checked, input[type="radio"]:checked { animation: vc-check-pop .22s var(--motion-ease); }
+html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
 /* ================================================================
    VERTCUT — SUNNY / PLAYFUL REDESIGN
    Светлая тёплая тема. Логика приложения и существующие классы не меняются.

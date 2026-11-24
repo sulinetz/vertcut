@@ -144,3 +144,13 @@ def test_check_key_uses_catalog(monkeypatch):
     result = semantic.check_key("openrouter")
     assert result["ok"] is True
     assert result["models"] == 2
+
+
+def test_whisper_model_setting(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    assert app_settings.whisper_model() == "small"
+    app_settings.save({"whisper_model": "large-v3"})
+    assert app_settings.whisper_model() == "large-v3"
+    assert app_settings.public()["whisper_model"] == "large-v3"
+    app_settings.save({"whisper_model": "gigantic"})
+    assert app_settings.whisper_model() == "small"

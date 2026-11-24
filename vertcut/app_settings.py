@@ -26,6 +26,8 @@ DEFAULT_MODELS = {
     "openrouter": "deepseek/deepseek-chat",
 }
 
+WHISPER_MODELS = ["small", "medium", "large-v3"]
+
 MODEL_CHOICES = {
     "deepseek": ["deepseek-chat", "deepseek-reasoner"],
     "gemini": ["gemini-flash-latest", "gemini-pro-latest"],
@@ -46,6 +48,7 @@ DEFAULTS: Dict[str, Any] = {
     "gemini_model": DEFAULT_MODELS["gemini"],
     "openrouter_key": "",
     "openrouter_model": DEFAULT_MODELS["openrouter"],
+    "whisper_model": "small",
     "proxy": "",
 }
 
@@ -90,7 +93,7 @@ def save(patch: Dict[str, Any]) -> Dict[str, Any]:
     """Сохраняет только известные поля. Пустая строка ключа не затирает его."""
     with _LOCK:
         data = _read()
-        for key in ("deepseek_model", "gemini_model", "openrouter_model", "proxy"):
+        for key in ("deepseek_model", "gemini_model", "openrouter_model", "whisper_model", "proxy"):
             value = patch.get(key)
             if isinstance(value, str):
                 data[key] = value.strip()[:300]
@@ -112,6 +115,8 @@ def save(patch: Dict[str, Any]) -> Dict[str, Any]:
             data["gemini_model"] = DEFAULT_MODELS["gemini"]
         if not data.get("openrouter_model"):
             data["openrouter_model"] = DEFAULT_MODELS["openrouter"]
+        if data.get("whisper_model") not in WHISPER_MODELS:
+            data["whisper_model"] = "small"
         _write(data)
         return data
 
@@ -139,6 +144,8 @@ def public() -> Dict[str, Any]:
         "openrouter_key_set": bool(data["openrouter_key"]),
         "openrouter_key_hint": _mask(data["openrouter_key"]),
         "model_choices": MODEL_CHOICES,
+        "whisper_model": data["whisper_model"],
+        "whisper_models": WHISPER_MODELS,
     }
 
 
@@ -154,6 +161,11 @@ def api_key(provider: str) -> str:
         if env:
             return env
     return ""
+
+
+def whisper_model() -> str:
+    value = str(load().get("whisper_model") or "small")
+    return value if value in WHISPER_MODELS else "small"
 
 
 def model_for(provider: str) -> str:
