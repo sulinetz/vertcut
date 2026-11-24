@@ -22,7 +22,8 @@
   ];
   const PICKER_OPTIONS = [
     ["local", "Локально — быстро и бесплатно"],
-    ["auto", "Авто: DeepSeek → Gemini"],
+    ["auto", "Авто: OpenRouter → DeepSeek → Gemini"],
+    ["openrouter", "OpenRouter (DeepSeek)"],
     ["deepseek", "DeepSeek"],
     ["gemini", "Gemini"]
   ];
@@ -669,12 +670,22 @@
                   <select id="setGeminiModel"></select>
                 </div>
               </div>
+              <div class="row2">
+                <div class="field"><label>Ключ OpenRouter</label>
+                  <input type="password" id="setOpenrouterKey" autocomplete="off" spellcheck="false" placeholder="sk-or-v1-…" />
+                  <div class="opt-hint" id="openrouterState"></div>
+                </div>
+                <div class="field"><label>Модель OpenRouter</label>
+                  <select id="setOpenrouterModel"></select>
+                </div>
+              </div>
               <div class="field"><label>Прокси для Gemini</label>
                 <input type="text" id="setProxy" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7901 — если нужен" />
               </div>
               <div class="wz-actions">
                 <button class="btn-ghost" id="checkDeepseek" type="button">Проверить DeepSeek</button>
                 <button class="btn-ghost" id="checkGemini" type="button">Проверить Gemini</button>
+                <button class="btn-ghost" id="checkOpenrouter" type="button">Проверить OpenRouter</button>
                 <button class="btn-ghost" id="clearAiKeys" type="button">Удалить ключи</button>
               </div>
               <div class="opt-hint">Ключи хранятся в папке данных приложения и не попадают ни в проект, ни в репозиторий. Пустое поле не стирает сохранённый ключ. Выбор «кто ищет моменты» — на шаге «Нарезка».</div>
@@ -777,11 +788,17 @@
       $("#geminiState").textContent = s.gemini_key_set
         ? `Ключ сохранён: ${s.gemini_key_hint}` : "Ключ не задан";
       fillModels("#setDeepseekModel", (s.model_choices || {}).deepseek, s.deepseek_model);
+      const orState = $("#openrouterState");
+      if (orState) orState.textContent = s.openrouter_key_set
+        ? `Сохранён ключ: ${s.openrouter_key_hint}` : "Ключ не задан";
+      fillModels("#setOpenrouterModel", (s.model_choices || {}).openrouter, s.openrouter_model);
       fillModels("#setGeminiModel", (s.model_choices || {}).gemini, s.gemini_model);
       const proxy = $("#setProxy");
       if (proxy && document.activeElement !== proxy) proxy.value = s.proxy || "";
       $("#setDeepseekKey").value = "";
       $("#setGeminiKey").value = "";
+      const orKey = $("#setOpenrouterKey");
+      if (orKey) orKey.value = "";
       $("#setDeepseekKey").placeholder = s.deepseek_key_set ? "ключ сохранён — введите новый, чтобы заменить" : "не задан";
       $("#setGeminiKey").placeholder = s.gemini_key_set ? "ключ сохранён — введите новый, чтобы заменить" : "не задан";
     };
@@ -792,10 +809,12 @@
         gemini_key: $("#setGeminiKey").value.trim(),
         deepseek_model: $("#setDeepseekModel").value,
         gemini_model: $("#setGeminiModel").value,
+        openrouter_key: ($("#setOpenrouterKey") || {}).value ? $("#setOpenrouterKey").value.trim() : "",
+        openrouter_model: $("#setOpenrouterModel") ? $("#setOpenrouterModel").value : "",
         proxy: $("#setProxy").value.trim()
       })
     }).then(applyState).catch((err) => toast(err.message || "Не удалось сохранить", "err"));
-    ["#setDeepseekKey", "#setGeminiKey", "#setDeepseekModel", "#setGeminiModel", "#setProxy"]
+    ["#setDeepseekKey", "#setGeminiKey", "#setOpenrouterKey", "#setDeepseekModel", "#setGeminiModel", "#setOpenrouterModel", "#setProxy"]
       .forEach((selector) => {
         const el = $(selector);
         if (el) el.addEventListener("change", save);
@@ -813,11 +832,13 @@
     };
     $("#checkDeepseek").addEventListener("click", () => check("deepseek", "#checkDeepseek"));
     $("#checkGemini").addEventListener("click", () => check("gemini", "#checkGemini"));
+    const orCheck = $("#checkOpenrouter");
+    if (orCheck) orCheck.addEventListener("click", () => check("openrouter", "#checkOpenrouter"));
     $("#clearAiKeys").addEventListener("click", () => {
       if (!confirm("Удалить сохранённые ключи DeepSeek и Gemini?")) return;
       api("/api/app-settings", {
         method: "POST",
-        body: JSON.stringify({ clear_deepseek_key: true, clear_gemini_key: true })
+        body: JSON.stringify({ clear_deepseek_key: true, clear_gemini_key: true, clear_openrouter_key: true })
       }).then((s) => { applyState(s); toast("Ключи удалены"); })
         .catch((err) => toast(err.message || "Не удалось удалить", "err"));
     });

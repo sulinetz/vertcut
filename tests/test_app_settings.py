@@ -7,8 +7,39 @@ from vertcut import app_settings
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(app_settings, "FILE", tmp_path / "app_settings.json")
     for name in ("DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-                 "GEMINI_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+                 "OPENROUTER_API_KEY", "GEMINI_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
         monkeypatch.delenv(name, raising=False)
+
+
+def test_openrouter_key_and_model(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    app_settings.save({"openrouter_key": "sk-or-v1-abcdef123456",
+                       "openrouter_model": "deepseek/deepseek-r1"})
+    public = app_settings.public()
+    assert public["openrouter_key_set"] is True
+    assert public["openrouter_key_hint"].endswith("3456")
+    assert "abcdef123456" not in str(public)
+    assert public["openrouter_model"] == "deepseek/deepseek-r1"
+    assert app_settings.api_key("openrouter") == "sk-or-v1-abcdef123456"
+    assert "deepseek/deepseek-r1" in public["model_choices"]["openrouter"]
+    app_settings.save({"openrouter_key": "", "openrouter_model": "deepseek/deepseek-chat"})
+    assert app_settings.api_key("openrouter") == "sk-or-v1-abcdef123456"
+    app_settings.save({"clear_openrouter_key": True})
+    assert app_settings.api_key("openrouter") == ""
+
+
+def test_openrouter_env_fallback(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "env-openrouter")
+    assert app_settings.api_key("openrouter") == "env-openrouter"
+
+
+def test_openrouter_is_available_to_semantic():
+    from vertcut import semantic
+
+    assert "openrouter" in semantic.PROVIDERS
+    assert semantic.PROVIDERS["openrouter"]["url"].startswith("https://openrouter.ai/")
+    assert "openrouter" in semantic.PICKERS
 
 
 def test_save_and_mask(tmp_path, monkeypatch):

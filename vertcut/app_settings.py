@@ -23,16 +23,20 @@ _LOCK = threading.RLock()
 DEFAULT_MODELS = {
     "deepseek": "deepseek-chat",
     "gemini": "gemini-flash-latest",
+    "openrouter": "deepseek/deepseek-chat",
 }
 
 MODEL_CHOICES = {
     "deepseek": ["deepseek-chat", "deepseek-reasoner"],
     "gemini": ["gemini-flash-latest", "gemini-pro-latest"],
+    "openrouter": ["deepseek/deepseek-chat", "deepseek/deepseek-r1",
+                   "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"],
 }
 
 _ENV_KEYS = {
     "deepseek": ("DEEPSEEK_API_KEY",),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "openrouter": ("OPENROUTER_API_KEY",),
 }
 
 DEFAULTS: Dict[str, Any] = {
@@ -40,6 +44,8 @@ DEFAULTS: Dict[str, Any] = {
     "gemini_key": "",
     "deepseek_model": DEFAULT_MODELS["deepseek"],
     "gemini_model": DEFAULT_MODELS["gemini"],
+    "openrouter_key": "",
+    "openrouter_model": DEFAULT_MODELS["openrouter"],
     "proxy": "",
 }
 
@@ -84,11 +90,11 @@ def save(patch: Dict[str, Any]) -> Dict[str, Any]:
     """Сохраняет только известные поля. Пустая строка ключа не затирает его."""
     with _LOCK:
         data = _read()
-        for key in ("deepseek_model", "gemini_model", "proxy"):
+        for key in ("deepseek_model", "gemini_model", "openrouter_model", "proxy"):
             value = patch.get(key)
             if isinstance(value, str):
                 data[key] = value.strip()[:300]
-        for key in ("deepseek_key", "gemini_key"):
+        for key in ("deepseek_key", "gemini_key", "openrouter_key"):
             value = patch.get(key)
             if isinstance(value, str):
                 value = value.strip()
@@ -98,10 +104,14 @@ def save(patch: Dict[str, Any]) -> Dict[str, Any]:
             data["deepseek_key"] = ""
         if patch.get("clear_gemini_key"):
             data["gemini_key"] = ""
+        if patch.get("clear_openrouter_key"):
+            data["openrouter_key"] = ""
         if not data.get("deepseek_model"):
             data["deepseek_model"] = DEFAULT_MODELS["deepseek"]
         if not data.get("gemini_model"):
             data["gemini_model"] = DEFAULT_MODELS["gemini"]
+        if not data.get("openrouter_model"):
+            data["openrouter_model"] = DEFAULT_MODELS["openrouter"]
         _write(data)
         return data
 
@@ -120,11 +130,14 @@ def public() -> Dict[str, Any]:
     return {
         "deepseek_model": data["deepseek_model"],
         "gemini_model": data["gemini_model"],
+        "openrouter_model": data["openrouter_model"],
         "proxy": data["proxy"],
         "deepseek_key_set": bool(data["deepseek_key"]),
         "gemini_key_set": bool(data["gemini_key"]),
         "deepseek_key_hint": _mask(data["deepseek_key"]),
         "gemini_key_hint": _mask(data["gemini_key"]),
+        "openrouter_key_set": bool(data["openrouter_key"]),
+        "openrouter_key_hint": _mask(data["openrouter_key"]),
         "model_choices": MODEL_CHOICES,
     }
 

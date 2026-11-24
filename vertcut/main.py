@@ -34,9 +34,12 @@ class AppSettingsIn(BaseModel):
     gemini_key: Optional[str] = None
     deepseek_model: Optional[str] = None
     gemini_model: Optional[str] = None
+    openrouter_key: Optional[str] = None
+    openrouter_model: Optional[str] = None
     proxy: Optional[str] = None
     clear_deepseek_key: bool = False
     clear_gemini_key: bool = False
+    clear_openrouter_key: bool = False
 
 
 class CheckKeyIn(BaseModel):

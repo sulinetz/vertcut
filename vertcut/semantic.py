@@ -61,9 +61,14 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "label": "Gemini",
         "budget_chars": 1_200_000,
     },
+    "openrouter": {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "label": "OpenRouter (DeepSeek)",
+        "budget_chars": 120_000,
+    },
 }
 
-PICKERS = ("local", "auto", "deepseek", "gemini")
+PICKERS = ("local", "auto", "openrouter", "deepseek", "gemini")
 
 SYSTEM_PROMPT = """Ты — редактор вирусных вертикальных видео (Shorts, TikTok, Reels).
 Тебе дают расшифровку речи с номерами предложений и таймкодами.
@@ -494,7 +499,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
     picker = str(opts.get("picker") or "local")
     if picker == "local":
         return None
-    chain = ["deepseek", "gemini"] if picker == "auto" else [picker]
+    chain = ["openrouter", "deepseek", "gemini"] if picker == "auto" else [picker]
     sents = analyze.build_sentences(segments)
     if len(sents) < 4 or duration < 5:
         return None
