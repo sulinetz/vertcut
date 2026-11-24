@@ -589,7 +589,12 @@ def main() -> None:
         auto_close = os.environ.get("VERTCUT_AUTOCLOSE")
         if auto_close:
             threading.Timer(float(auto_close), window.destroy).start()
-        webview.start()
+        # private_mode=True стирает localStorage при каждом запуске: тема,
+        # выбранный интерфейс и настройки кадра «забывались». Держим профиль
+        # WebView2 в папке данных, чтобы выбор сохранялся между запусками.
+        storage = data_dir / "webview"
+        storage.mkdir(parents=True, exist_ok=True)
+        webview.start(private_mode=False, storage_path=str(storage))
         shutdown()
         time.sleep(0.3)
         clean_exit = True
