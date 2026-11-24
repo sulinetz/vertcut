@@ -345,6 +345,24 @@ def app_settings_save(body: AppSettingsIn) -> Dict[str, Any]:
     return {"ok": True, **app_settings.public()}
 
 
+@app.get("/api/app-settings/models")
+def app_settings_models(provider: Optional[str] = None) -> Dict[str, Any]:
+    """Каталог моделей провайдеров. OpenRouter отдаёт список без ключа."""
+    keys = [provider] if provider in semantic.PROVIDERS else list(semantic.PROVIDERS)
+    catalogs: Dict[str, Any] = {}
+    for key in keys:
+        try:
+            catalogs[key] = {"ok": True, "models": semantic.models_for(key)}
+        except Exception as exc:  # noqa: BLE001
+            fallback = app_settings.MODEL_CHOICES.get(key) or []
+            catalogs[key] = {
+                "ok": False,
+                "error": str(exc)[:300],
+                "models": [{"id": item, "name": item, "context": 0} for item in fallback],
+            }
+    return {"catalogs": catalogs}
+
+
 @app.post("/api/app-settings/check")
 def app_settings_check(body: CheckKeyIn) -> Dict[str, Any]:
     return semantic.check_key(body.provider)

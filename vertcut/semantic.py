@@ -14,7 +14,9 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -60,11 +62,13 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "label": "Gemini",
         "budget_chars": 1_200_000,
+        "models_url": "https://generativelanguage.googleapis.com/v1beta/models",
     },
     "openrouter": {
         "url": "https://openrouter.ai/api/v1/chat/completions",
         "label": "OpenRouter (DeepSeek)",
         "budget_chars": 120_000,
+        "models_url": "https://openrouter.ai/api/v1/models",
     },
 }
 
@@ -118,8 +122,17 @@ def _http_message(status: int, body: str) -> str:
     return hint + (f" [{status}] {tail}" if tail else f" [{status}]")
 
 
+def _proxy_handlers(proxy: Optional[str]):
+    """None — системный прокси, "" — напрямую, строка — явный адрес."""
+    if proxy is None:
+        return None
+    if proxy == "":
+        return [urllib.request.ProxyHandler({})]
+    return [urllib.request.ProxyHandler({"http": proxy, "https": proxy})]
+
+
 def _post_json(url: str, payload: Dict[str, Any], key: str,
-               proxy: str = "", timeout: float = REQUEST_TIMEOUT) -> Dict[str, Any]:
+               proxy: Optional[str] = None, timeout: float = REQUEST_TIMEOUT) -> Dict[str, Any]:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url, data=data,
@@ -128,9 +141,9 @@ def _post_json(url: str, payload: Dict[str, Any], key: str,
     )
     # Пустой ProxyHandler отключает системные прокси: DeepSeek обычно доступен
     # напрямую, а глобальный HTTPS_PROXY может всё сломать.
-    handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy})] if proxy \
-        else [urllib.request.ProxyHandler({})]
-    opener = urllib.request.build_opener(*handlers)
+    handlers = _proxy_handlers(proxy)
+    opener = urllib.request.build_opener(*handlers) if handlers is not None \
+        else urllib.request.build_opener()
     try:
         with opener.open(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", "replace")
@@ -150,6 +163,92 @@ def _post_json(url: str, payload: Dict[str, Any], key: str,
     if not isinstance(parsed, dict):
         raise LLMError("Сервис вернул неожиданный ответ")
     return parsed
+
+
+_MODELS_CACHE: Dict[str, tuple] = {}
+MODELS_CACHE_SECONDS = 6 * 3600
+
+
+def _get_json(url: str, key: str = "", proxy: Optional[str] = None,
+              timeout: float = 30.0) -> Dict[str, Any]:
+    headers = {"Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    request = urllib.request.Request(url, headers=headers)
+    handlers = _proxy_handlers(proxy)
+    opener = urllib.request.build_opener(*handlers) if handlers is not None \
+        else urllib.request.build_opener()
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            pass
+        raise LLMError(_http_message(exc.code, body), exc.code) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise LLMError(f"Нет связи с провайдером: {str(exc)[:200]}") from exc
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        raise LLMError("Провайдер вернул не JSON") from exc
+    if not isinstance(parsed, dict):
+        raise LLMError("Провайдер вернул неожиданный ответ")
+    return parsed
+
+
+def _parse_models(provider: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if provider == "openrouter":
+        for item in payload.get("data") or []:
+            mid = str(item.get("id") or "").strip()
+            if mid:
+                out.append({"id": mid, "name": str(item.get("name") or mid),
+                            "context": int(item.get("context_length") or 0)})
+    elif provider == "gemini":
+        for item in payload.get("models") or []:
+            methods = item.get("supportedGenerationMethods") or []
+            if methods and "generateContent" not in methods:
+                continue
+            name = str(item.get("name") or "")
+            mid = name.split("/", 1)[1] if name.startswith("models/") else name
+            if mid:
+                out.append({"id": mid, "name": str(item.get("displayName") or mid),
+                            "context": int(item.get("inputTokenLimit") or 0)})
+    else:
+        for item in payload.get("data") or []:
+            mid = str(item.get("id") or "").strip()
+            if mid:
+                out.append({"id": mid, "name": str(item.get("owned_by") or mid),
+                            "context": 0})
+    out.sort(key=lambda m: m["id"])
+    return out
+
+
+def models_for(provider: str) -> List[Dict[str, Any]]:
+    """Каталог моделей с кешем; OpenRouter — без ключа."""
+    spec = PROVIDERS.get(provider)
+    if not spec:
+        raise LLMError("Неизвестный провайдер")
+    cached = _MODELS_CACHE.get(provider)
+    if cached and time.time() - cached[0] < MODELS_CACHE_SECONDS:
+        return list(cached[1])
+    key = app_settings.api_key(provider)
+    if provider != "openrouter" and not key:
+        raise LLMError("Сначала задайте ключ")
+    if provider == "gemini":
+        url = f"{spec['models_url']}?key={urllib.parse.quote(key)}"
+        payload = _get_json(url, proxy=app_settings.proxy_for(provider))
+    else:
+        payload = _get_json(spec["models_url"], key=key,
+                            proxy=app_settings.proxy_for(provider))
+    models = _parse_models(provider, payload)
+    if not models:
+        raise LLMError("Провайдер не вернул моделей")
+    _MODELS_CACHE[provider] = (time.time(), models)
+    return list(models)
 
 
 def _chat(provider: str, messages: List[Dict[str, str]],
@@ -535,11 +634,7 @@ def check_key(provider: str) -> Dict[str, Any]:
     if not app_settings.api_key(provider):
         return {"ok": False, "message": "Ключ не задан"}
     try:
-        content, _usage = _chat(
-            provider,
-            [{"role": "user", "content": "Ответь одним словом: ок"}],
-            max_tokens=8, json_mode=False,
-        )
+        models = models_for(provider)
     except LLMError as exc:
         return {"ok": False, "status": exc.status, "message": str(exc)}
     except Exception as exc:  # noqa: BLE001
@@ -547,5 +642,6 @@ def check_key(provider: str) -> Dict[str, Any]:
     return {
         "ok": True,
         "model": app_settings.model_for(provider),
-        "message": f"Ключ работает. Ответ: {(content or '').strip()[:40]}",
+        "models": len(models),
+        "message": f"Ключ работает. Доступно моделей: {len(models)}",
     }

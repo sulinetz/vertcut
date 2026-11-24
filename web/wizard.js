@@ -658,7 +658,7 @@
                   <div class="opt-hint" id="deepseekState"></div>
                 </div>
                 <div class="field"><label>Модель DeepSeek</label>
-                  <select id="setDeepseekModel"></select>
+                  <input type="text" id="setDeepseekModel" list="setDeepseekModelList" placeholder="ID модели — можно ввести вручную" spellcheck="false" />\n                  <datalist id="setDeepseekModelList"></datalist>
                 </div>
               </div>
               <div class="row2">
@@ -667,7 +667,7 @@
                   <div class="opt-hint" id="geminiState"></div>
                 </div>
                 <div class="field"><label>Модель Gemini</label>
-                  <select id="setGeminiModel"></select>
+                  <input type="text" id="setGeminiModel" list="setGeminiModelList" placeholder="ID модели — можно ввести вручную" spellcheck="false" />\n                  <datalist id="setGeminiModelList"></datalist>
                 </div>
               </div>
               <div class="row2">
@@ -676,16 +676,18 @@
                   <div class="opt-hint" id="openrouterState"></div>
                 </div>
                 <div class="field"><label>Модель OpenRouter</label>
-                  <select id="setOpenrouterModel"></select>
+                  <input type="text" id="setOpenrouterModel" list="setOpenrouterModelList" placeholder="ID модели — можно ввести вручную" spellcheck="false" />\n                  <datalist id="setOpenrouterModelList"></datalist>
                 </div>
               </div>
-              <div class="field"><label>Прокси для Gemini</label>
+              <div class="field"><label>Прокси для нейросетей</label>
                 <input type="text" id="setProxy" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7901 — если нужен" />
               </div>
               <div class="wz-actions">
                 <button class="btn-ghost" id="checkDeepseek" type="button">Проверить DeepSeek</button>
                 <button class="btn-ghost" id="checkGemini" type="button">Проверить Gemini</button>
                 <button class="btn-ghost" id="checkOpenrouter" type="button">Проверить OpenRouter</button>
+                <button class="btn-ghost" id="refreshModels" type="button">Обновить модели</button>
+                <span class="opt-hint" id="modelState"></span>
                 <button class="btn-ghost" id="clearAiKeys" type="button">Удалить ключи</button>
               </div>
               <div class="opt-hint">Ключи хранятся в папке данных приложения и не попадают ни в проект, ни в репозиторий. Пустое поле не стирает сохранённый ключ. Выбор «кто ищет моменты» — на шаге «Нарезка».</div>
@@ -777,9 +779,48 @@
     const fillModels = (selector, list, value) => {
       const el = $(selector);
       if (!el) return;
-      el.innerHTML = (list || []).map((m) => `<option value="${m}">${m}</option>`).join("");
-      if (value && !(list || []).includes(value)) el.innerHTML += `<option value="${value}">${value}</option>`;
+      const items = (list || []).map((m) => (typeof m === "string" ? { id: m, name: m } : m));
+      const datalist = $(selector + "List");
+      if (datalist) {
+        datalist.innerHTML = items.map((m) =>
+          `<option value="${esc(m.id)}" label="${esc(m.name || m.id)}"></option>`).join("");
+      } else if ("options" in el) {
+        el.innerHTML = items.map((m) => `<option value="${esc(m.id)}">${esc(m.name || m.id)}</option>`).join("");
+      }
       if (value) el.value = value;
+    };
+    const fillCatalog = (selector, models) => {
+      const el = $(selector);
+      if (!el) return;
+      const items = (models || []).map((m) => (typeof m === "string" ? { id: m, name: m } : m));
+      const datalist = $(selector + "List");
+      if (datalist) {
+        datalist.innerHTML = items.map((m) =>
+          `<option value="${esc(m.id)}" label="${esc(m.name || m.id)}"></option>`).join("");
+      }
+      if (!el.value && items.length) el.value = items[0].id;
+    };
+    const refreshModels = async (silent) => {
+      const state = $("#modelState");
+      try {
+        const res = await api("/api/app-settings/models");
+        const catalogs = res.catalogs || {};
+        const names = {deepseek: "DeepSeek", gemini: "Gemini", openrouter: "OpenRouter"};
+        const notes = [];
+        for (const [key, data] of Object.entries(catalogs)) {
+          if (data.ok) {
+            fillCatalog(`#set${key[0].toUpperCase()}${key.slice(1)}Model`, data.models);
+            notes.push(`${names[key] || key}: ${data.models.length}`);
+          } else {
+            notes.push(`${names[key] || key}: ${data.error || "нет списка"}`);
+          }
+        }
+        if (state) state.textContent = notes.join(" · ");
+        if (!silent) toast("Списки моделей обновлены");
+      } catch (err) {
+        if (state) state.textContent = err.message || "не удалось обновить";
+        if (!silent) toast(err.message || "Не удалось обновить списки", "err");
+      }
     };
     const applyState = (s) => {
       if (!s) return;
@@ -832,6 +873,8 @@
     };
     $("#checkDeepseek").addEventListener("click", () => check("deepseek", "#checkDeepseek"));
     $("#checkGemini").addEventListener("click", () => check("gemini", "#checkGemini"));
+    const refreshBtn = $("#refreshModels");
+    if (refreshBtn) refreshBtn.addEventListener("click", () => refreshModels(false));
     const orCheck = $("#checkOpenrouter");
     if (orCheck) orCheck.addEventListener("click", () => check("openrouter", "#checkOpenrouter"));
     $("#clearAiKeys").addEventListener("click", () => {
@@ -842,7 +885,7 @@
       }).then((s) => { applyState(s); toast("Ключи удалены"); })
         .catch((err) => toast(err.message || "Не удалось удалить", "err"));
     });
-    api("/api/app-settings").then(applyState)
+    api("/api/app-settings").then(applyState).then(() => refreshModels(true))
       .catch((err) => toast(err.message || "Не удалось загрузить настройки", "err"));
   }
 

@@ -83,7 +83,7 @@ def test_env_fallback(tmp_path, monkeypatch):
 
 def test_proxy_from_settings_and_env(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
-    assert app_settings.proxy_for("gemini") == ""
+    assert app_settings.proxy_for("gemini") is None
     monkeypatch.setenv("GEMINI_PROXY", "http://127.0.0.1:7901")
     assert app_settings.proxy_for("gemini") == "http://127.0.0.1:7901"
     app_settings.save({"proxy": "none"})
@@ -97,3 +97,50 @@ def test_corrupt_file_is_ignored(tmp_path, monkeypatch):
     app_settings.FILE.write_text("{не json", encoding="utf-8")
     assert app_settings.api_key("deepseek") == ""
     assert app_settings.model_for("deepseek") == "deepseek-chat"
+
+
+def test_model_catalog_parsing():
+    from vertcut import semantic
+
+    openrouter = semantic._parse_models("openrouter", {"data": [
+        {"id": "deepseek/deepseek-v4.1-flash-1017", "name": "DeepSeek V4.1 Flash",
+         "context_length": 160000},
+        {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini"},
+    ]})
+    assert [m["id"] for m in openrouter] == ["deepseek/deepseek-v4.1-flash-1017",
+                                             "openai/gpt-4o-mini"]
+    assert openrouter[0]["name"] == "DeepSeek V4.1 Flash"
+    gemini = semantic._parse_models("gemini", {"models": [
+        {"name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash",
+         "supportedGenerationMethods": ["generateContent"], "inputTokenLimit": 1000000},
+        {"name": "models/text-embedding-004",
+         "supportedGenerationMethods": ["embedContent"]},
+    ]})
+    assert [m["id"] for m in gemini] == ["gemini-2.5-flash"]
+
+
+def test_proxy_handlers_keep_system_by_default():
+    from vertcut import semantic
+
+    assert semantic._proxy_handlers(None) is None
+    direct = semantic._proxy_handlers("")
+    explicit = semantic._proxy_handlers("http://127.0.0.1:7901")
+    assert len(direct) == 1 and len(explicit) == 1
+
+
+def test_openrouter_profile_is_a_provider():
+    from vertcut import semantic, app_settings
+
+    assert "openrouter" in semantic.PROVIDERS
+    assert semantic.PROVIDERS["openrouter"]["url"].startswith("https://openrouter.ai/")
+    assert "deepseek/deepseek-chat" in app_settings.MODEL_CHOICES["openrouter"]
+
+
+def test_check_key_uses_catalog(monkeypatch):
+    from vertcut import semantic
+
+    monkeypatch.setattr(semantic.app_settings, "api_key", lambda provider: "sk-test")
+    monkeypatch.setattr(semantic, "models_for", lambda provider: [{"id": "m1"}, {"id": "m2"}])
+    result = semantic.check_key("openrouter")
+    assert result["ok"] is True
+    assert result["models"] == 2

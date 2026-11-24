@@ -160,15 +160,26 @@ def model_for(provider: str) -> str:
     return str(load().get(f"{provider}_model") or DEFAULT_MODELS.get(provider, ""))
 
 
-def proxy_for(provider: str) -> str:
-    """Прокси нужен в основном Gemini: из настроек, затем окружения."""
+def proxy_for(provider: str) -> Optional[str]:
+    """Прокси для запросов к провайдеру.
+
+    None — системный прокси (Windows/переменные окружения), "" — напрямую,
+    строка — явный адрес. Старое значение none/off/direct означает «напрямую».
+    """
     with _LOCK:
         value = str(_read().get("proxy") or "").strip()
-    if not value and provider == "gemini":
-        value = (os.environ.get("GEMINI_PROXY")
-                 or os.environ.get("HTTPS_PROXY")
-                 or os.environ.get("HTTP_PROXY") or "").strip()
-    if value.lower() in ("none", "off", "direct"):
+    if not value:
+        if provider == "gemini":
+            env = (os.environ.get("GEMINI_PROXY")
+                   or os.environ.get("HTTPS_PROXY")
+                   or os.environ.get("HTTP_PROXY") or "").strip()
+            if env:
+                value = env
+            else:
+                return None
+        else:
+            return None
+    if value.lower() in ("none", "off", "direct", "directly"):
         return ""
     return value
 
