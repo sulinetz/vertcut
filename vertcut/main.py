@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import app_settings, custom_fonts, db, jobs, pipeline, semantic, transcribe
+from . import (ads, app_settings, custom_fonts, db, jobs, pipeline, semantic,
+               transcribe)
 from ._version import __version__
 from .config import (ADHD_SPLIT_BACKEND_MIN, ADHD_SPLIT_UI_MAX, ADHD_SPLIT_UI_MIN,
                      ASSETS_DIR, DATA_DIR, PROJECTS_DIR, WEB_DIR, ffmpeg)
@@ -43,6 +44,24 @@ class AppSettingsIn(BaseModel):
     clear_deepseek_key: bool = False
     clear_gemini_key: bool = False
     clear_openrouter_key: bool = False
+
+
+class AdTextIn(BaseModel):
+    text: str
+    color: str = "#FFFFFF"
+    background: str = "#00000000"
+    font_size: int = 64
+    name: str = ""
+
+
+class AdRenameIn(BaseModel):
+    name: str
+
+
+class AdMapIn(BaseModel):
+    time: float
+    direction: str = "to_source"
+    events: Optional[List[Dict[str, Any]]] = None
 
 
 class CheckKeyIn(BaseModel):
@@ -122,6 +141,8 @@ class ClipEdit(BaseModel):
     adhd_bottom_speed: Optional[float] = None
     adhd_bottom_start: Optional[float] = None
     adhd_bottom_volume: Optional[float] = None
+    ads_enabled: Optional[bool] = None
+    ad_events: Optional[List[Dict[str, Any]]] = None
     audio_track: Optional[int] = None
     external_audio: Optional[bool] = None
     external_audio_track: Optional[int] = None
@@ -300,6 +321,11 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
                 data[key] = round(max(low, min(high, float(data[key]))), 3)
             except (TypeError, ValueError):
                 raise HTTPException(400, "Некорректное значение настроек СДВГ") from None
+    if "ad_events" in data:
+        known = {asset["id"] for asset in ads.list_assets()}
+        data["ad_events"] = ads.normalize_events(data["ad_events"], known)
+    if "ads_enabled" in data:
+        data["ads_enabled"] = bool(data["ads_enabled"])
     if "line_gap" in data:
         try:
             data["line_gap"] = max(0, min(120, int(data["line_gap"])))
@@ -928,6 +954,130 @@ def clip_srt(cid: str) -> Response:
                    f"filename*=UTF-8''{quote(title + '.srt')}")
     return Response(content=body, media_type="application/x-subrip",
                     headers={"Content-Disposition": disposition})
+
+
+@app.get("/api/ads")
+def ads_list() -> Dict[str, Any]:
+    return {"assets": ads.list_assets()}
+
+
+@app.post("/api/ads")
+async def ads_upload(file: UploadFile = File(...)) -> Dict[str, Any]:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ads.IMAGE_SUFFIXES and suffix not in ads.VIDEO_SUFFIXES:
+        raise HTTPException(400, "Нужен PNG, JPG, WEBP или видео MP4/WEBM/MOV/MKV")
+    temp = DATA_DIR / f"ads_upload{suffix}"
+    try:
+        await _stream_upload(file, temp, ads.MAX_VIDEO_BYTES, "Файл больше 300 МБ")
+        asset = ads.add_file(file.filename or f"asset{suffix}", temp)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        temp.unlink(missing_ok=True)
+    return {"ok": True, "asset": asset}
+
+
+@app.post("/api/ads/text")
+def ads_add_text(body: AdTextIn) -> Dict[str, Any]:
+    try:
+        asset = ads.add_text(body.text, color=body.color, background=body.background,
+                             font_size=body.font_size, name=body.name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "asset": asset}
+
+
+@app.patch("/api/ads/{asset_id}")
+def ads_rename(asset_id: str, body: AdRenameIn) -> Dict[str, Any]:
+    try:
+        return {"ok": True, "asset": ads.rename(asset_id, body.name)}
+    except KeyError:
+        raise HTTPException(404, "Ассет не найден") from None
+
+
+@app.delete("/api/ads/{asset_id}")
+def ads_delete(asset_id: str) -> Dict[str, Any]:
+    if not ads.delete(asset_id):
+        raise HTTPException(404, "Ассет не найден")
+    return {"ok": True}
+
+
+@app.get("/api/ads/{asset_id}/file")
+def ads_file(asset_id: str) -> FileResponse:
+    path = ads.asset_path(asset_id)
+    if path is None:
+        raise HTTPException(404, "Ассет не найден")
+    suffix = path.suffix.lower()
+    media = ("video/mp4" if suffix in ads.VIDEO_SUFFIXES
+             else "image/png" if suffix == ".png"
+             else "image/jpeg" if suffix in (".jpg", ".jpeg")
+             else "image/webp")
+    return FileResponse(path, media_type=media)
+
+
+def _clip_ad_context(cid: str, events: Optional[List[Dict[str, Any]]] = None) -> tuple:
+    clip = db.get_clip(cid)
+    if not clip:
+        raise HTTPException(404, "Клип не найден")
+    settings = dict(clip.get("settings") or {})
+    if events is not None:
+        settings["ad_events"] = ads.normalize_events(events)
+    info = pipeline.ad_timeline(clip, settings)
+    return clip, settings, info
+
+
+@app.get("/api/clips/{cid}/ad-timeline")
+def clip_ad_timeline(cid: str, events: Optional[str] = None) -> Dict[str, Any]:
+    from . import timeline
+
+    override = None
+    if events:
+        try:
+            parsed = json.loads(events)
+            override = parsed if isinstance(parsed, list) else None
+        except ValueError:
+            override = None
+    clip, settings, info = _clip_ad_context(cid, override)
+    span = [(0.0, max(0.1, float(clip["end"]) - float(clip["start"])))]
+    segments = info["segments"] or span
+    events = []
+    for event in settings.get("ad_events") or []:
+        if not isinstance(event, dict):
+            continue
+        try:
+            local = max(0.0, float(event.get("start") or 0.0) - float(clip["start"]))
+            length = max(0.2, float(event.get("duration") or 1.0))
+        except (TypeError, ValueError):
+            continue
+        base_start = timeline.remap_time(local, segments, info["speed"])
+        base_end = timeline.remap_time(local + length, segments, info["speed"])
+        start = timeline.inserted_time(base_start, info["inserts"], inclusive=True)
+        end = timeline.inserted_time(base_end, info["inserts"], inclusive=False)
+        events.append({**event, "start_final": start, "end_final": end})
+    return {"base_length": info["length"], "duration": info["duration"],
+            "speed": info["speed"],
+            "inserts": [{**item["event"], "at": item["at"],
+                         "final_start": item["final_start"],
+                         "duration": item["duration"]}
+                        for item in info["inserts"]],
+            "events": events}
+
+
+@app.post("/api/clips/{cid}/ad-map")
+def clip_ad_map(cid: str, body: AdMapIn) -> Dict[str, Any]:
+    from . import timeline
+
+    clip, _settings, info = _clip_ad_context(cid, body.events)
+    span = [(0.0, max(0.1, float(clip["end"]) - float(clip["start"])))]
+    segments = info["segments"] or span
+    if body.direction == "to_final":
+        local = max(0.0, float(body.time) - float(clip["start"]))
+        base = timeline.remap_time(local, segments, info["speed"])
+        value = timeline.inserted_time(base, info["inserts"], inclusive=True)
+    else:
+        base = timeline.unmap_inserted(float(body.time), info["inserts"])
+        value = timeline.unmap_time(base, segments, info["speed"]) + float(clip["start"])
+    return {"time": round(max(0.0, value), 3)}
 
 
 ADHD_BG_DIR = ASSETS_DIR / "adhd_bg"

@@ -11,7 +11,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import (analyze, app_settings, db, downloader, platforms, reframe, render,
+from . import (ads, analyze, app_settings, db, downloader, platforms, reframe, render,
                semantic, subtitles, timeline, transcribe, utils)
 from .errors import Cancelled
 from .config import PROJECTS_DIR
@@ -65,6 +65,8 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "adhd_bottom_speed": 1.0,
     "adhd_bottom_start": -1.0,
     "adhd_bottom_volume": 0.0,
+    "ads_enabled": True,
+    "ad_events": [],
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
@@ -97,6 +99,7 @@ CLIP_SETTING_KEYS = (
     "adhd_top_scale", "adhd_top_offset_x", "adhd_top_offset_y",
     "adhd_bottom_scale", "adhd_bottom_offset_x", "adhd_bottom_offset_y",
     "adhd_bottom_speed", "adhd_bottom_start", "adhd_bottom_volume",
+    "ads_enabled", "ad_events",
     "audio_track", "external_audio", "external_audio_track", "audio_offset",
 )
 
@@ -223,6 +226,8 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             opts[key] = round(max(low, min(high, float(opts.get(key, default)))), 3)
         except (TypeError, ValueError):
             opts[key] = default
+    opts["ads_enabled"] = _as_bool(opts.get("ads_enabled", True), True)
+    opts["ad_events"] = ads.normalize_events(opts.get("ad_events"))
     try:
         opts["line_gap"] = max(0, min(120, int(opts.get("line_gap", 0))))
     except (TypeError, ValueError):
@@ -1246,6 +1251,22 @@ def clip_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, A
     return {"words": words, "segments": segs, "base": base, "length": length, "speed": speed}
 
 
+def ad_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Базовая шкала клипа и вставки рекламы для интерфейса и рендера."""
+    tl = clip_timeline(clip, settings)
+    span = [(0.0, max(0.1, float(clip["end"]) - float(clip["start"])))]
+    events = [event for event in (settings.get("ad_events") or [])
+              if isinstance(event, dict)]
+    local = [{**event,
+              "start": max(0.0, float(event.get("start") or 0.0) - float(clip["start"]))}
+             for event in events if event.get("kind") == "replace"]
+    plan = timeline.insert_spans(tl["segments"] or span, local,
+                                 speed=tl["speed"], duration=tl["length"])
+    return {"base": float(tl["base"]), "length": float(tl["length"]),
+            "speed": float(tl["speed"]), "segments": tl["segments"],
+            "inserts": plan["inserts"], "duration": plan["duration"]}
+
+
 def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
                 settings: Dict[str, Any], on_progress: Optional[Callable[[float], None]] = None,
                 is_cancelled: Optional[Callable[[], bool]] = None) -> None:
@@ -1268,6 +1289,37 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     ass_base = float(tl["base"])
     ass_len = float(tl["length"])
     out_duration = ass_len
+
+    ad_events: List[Dict[str, Any]] = []
+    ad_files: Dict[str, Path] = {}
+    if settings.get("ads_enabled", True):
+        for event in settings.get("ad_events") or []:
+            if not isinstance(event, dict):
+                continue
+            asset = str(event.get("asset") or "")
+            path = ads.asset_path(asset)
+            if path is not None:
+                ad_files[asset] = path
+                ad_events.append(event)
+    if ad_events:
+        source_span = [(0.0, float(clip["end"]) - float(clip["start"]))]
+        local_events = [{**event,
+                         "start": max(0.0, float(event.get("start") or 0.0) - float(clip["start"]))}
+                        for event in ad_events if event.get("kind") == "replace"]
+        plan = timeline.insert_spans(segs or source_span, local_events,
+                                     speed=tl["speed"], duration=ass_len)
+        inserts = plan["inserts"]
+        if inserts:
+            relative = [{**word,
+                         "start": float(word["start"]) - ass_base,
+                         "end": float(word["end"]) - ass_base}
+                        for word in words]
+            shifted = timeline.insert_words(relative, inserts)
+            words = [{**word, "start": round(float(word["start"]) + ass_base, 3),
+                      "end": round(float(word["end"]) + ass_base, 3)}
+                     for word in shifted]
+            ass_len = plan["duration"]
+            out_duration = plan["duration"]
 
     sub_position = settings.get("sub_position", "bottom")
     ass_path = None
@@ -1406,6 +1458,8 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         adhd_bottom_offset_y=float(settings.get("adhd_bottom_offset_y", 0.0) or 0.0),
         adhd_bottom_speed=float(settings.get("adhd_bottom_speed", 1.0) or 1.0),
         adhd_bottom_volume=float(settings.get("adhd_bottom_volume", 0.0) or 0.0) / 100.0,
+        ad_events=ad_events,
+        ad_files=ad_files,
     )
     settings = {**settings, "render_encoder": result.get("encoder", "libx264")}
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"

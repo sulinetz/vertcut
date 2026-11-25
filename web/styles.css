@@ -1885,3 +1885,22 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .clip-why { margin: 0 0 2px; font-size: 11px; line-height: 1.4; color: var(--muted-2); }
 .clip-warn { font-size: 10px; line-height: 1.35; color: #ffd166; }
 .clip-parts span.type-tag { color: var(--muted); }
+
+/* ---------- Рекламные ассеты ---------- */
+.ad-assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 190px; overflow: auto; padding: 2px; }
+.ad-asset { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; border-radius: 10px; border: 1px solid var(--separator); background: var(--grouped-2); color: var(--muted); font-size: 10px; cursor: pointer; overflow: hidden; }
+.ad-asset.active { border-color: var(--accent, #22d3ee); box-shadow: 0 0 0 1px var(--accent, #22d3ee) inset; color: var(--text); }
+.ad-asset img { max-width: 100%; max-height: 54px; object-fit: contain; border-radius: 4px; }
+.ad-asset span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ad-kind { font-size: 22px; line-height: 1; }
+.ad-add-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ad-add-row input[type=text] { flex: 1 1 180px; min-width: 140px; }
+.ad-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ad-timeline { position: relative; height: 44px; border-radius: 10px; background: var(--grouped-2); border: 1px solid var(--separator); overflow: hidden; }
+.ad-block { position: absolute; top: 6px; bottom: 6px; border-radius: 6px; border: 1px solid rgba(255,255,255,.25); font-size: 9px; color: #fff; cursor: grab; overflow: hidden; white-space: nowrap; }
+.ad-block.overlay { background: rgba(34, 211, 238, .55); }
+.ad-block.replace { background: rgba(244, 114, 182, .65); }
+.ad-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
+.ad-row { display: flex; gap: 8px; align-items: center; font-size: 11px; padding: 4px 6px; border-radius: 8px; background: var(--grouped-2); }
+.ad-row b { text-transform: uppercase; font-size: 9px; letter-spacing: .04em; color: var(--muted-2); }
+.ad-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

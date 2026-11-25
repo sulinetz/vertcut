@@ -18,7 +18,8 @@ from .config import (ADHD_SPLIT_BACKEND_MAX, ADHD_SPLIT_BACKEND_MIN,
 from . import custom_fonts
 from .errors import Cancelled
 from .reframe import crop_expressions
-from .timeline import dub_pieces, offsets as timeline_offsets
+from .timeline import (dub_pieces, inserted_time, insert_spans, remap_time,
+                       offsets as timeline_offsets)
 from .utils import MediaError, probe, probe_audio, run, subprocess_kwargs
 
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}
@@ -29,6 +30,7 @@ BAND_H = 640
 ADHD_FILLS = ("cover", "contain")
 ADHD_SPLIT_MIN = ADHD_SPLIT_UI_MIN
 ADHD_SPLIT_MAX = ADHD_SPLIT_BACKEND_MAX
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def split_geometry(width: int, height: int, ratio: float = 0.5) -> Dict[str, Any]:
@@ -406,7 +408,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 adhd_bottom_offset_x: float = 0.0,
                 adhd_bottom_offset_y: float = 0.0,
                 adhd_bottom_speed: float = 1.0,
-                adhd_bottom_volume: float = 0.0) -> Dict[str, Any]:
+                adhd_bottom_volume: float = 0.0,
+                ad_events: Optional[List[Dict[str, Any]]] = None,
+                ad_files: Optional[Dict[str, Path]] = None) -> Dict[str, Any]:
     if is_cancelled is not None and is_cancelled():
         raise Cancelled()
     speed = max(1.0, min(1.25, float(speed or 1.0)))
@@ -503,6 +507,51 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             bg_audio_ok = bool(probe(bg_path).get("has_audio"))
         except Exception:  # noqa: BLE001
             bg_audio_ok = False
+
+    # Рекламные события: пути уже разрешены pipeline по id ассета.
+    ad_files = ad_files or {}
+    ad_list: List[Dict[str, Any]] = []
+    ad_inputs: Dict[str, int] = {}
+    ad_audio: Dict[str, bool] = {}
+    ad_image: Dict[str, bool] = {}
+    for event in ad_events or []:
+        if not isinstance(event, dict):
+            continue
+        asset = str(event.get("asset") or "")
+        path = ad_files.get(asset)
+        if path is None or not Path(path).is_file():
+            continue
+        key = str(event.get("id") or asset)
+        ad_list.append(event)
+        ad_inputs[key] = next_idx
+        is_image = Path(path).suffix.lower() in IMAGE_SUFFIXES
+        ad_image[key] = is_image
+        ad_audio[key] = False
+        if not is_image:
+            try:
+                ad_audio[key] = bool(probe(Path(path)).get("has_audio"))
+            except Exception:  # noqa: BLE001
+                ad_audio[key] = False
+        next_idx += 1
+
+    replace_events = [{**e, "start": max(0.0, float(e.get("start") or 0.0) - clip_start)}
+                      for e in ad_list if e.get("kind") == "replace"]
+    insert_plan = insert_spans(segs or [(0.0, src_dur)], replace_events,
+                               speed=speed, duration=out_dur)
+    inserts = insert_plan["inserts"]
+    if inserts:
+        duration = insert_plan["duration"]
+    insert_audio_needed = any(
+        ad_audio.get(str(item["event"].get("id") or item["event"].get("asset")))
+        for item in inserts)
+    silence_idx: Optional[int] = None
+    if insert_audio_needed and not (info["has_audio"] or use_dub):
+        silence_idx = next_idx
+        next_idx += 1
+    overlay_events = sorted(
+        [e for e in ad_list if e.get("kind") != "replace"],
+        key=lambda e: (int(e.get("z") or 0), float(e.get("start") or 0.0)))
+    ad_fps = round(float(fps), 2) if fps else round(float(info.get("fps") or 30.0), 2)
 
     if is_adhd:
         top_sharpen = info["width"] < w * 0.75
@@ -613,6 +662,56 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                   + f"concat=n={len(segs)}:v=1:a=0[czv]")
         current = "[czv]"
 
+    if inserts:
+        vg.append(f"{current}setsar=1[base_sar]")
+        current = "[base_sar]"
+        sequence: List[tuple] = []
+        last = 0.0
+        for item in inserts:
+            at = max(0.0, min(out_dur, float(item["at"])))
+            if at > last + 0.001:
+                sequence.append(("base", last, at))
+                last = at
+            sequence.append(("ad", item, 0.0))
+        if out_dur > last + 0.001 or not sequence:
+            sequence.append(("base", last, out_dur))
+        base_parts = [part for part in sequence if part[0] == "base"]
+        if len(base_parts) > 1:
+            labels = "".join(f"[bs{i}]" for i in range(len(base_parts)))
+            vg.append(f"{current}split={len(base_parts)}{labels}")
+        parts: List[str] = []
+        ad_no = 0
+        base_no = 0
+        for part in sequence:
+            if part[0] == "base":
+                start, end = float(part[1]), float(part[2])
+                if len(base_parts) > 1:
+                    vg.append(f"[bs{base_no}]trim=start={start:.3f}:end={end:.3f},"
+                              f"setpts=PTS-STARTPTS[bp{base_no}]")
+                    parts.append(f"[bp{base_no}]")
+                else:
+                    parts.append(current)
+                base_no += 1
+                continue
+            item = part[1]
+            event = item["event"]
+            key = str(event.get("id") or event.get("asset"))
+            idx = ad_inputs.get(key)
+            if idx is None:
+                continue
+            length = float(item["duration"])
+            vg.append(
+                f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h},setsar=1,fps={ad_fps},trim=duration={length:.3f},"
+                f"setpts=PTS-STARTPTS,format=yuv420p,setsar=1[ap{ad_no}]"
+            )
+            parts.append(f"[ap{ad_no}]")
+            ad_no += 1
+        if parts:
+            vg.append("".join(parts) + f"concat=n={len(parts)}:v=1:a=0[basei]")
+            current = "[basei]"
+
+
     style: List[str] = []
     if hflip:
         style.append("hflip")
@@ -640,7 +739,91 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         style.append("vignette=PI/5")
     if grain:
         style.append("noise=alls=8:allf=t+u")
-    prefix = current + (",".join(style) + "," if style else "")
+
+    if overlay_events:
+        # Стиль (наклон, зум) применяем к базовому видео, а накладки кладём
+        # поверх: текст и логотип не должны зеркалиться и дрожать.
+        if style:
+            vg.append(f"{current},{','.join(style)}[styled]")
+            current = "[styled]"
+        ov_no = 0
+        for event in overlay_events:
+            key = str(event.get("id") or event.get("asset"))
+            idx = ad_inputs.get(key)
+            if idx is None:
+                continue
+            local_start = max(0.0, float(event.get("start") or 0.0) - clip_start)
+            local_end = local_start + max(0.2, float(event.get("duration") or 1.0))
+            base_segments = segs or [(0.0, src_dur)]
+            base_start = remap_time(local_start, base_segments, speed)
+            base_end = remap_time(local_end, base_segments, speed)
+            start = inserted_time(base_start, inserts, inclusive=True)
+            end = min(duration, inserted_time(base_end, inserts, inclusive=False))
+            span = end - start
+            if span < 0.05:
+                continue
+            bw = max(2, int(round(w * float(event.get("w") or 0.28))))
+            bh = max(2, int(round(h * float(event.get("h") or 0.28))))
+            px = int(round(w * float(event.get("x") or 0.0)))
+            py = int(round(h * float(event.get("y") or 0.0)))
+            opacity = max(0.0, min(1.0, float(event.get("opacity") or 1.0)))
+            anim_in = str(event.get("anim_in") or "none")
+            anim_out = str(event.get("anim_out") or "none")
+            anim_dur = max(0.0, min(2.0, float(event.get("anim_dur") or 0.0)))
+            if anim_dur <= 0.01:
+                anim_in = anim_out = "none"
+
+            chain = [
+                f"[{idx}:v]scale={bw}:{bh}:force_original_aspect_ratio=decrease",
+                f"pad={bw}:{bh}:(ow-iw)/2:(oh-ih)/2:color=black@0",
+                "format=rgba",
+                f"trim=duration={span:.3f}",
+                f"setpts=PTS-STARTPTS+{start:.3f}/TB",
+            ]
+            if opacity < 0.999:
+                chain.append(f"colorchannelmixer=aa={opacity:.3f}")
+            if anim_in == "fade":
+                chain.append(f"fade=t=in:st={start:.3f}:d={anim_dur:.3f}:alpha=1")
+            if anim_out == "fade":
+                chain.append(f"fade=t=out:st={max(start, end - anim_dur):.3f}:"
+                             f"d={anim_dur:.3f}:alpha=1")
+
+            x_expr = str(px)
+            y_expr = str(py)
+            if anim_in == "scale" or anim_out == "scale":
+                kin = f"min(max((t-{start:.3f})/{anim_dur:.3f},0),1)" if anim_in == "scale" else "1"
+                kout = (f"min(max(({end:.3f}-t)/{anim_dur:.3f},0),1)"
+                        if anim_out == "scale" else "1")
+                chain.append(f"scale=w='max(2,{bw}*min({kin},{kout}))':"
+                             f"h='max(2,{bh}*min({kin},{kout}))':eval=frame")
+                x_expr = f"{px}+{bw}/2-overlay_w/2"
+                y_expr = f"{py}+{bh}/2-overlay_h/2"
+
+            if anim_in == "slide" and anim_in != "none":
+                k = f"min(max((t-{start:.3f})/{anim_dur:.3f},0),1)"
+                if px < w / 2:
+                    x_expr = f"{px}-overlay_w*(1-{k})"
+                else:
+                    x_expr = f"{px}+overlay_w*(1-{k})"
+            if anim_out == "slide" and anim_out != "none":
+                k = f"min(max(({end:.3f}-t)/{anim_dur:.3f},0),1)"
+                if px < w / 2:
+                    x_expr = f"({x_expr})-overlay_w*(1-{k})"
+                else:
+                    x_expr = f"({x_expr})+overlay_w*(1-{k})"
+
+            label_out = f"[ova{ov_no}]"
+            vg.append(",".join(chain) + label_out)
+            label_dst = f"[ovc{ov_no}]"
+            vg.append(
+                f"{current}{label_out}overlay=x='{x_expr}':y='{y_expr}':"
+                f"enable='between(t,{start:.3f},{end:.3f})':eof_action=pass{label_dst}"
+            )
+            current = label_dst
+            ov_no += 1
+        prefix = current
+    else:
+        prefix = current + (",".join(style) + "," if style else "")
 
     if ass_path is not None:
         vg.append(
@@ -660,6 +843,17 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         cmd += ["-stream_loop", "-1", "-i", str(music_path)]
     if dub_idx is not None and dub_path is not None:
         cmd += ["-i", str(dub_path)]
+    for event in ad_list:
+        path = ad_files.get(str(event.get("asset") or ""))
+        if path is None:
+            continue
+        if ad_image.get(str(event.get("id") or event.get("asset"))):
+            cmd += ["-loop", "1", "-framerate", "30", "-i", str(path)]
+        else:
+            cmd += ["-stream_loop", "-1", "-i", str(path)]
+    if silence_idx is not None:
+        cmd += ["-f", "lavfi", "-i",
+                f"anullsrc=r=48000:cl=stereo:d={out_dur:.3f}"]
 
     source_rate = int(info.get("sample_rate") or 48000)
     audio_index: Optional[int] = None
@@ -678,8 +872,10 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             source_rate = int(rate)
     audio: List[str] = []
     audio_label: Optional[str] = None
-    if info["has_audio"] or use_dub:
-        if use_dub:
+    if info["has_audio"] or use_dub or silence_idx is not None:
+        if silence_idx is not None and not (info["has_audio"] or use_dub):
+            audio.append(f"[{silence_idx}:a]anull[seq_a]")
+        elif use_dub:
             dub_streams = (dub_info or {}).get("audio_streams") or []
             dub_src = f"[{dub_idx}:a:{dub_track}]" if dub_track is not None else f"[{dub_idx}:a]"
             if dub_track is not None and 0 <= dub_track < len(dub_streams):
@@ -711,7 +907,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         afilters.extend(_atempo_chain(speed / pitch))
 
         measured = None
-        if use_dub and dub_path is not None:
+        if silence_idx is not None and not (info["has_audio"] or use_dub):
+            measured = None
+        elif use_dub and dub_path is not None:
             dub_dur = float((dub_info or {}).get("duration") or 0.0)
             m_start = max(0.0, clip_start - float(audio_offset or 0.0))
             m_dur = min(src_dur, max(0.0, dub_dur - m_start))
@@ -743,6 +941,59 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                          + _amix_filter(bool(ffmpeg_capabilities().get("amix_normalize", True)))
                          + "[a0b]")
             base_audio = "[a0b]"
+
+        if inserts:
+            sequence: List[tuple] = []
+            last = 0.0
+            for item in inserts:
+                at = max(0.0, min(out_dur, float(item["at"])))
+                if at > last + 0.001:
+                    sequence.append(("base", last, at))
+                    last = at
+                sequence.append(("ad", item, 0.0))
+            if out_dur > last + 0.001 or not sequence:
+                sequence.append(("base", last, out_dur))
+            base_count = sum(1 for part in sequence if part[0] == "base")
+            if base_count > 1:
+                labels = "".join(f"[as{i}]" for i in range(base_count))
+                audio.append(f"{base_audio}asplit={base_count}{labels}")
+            parts: List[str] = []
+            base_no = 0
+            ad_no = 0
+            for part in sequence:
+                if part[0] == "base":
+                    start, end = float(part[1]), float(part[2])
+                    src = f"[as{base_no}]" if base_count > 1 else base_audio
+                    audio.append(f"{src}atrim=start={start:.3f}:end={end:.3f},"
+                                 f"asetpts=PTS-STARTPTS,"
+                                 f"aformat=sample_fmts=fltp:sample_rates=48000:"
+                                 f"channel_layouts=stereo[abi{base_no}]")
+                    parts.append(f"[abi{base_no}]")
+                    base_no += 1
+                    continue
+                item = part[1]
+                event = item["event"]
+                key = str(event.get("id") or event.get("asset"))
+                idx = ad_inputs.get(key)
+                length = float(item["duration"])
+                volume = max(0.0, min(1.0, float(event.get("volume", 1.0) or 0.0)))
+                if idx is not None and ad_audio.get(key):
+                    audio.append(
+                        f"[{idx}:a]atrim=duration={length:.3f},"
+                        f"asetpts=PTS-STARTPTS,volume={volume:.3f},"
+                        f"aformat=sample_fmts=fltp:sample_rates=48000:"
+                        f"channel_layouts=stereo[adi{ad_no}]"
+                    )
+                else:
+                    audio.append(
+                        f"aevalsrc=0|0:s=48000:d={length:.3f},"
+                        f"aformat=sample_fmts=fltp:sample_rates=48000:"
+                        f"channel_layouts=stereo[adi{ad_no}]"
+                    )
+                parts.append(f"[adi{ad_no}]")
+                ad_no += 1
+            audio.append("".join(parts) + f"concat=n={len(parts)}:v=0:a=1[a0i]")
+            base_audio = "[a0i]"
 
         if music_idx is not None:
             level = max(0.0, min(0.5, float(music_volume or 0.0)))

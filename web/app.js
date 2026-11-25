@@ -2934,6 +2934,10 @@ function openEditor(clipId) {
   const subSpeed = s.sub_speed || "calm";
   let editorSplit = Number(s.split_ratio || 0.5);
   let editorAdhdBg = String(s.adhd_bg || "");
+  let adAssets = [];
+  let adSelected = "";
+  let adEvents = JSON.parse(JSON.stringify(s.ad_events || []));
+  let adLayout = null;
   const adhdSplitMin = Math.min(adhdLimits().min, Math.round(editorSplit * 100));
   const adhdSplitMax = adhdLimits().max;
 
@@ -3056,6 +3060,24 @@ function openEditor(clipId) {
             <div class="field"><label>Низ: звук <b id="edBottomVolumeVal">${Math.round(Number(s.adhd_bottom_volume || 0))}</b>%</label>
               <input type="range" id="edBottomVolume" min="0" max="50" step="1" value="${Math.round(Number(s.adhd_bottom_volume || 0))}" />
             </div>
+          </div>
+          <div class="opt wide" id="edAdsBlock">
+            <span class="opt-head">${optIcon("style", "ico-purple")}<span class="opt-label">Реклама и плашки</span></span>
+            <label class="toggle"><input type="checkbox" id="edAdsEnabled" ${s.ads_enabled !== false ? "checked" : ""}/><span class="track"></span><span>Показывать рекламу в клипе</span></label>
+            <div class="ad-assets" id="edAdAssets">Загрузка библиотеки…</div>
+            <div class="ad-add-row">
+              <button type="button" class="link-btn" id="edAdUpload">+ файл</button>
+              <input type="file" id="edAdInput" class="hidden" accept="image/*,video/mp4,video/webm,video/quicktime"/>
+              <input type="text" id="edAdText" maxlength="300" placeholder="Текст плашки или промокод" />
+              <button type="button" class="link-btn" id="edAdTextAdd">добавить текст</button>
+            </div>
+            <div class="ad-actions">
+              <button type="button" class="mini-btn" id="edAdOverlayBtn">Наложение в текущий момент</button>
+              <button type="button" class="mini-btn" id="edAdReplaceBtn">Вставка ролика</button>
+              <span class="opt-hint">Вставка ставит видео на паузу и удлиняет клип; наложение идёт поверх видео.</span>
+            </div>
+            <div class="ad-timeline" id="edAdTimeline"></div>
+            <div class="ad-list" id="edAdList"></div>
           </div>
           <div class="field">
             <label>Субтитры</label>
@@ -3413,6 +3435,137 @@ function openEditor(clipId) {
       toast("Нижнее видео загружено");
     } catch (err) { toast(err.message, "err"); }
   });
+  const renderAdAssets = () => {
+    const box = $("#edAdAssets");
+    if (!box) return;
+    if (!adAssets.length) { box.innerHTML = `<div class="opt-hint">Библиотека пуста: добавьте PNG, видео или текст.</div>`; return; }
+    box.innerHTML = adAssets.map((a) => `<button type="button" class="ad-asset ${a.id === adSelected ? "active" : ""}" data-ad="${a.id}" title="${esc(a.name)}">
+      ${a.kind === "video" ? `<span class="ad-kind">▶</span>` : `<img src="${a.url}" alt="">`}
+      <span>${esc(a.name)}</span></button>`).join("");
+    $$("button[data-ad]", box).forEach((b) => b.addEventListener("click", () => {
+      adSelected = b.dataset.ad;
+      renderAdAssets();
+    }));
+  };
+  const adAssetName = (id) => (adAssets.find((a) => a.id === id) || {}).name || id;
+  const renderAdList = () => {
+    const box = $("#edAdList");
+    if (!box) return;
+    if (!adEvents.length) { box.innerHTML = `<div class="opt-hint">Событий пока нет.</div>`; return; }
+    const byId = {};
+    ((adLayout && adLayout.events) || []).forEach((e) => { byId[e.id] = e; });
+    box.innerHTML = adEvents.map((e, i) => {
+      const mapped = byId[e.id] || {};
+      const start = mapped.start_final == null ? "?" : Number(mapped.start_final).toFixed(2);
+      const end = mapped.end_final == null ? "?" : Number(mapped.end_final).toFixed(2);
+      return `<div class="ad-row" data-adrow="${i}">
+        <b>${e.kind === "replace" ? "вставка" : "наложение"}</b>
+        <span>${esc(adAssetName(e.asset))}</span>
+        <span class="muted">${start}–${end} с</span>
+        <button type="button" class="icon-btn" data-addel="${i}" title="Удалить">×</button></div>`;
+    }).join("");
+    $$("button[data-addel]", box).forEach((b) => b.addEventListener("click", () => {
+      adEvents.splice(Number(b.dataset.addel), 1);
+      refreshAdTimeline();
+    }));
+  };
+  const renderAdTimeline = () => {
+    const bar = $("#edAdTimeline");
+    if (!bar) return;
+    const total = Math.max(0.5, Number(adLayout && adLayout.duration) || (clip.end - clip.start));
+    const items = (adLayout && adLayout.events) || [];
+    bar.innerHTML = items.map((e) => {
+      const left = Math.max(0, Math.min(100, Number(e.start_final || 0) / total * 100));
+      const width = Math.max(2, Math.min(100 - left, (Number(e.end_final || 0) - Number(e.start_final || 0)) / total * 100));
+      return `<button type="button" class="ad-block ${e.kind === "replace" ? "replace" : "overlay"}" data-adblock="${esc(e.id)}" style="left:${left}%;width:${width}%" title="${esc(adAssetName(e.asset))}: ${Number(e.start_final).toFixed(2)}–${Number(e.end_final).toFixed(2)} с">${e.kind === "replace" ? "вставка" : "наложение"}</button>`;
+    }).join("");
+    $$("button[data-adblock]", bar).forEach((block) => {
+      let dragging = false;
+      block.addEventListener("pointerdown", (ev) => {
+        dragging = true;
+        try { block.setPointerCapture(ev.pointerId); } catch (_) {}
+      });
+      block.addEventListener("pointermove", async (ev) => {
+        if (!dragging) return;
+        const rect = bar.getBoundingClientRect();
+        const finalTime = Math.max(0, Math.min(total, (ev.clientX - rect.left) / rect.width * total));
+        try {
+          const res = await api(`/api/clips/${clip.id}/ad-map`, { method: "POST", body: JSON.stringify({ time: finalTime, direction: "to_source", events: adEvents }) });
+          const event = adEvents.find((x) => x.id === block.dataset.adblock);
+          if (event) event.start = Number(res.time);
+        } catch (_) {}
+      });
+      block.addEventListener("pointerup", () => { dragging = false; refreshAdTimeline(); });
+    });
+  };
+  const refreshAdTimeline = async () => {
+    renderAdList();
+    try {
+      adLayout = await api(`/api/clips/${clip.id}/ad-timeline?events=${encodeURIComponent(JSON.stringify(adEvents))}`);
+    } catch (_) { adLayout = null; }
+    renderAdTimeline();
+    renderAdList();
+  };
+  api("/api/ads").then((data) => {
+    adAssets = (data && data.assets) || [];
+    if (!adSelected && adAssets.length) adSelected = adAssets[0].id;
+    renderAdAssets();
+  }).catch(() => {});
+  const addAdEvent = async (kind) => {
+    if (!adSelected) { toast("Выберите ассет из библиотеки", "err"); return; }
+    const video = $("#edVideo");
+    const at = video ? video.currentTime : 0;
+    let sourceTime = at;
+    try {
+      const res = await api(`/api/clips/${clip.id}/ad-map`, { method: "POST", body: JSON.stringify({ time: at, direction: "to_source", events: adEvents }) });
+      sourceTime = Number(res.time);
+    } catch (_) {}
+    const duration = kind === "replace" ? 2.0 : 3.0;
+    adEvents.push({
+      id: "e" + Math.random().toString(36).slice(2, 10), asset: adSelected, kind,
+      start: sourceTime, duration,
+      x: kind === "replace" ? 0 : 0.66, y: kind === "replace" ? 0 : 0.05,
+      w: 0.28, h: kind === "replace" ? 1 : 0.2, opacity: 1,
+      anim_in: "fade", anim_out: "fade", anim_dur: 0.3, z: 0,
+      volume: 1
+    });
+    refreshAdTimeline();
+  };
+  const overlayBtn = $("#edAdOverlayBtn");
+  if (overlayBtn) overlayBtn.addEventListener("click", () => addAdEvent("overlay"));
+  const replaceBtn = $("#edAdReplaceBtn");
+  if (replaceBtn) replaceBtn.addEventListener("click", () => addAdEvent("replace"));
+  const adUploadBtn = $("#edAdUpload");
+  if (adUploadBtn) adUploadBtn.addEventListener("click", () => $("#edAdInput").click());
+  const adInput = $("#edAdInput");
+  if (adInput) adInput.addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await api("/api/ads", { method: "POST", body: form });
+      adAssets = [res.asset, ...adAssets];
+      adSelected = res.asset.id;
+      renderAdAssets();
+      toast("Ассет добавлен");
+    } catch (err) { toast(err.message, "err"); }
+  });
+  const adTextAdd = $("#edAdTextAdd");
+  if (adTextAdd) adTextAdd.addEventListener("click", async () => {
+    const text = ($("#edAdText") || {}).value || "";
+    if (!text.trim()) { toast("Введите текст", "err"); return; }
+    try {
+      const res = await api("/api/ads/text", { method: "POST", body: JSON.stringify({ text: text.trim(), name: text.trim().slice(0, 40) }) });
+      adAssets = [res.asset, ...adAssets];
+      adSelected = res.asset.id;
+      $("#edAdText").value = "";
+      renderAdAssets();
+      toast("Плашка добавлена");
+    } catch (err) { toast(err.message, "err"); }
+  });
+  refreshAdTimeline();
   window.addEventListener("resize", () => { drawFrame(); updateEditorPreview(); });
   setTimeout(() => { updateEditorPreview(); seekSource(); }, 60);
 
@@ -3517,6 +3670,8 @@ function openEditor(clipId) {
       adhd_bottom_scale: Number($("#edBottomScale").value) / 100,
       adhd_bottom_speed: Number($("#edBottomSpeed").value) / 100,
       adhd_bottom_volume: Number($("#edBottomVolume").value),
+      ads_enabled: $("#edAdsEnabled").checked,
+      ad_events: adEvents,
       subtitles: $("#edSubs").checked,
       uppercase: $("#edUpper").checked,
       show_hook: $("#edShowHook").checked,

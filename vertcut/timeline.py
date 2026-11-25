@@ -240,6 +240,117 @@ def plan(words: Sequence[Dict[str, Any]], start: float, end: float,
     }
 
 
+def insert_spans(segments: Sequence[Span], events: Sequence[Dict[str, Any]],
+                 speed: float = 1.0, duration: Optional[float] = None) -> Dict[str, Any]:
+    """Точки вставки рекламы на итоговом таймлайне.
+
+    `start` события — секунды исходного фрагмента (0 = начало клипа).
+    `at` — время до вставки (после склеек и скорости), `final_start` — после
+    всех предыдущих вставок. Событие внутри вырезанной паузы прилипает к
+    ближайшему сохранённому моменту через `remap_time`.
+    """
+    segs = list(segments) if segments else [(0.0, max(0.0, float(duration or 0.0)))]
+    base = (float(duration) if duration is not None
+            else sum(max(0.0, b - a) for a, b in segs) / max(0.01, float(speed or 1.0)))
+    base = max(0.0, base)
+    inserts: List[Dict[str, Any]] = []
+    for event in events or []:
+        if not isinstance(event, dict) or event.get("kind") != "replace":
+            continue
+        try:
+            length = float(event.get("duration") or 0.0)
+            start = float(event.get("start") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if length <= 0:
+            continue
+        at = max(0.0, min(base, remap_time(max(0.0, start), segs, speed)))
+        inserts.append({"at": round(at, 3), "duration": round(length, 3),
+                        "event": event})
+    inserts.sort(key=lambda item: (item["at"], item["duration"]))
+    acc = 0.0
+    for item in inserts:
+        item["final_start"] = round(item["at"] + acc, 3)
+        acc += item["duration"]
+    return {"inserts": inserts, "duration": round(base + acc, 3),
+            "added": round(acc, 3)}
+
+
+def inserted_time(value: float, inserts: Sequence[Dict[str, Any]],
+                  inclusive: bool = True) -> float:
+    """Время базового таймлайна -> время с учётом вставок.
+
+    inclusive=True для начала накладки: начавшаяся ровно во вставке, она
+    появляется после неё. Для конца inclusive=False — накладка, кончающаяся
+    во вставке, не растягивается.
+    """
+    shift = 0.0
+    for item in inserts or []:
+        at = float(item.get("at") or 0.0)
+        if at < value or (inclusive and at <= value):
+            shift += float(item.get("duration") or 0.0)
+    return round(float(value) + shift, 3)
+
+
+def unmap_inserted(value: float, inserts: Sequence[Dict[str, Any]]) -> float:
+    """Время с учётом вставок -> время базового таймлайна.
+
+    Попадание внутрь рекламы приближает к её началу: другого «сохранённого»
+    момента рядом нет.
+    """
+    current = float(value)
+    for item in inserts or []:
+        final_start = float(item.get("final_start") or 0.0)
+        length = float(item.get("duration") or 0.0)
+        if current <= final_start:
+            break
+        if current < final_start + length:
+            return round(float(item.get("at") or final_start), 3)
+        current -= length
+    return round(current, 3)
+
+
+def unmap_time(value: float, segments: Sequence[Span],
+               speed: float = 1.0) -> float:
+    """Время готового клипа -> время исходного фрагмента (обратное remap_time)."""
+    speed = max(0.01, float(speed or 1.0))
+    segs = list(segments) or [(0.0, 0.0)]
+    offs, _total = offsets(segs)
+    target = max(0.0, float(value)) * speed
+    for i, (a, b) in enumerate(segs):
+        if target < offs[i] + max(0.0, b - a):
+            return round(a + max(0.0, target - offs[i]), 3)
+    return round(segs[-1][1], 3)
+
+
+def insert_words(words: Sequence[Dict[str, Any]],
+                 inserts: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Слова базового таймлайна -> слова с учётом вставок.
+
+    Слово, попавшее на вставку, обрывается в её начале: во время рекламы
+    субтитров нет. Слова после вставки сдвигаются.
+    """
+    out: List[Dict[str, Any]] = []
+    for word in words or []:
+        try:
+            start = float(word["start"])
+            end = float(word["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        crossing = [float(item["at"]) for item in inserts or []
+                    if start < float(item["at"]) < end]
+        if crossing:
+            end = min(crossing)
+        mapped = dict(word)
+        mapped["start"] = inserted_time(start, inserts, inclusive=True)
+        mapped["end"] = inserted_time(end, inserts, inclusive=False)
+        if mapped["end"] - mapped["start"] < 0.03:
+            continue
+        out.append(mapped)
+    out.sort(key=lambda item: float(item["start"]))
+    return out
+
+
 def shift_words(words: Sequence[Dict[str, Any]], offset: float,
                 duration: Optional[float] = None) -> List[Dict[str, Any]]:
     """Слова из таймлайна дубляжа -> таймлайн видео.
