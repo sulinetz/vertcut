@@ -46,6 +46,7 @@
     select: "smart", export_order: "chrono",
     picker: "local", mood_filter: [], type_filter: [], min_score: 0,
     audio_track: -1, audio_lang: "auto", subtitle_track: -1, subtitle_source: "auto",
+    asr_profile: "", whisper_model: "",
     external_audio: false, external_audio_track: -1, audio_offset: 0,
     cookies_browser: "", language: "auto", max_height: 1080, segments: false,
     force_hd: false
@@ -59,6 +60,8 @@
       count: o.count == null ? 10 : o.count,
       audio_track: o.audio_track == null ? -1 : o.audio_track,
       audio_lang: o.audio_lang || "auto",
+      asr_profile: o.asr_profile || "",
+      whisper_model: o.whisper_model || "",
       subtitle_track: o.subtitle_track == null ? -1 : o.subtitle_track
     };
   }
@@ -205,6 +208,7 @@
         <div class="wz-info"><b>${esc(project.title || project.url)}</b>
           <span>${project.duration ? fmtDur(project.duration) + " · " : ""}${esc(meta.vcodec || "")} ${meta.height ? meta.height + "p" : ""}</span>
         </div>
+        ${meta.asr_warning ? `<div class="warn-box"><strong>Проверьте язык распознавания.</strong> ${esc(meta.asr_warning)}</div>` : ""}
         ${draftLocal ? `<div class="wz-block"><b>Файл ещё не выбран</b><div class="wz-actions">
           <button class="btn-ghost" id="wzUpload">Загрузить файлом</button>
           <button class="btn-ghost hidden" id="wzNative">Выбрать файл на диске</button></div>
@@ -554,6 +558,26 @@
           </div>
         </div>
         <div class="row2">
+          <div class="field"><label>Распознавание речи</label>
+            <select id="wzAsrProfile">
+              <option value="" ${wizard.opts.asr_profile === "" ? "selected" : ""}>Как в настройках</option>
+              <option value="fast" ${wizard.opts.asr_profile === "fast" ? "selected" : ""}>Быстро</option>
+              <option value="balance" ${wizard.opts.asr_profile === "balance" ? "selected" : ""}>Баланс</option>
+              <option value="max" ${wizard.opts.asr_profile === "max" ? "selected" : ""}>Максимум</option>
+            </select>
+            <div class="opt-hint">Профиль сам подбирает модель и параметры. «Баланс» и «Максимум» могут скачать модель один раз. Пустое значение использует модель из настроек.</div>
+          </div>
+          <div class="field"><label>Язык речи</label>
+            <select id="wzLanguage">
+              <option value="auto" ${!wizard.opts.language || wizard.opts.language === "auto" ? "selected" : ""}>Определить автоматически</option>
+              <option value="ru" ${wizard.opts.language === "ru" ? "selected" : ""}>Русский</option>
+              <option value="uk" ${wizard.opts.language === "uk" ? "selected" : ""}>Украинский</option>
+              <option value="en" ${wizard.opts.language === "en" ? "selected" : ""}>Английский</option>
+              <option value="de" ${wizard.opts.language === "de" ? "selected" : ""}>Немецкий</option>
+              <option value="es" ${wizard.opts.language === "es" ? "selected" : ""}>Испанский</option>
+            </select>
+            <div class="opt-hint">Для русского лучше указать язык явно. Если модель определит другой, после распознавания появится предупреждение.</div>
+          </div>
           <div class="field"><label>Кто выбирает моменты</label>
             <select id="wzPicker">${PICKER_OPTIONS.map(([k, v]) => `<option value="${k}" ${wizard.opts.picker === k ? "selected" : ""}>${v}</option>`).join("")}</select>
           </div>
@@ -594,6 +618,10 @@
       if (preset) Object.assign(wizard.opts, { min_dur: preset.min, max_dur: preset.max, target_dur: preset.target });
     });
     $("#wzSelect").addEventListener("change", (e) => { wizard.opts.select = e.target.value; });
+    const asr = $("#wzAsrProfile");
+    if (asr) asr.addEventListener("change", (e) => { wizard.opts.asr_profile = e.target.value; });
+    const lang = $("#wzLanguage");
+    if (lang) lang.addEventListener("change", (e) => { wizard.opts.language = e.target.value; });
     $("#wzOrder").addEventListener("change", (e) => { wizard.opts.export_order = e.target.value; });
     $("#wzPicker").addEventListener("change", (e) => { wizard.opts.picker = e.target.value; });
     $("#wzMinScore").addEventListener("change", (e) => { wizard.opts.min_score = Number(e.target.value); });
@@ -710,11 +738,18 @@
               </div>
               <div class="field"><label>Распознавание речи (Whisper)</label>
                 <select id="setWhisperModel">
+                  <option value="tiny">tiny — совсем быстро, ~75 МБ</option>
+                  <option value="base">base — быстро, ~150 МБ</option>
                   <option value="small">small — быстро, ~460 МБ</option>
                   <option value="medium">medium — баланс, ~1.5 ГБ</option>
+                  <option value="large-v3-turbo">large-v3-turbo — быстрый и точный, ~1.6 ГБ</option>
                   <option value="large-v3">large-v3 — лучше для русского, ~3 ГБ</option>
                 </select>
-                <div class="opt-hint">Для финальных субтитров на GPU лучше large-v3, для черновиков — small.</div>
+                <div class="opt-hint">Модель по умолчанию, если в проекте не выбран профиль. Для финальных субтитров на GPU лучше large-v3 или large-v3-turbo.</div>
+              </div>
+              <div class="field"><label>Словарь имён и терминов</label>
+                <textarea id="setAsrTerms" rows="3" spellcheck="false" placeholder="Например: OpenAI, GPT-5, Сбер, Kubernetes"></textarea>
+                <div class="opt-hint">Через запятую или с новой строки. Слова попадают в подсказку распознавания: имена и термины пишутся чаще правильнее. Подсказка не гарантирует результат.</div>
               </div>
               <div class="wz-actions">
                 <button class="btn-ghost" id="checkDeepseek" type="button">Проверить DeepSeek</button>
@@ -882,6 +917,8 @@
       if (proxy && document.activeElement !== proxy) proxy.value = s.proxy || "";
       const whisper = $("#setWhisperModel");
       if (whisper) whisper.value = s.whisper_model || "small";
+      const terms = $("#setAsrTerms");
+      if (terms && document.activeElement !== terms) terms.value = s.asr_terms || "";
       $("#setDeepseekKey").value = "";
       $("#setGeminiKey").value = "";
       const orKey = $("#setOpenrouterKey");
@@ -899,10 +936,11 @@
         openrouter_key: ($("#setOpenrouterKey") || {}).value ? $("#setOpenrouterKey").value.trim() : "",
         openrouter_model: $("#setOpenrouterModel") ? $("#setOpenrouterModel").value : "",
         proxy: $("#setProxy").value.trim(),
-        whisper_model: ($("#setWhisperModel") || {}).value || "small"
+        whisper_model: ($("#setWhisperModel") || {}).value || "small",
+        asr_terms: ($("#setAsrTerms") || {}).value || ""
       })
     }).then(applyState).catch((err) => toast(err.message || "Не удалось сохранить", "err"));
-    ["#setDeepseekKey", "#setGeminiKey", "#setOpenrouterKey", "#setDeepseekModel", "#setGeminiModel", "#setOpenrouterModel", "#setWhisperModel", "#setProxy"]
+    ["#setDeepseekKey", "#setGeminiKey", "#setOpenrouterKey", "#setDeepseekModel", "#setGeminiModel", "#setOpenrouterModel", "#setWhisperModel", "#setProxy", "#setAsrTerms"]
       .forEach((selector) => {
         const el = $(selector);
         if (el) el.addEventListener("change", save);

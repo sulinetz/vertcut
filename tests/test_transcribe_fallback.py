@@ -12,7 +12,8 @@ class VadFallbackTest(unittest.TestCase):
     def test_retries_without_vad_when_first_pass_empty(self):
         calls = []
 
-        def fake_consume(model, path, language, use_vad, offset, total, progress, batched=False, prompt=None):
+        def fake_consume(model, path, language, use_vad, offset, total, progress,
+                         config=None, batched=False, prompt=None):
             calls.append(use_vad)
             if use_vad:
                 return [], None
@@ -28,7 +29,8 @@ class VadFallbackTest(unittest.TestCase):
     def test_keeps_vad_result_when_not_empty(self):
         calls = []
 
-        def fake_consume(model, path, language, use_vad, offset, total, progress, batched=False, prompt=None):
+        def fake_consume(model, path, language, use_vad, offset, total, progress,
+                         config=None, batched=False, prompt=None):
             calls.append(use_vad)
             return [{"text": "hello"}], None
 
@@ -42,7 +44,8 @@ class VadFallbackTest(unittest.TestCase):
     def test_falls_back_when_vad_crashes(self):
         calls = []
 
-        def fake_consume(model, path, language, use_vad, offset, total, progress, batched=False, prompt=None):
+        def fake_consume(model, path, language, use_vad, offset, total, progress,
+                         config=None, batched=False, prompt=None):
             calls.append(use_vad)
             if use_vad:
                 raise RuntimeError("onnxruntime failed to load vad model")

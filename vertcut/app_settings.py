@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -26,7 +27,18 @@ DEFAULT_MODELS = {
     "openrouter": "deepseek/deepseek-chat",
 }
 
-WHISPER_MODELS = ["small", "medium", "large-v3"]
+WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
+
+# Пользователь может написать «turbo» — это тот же large-v3-turbo.
+WHISPER_ALIASES = {"turbo": "large-v3-turbo", "large": "large-v3",
+                   "large-turbo": "large-v3-turbo"}
+
+
+def normalize_whisper_model(value: Any) -> str:
+    """Имя модели в каноническом виде; пусто — неизвестное значение."""
+    text = str(value or "").strip().lower()
+    text = WHISPER_ALIASES.get(text, text)
+    return text if text in WHISPER_MODELS else ""
 
 MODEL_CHOICES = {
     "deepseek": ["deepseek-chat", "deepseek-reasoner"],
@@ -49,6 +61,7 @@ DEFAULTS: Dict[str, Any] = {
     "openrouter_key": "",
     "openrouter_model": DEFAULT_MODELS["openrouter"],
     "whisper_model": "small",
+    "asr_terms": "",
     "proxy": "",
 }
 
@@ -93,10 +106,11 @@ def save(patch: Dict[str, Any]) -> Dict[str, Any]:
     """Сохраняет только известные поля. Пустая строка ключа не затирает его."""
     with _LOCK:
         data = _read()
-        for key in ("deepseek_model", "gemini_model", "openrouter_model", "whisper_model", "proxy"):
+        for key in ("deepseek_model", "gemini_model", "openrouter_model", "whisper_model",
+                    "asr_terms", "proxy"):
             value = patch.get(key)
             if isinstance(value, str):
-                data[key] = value.strip()[:300]
+                data[key] = value.strip()[:2000 if key == "asr_terms" else 300]
         for key in ("deepseek_key", "gemini_key", "openrouter_key"):
             value = patch.get(key)
             if isinstance(value, str):
@@ -115,8 +129,7 @@ def save(patch: Dict[str, Any]) -> Dict[str, Any]:
             data["gemini_model"] = DEFAULT_MODELS["gemini"]
         if not data.get("openrouter_model"):
             data["openrouter_model"] = DEFAULT_MODELS["openrouter"]
-        if data.get("whisper_model") not in WHISPER_MODELS:
-            data["whisper_model"] = "small"
+        data["whisper_model"] = normalize_whisper_model(data.get("whisper_model")) or "small"
         _write(data)
         return data
 
@@ -146,6 +159,7 @@ def public() -> Dict[str, Any]:
         "model_choices": MODEL_CHOICES,
         "whisper_model": data["whisper_model"],
         "whisper_models": WHISPER_MODELS,
+        "asr_terms": data["asr_terms"],
     }
 
 
@@ -164,8 +178,32 @@ def api_key(provider: str) -> str:
 
 
 def whisper_model() -> str:
-    value = str(load().get("whisper_model") or "small")
-    return value if value in WHISPER_MODELS else "small"
+    value = normalize_whisper_model(load().get("whisper_model"))
+    return value or "small"
+
+
+def asr_terms() -> str:
+    return str(load().get("asr_terms") or "")
+
+
+def asr_terms_list(limit: int = 50) -> list:
+    """Словарь имён и терминов: строки через запятую, точку с запятой или перенос."""
+    raw = asr_terms()
+    parts = re.split(r"[,;\n\r]+", raw)
+    out = []
+    seen = set()
+    for item in parts:
+        term = re.sub(r"\s+", " ", item).strip()
+        if not term:
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(term[:40])
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
 
 
 def model_for(provider: str) -> str:

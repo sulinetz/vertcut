@@ -123,7 +123,7 @@ class ProcessProjectCase(unittest.TestCase):
             mock.patch.object(pipeline, "_existing_subtitles", lambda *a, **k: None),
             mock.patch.object(pipeline, "_heartbeat",
                               lambda *a, **k: (threading.Event(), _NoThread())),
-            mock.patch.object(pipeline.transcribe, "model_cached", lambda: True),
+            mock.patch.object(pipeline.transcribe, "model_cached", lambda *a, **k: True),
             mock.patch.object(pipeline.transcribe, "transcribe", worker),
             mock.patch.object(pipeline, "_render_one", fake_render),
             mock.patch.object(pipeline, "_render_workers", lambda: 1),

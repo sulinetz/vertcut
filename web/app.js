@@ -1620,6 +1620,12 @@ function audioPickHTML(project) {
   return "";
 }
 
+function asrWarningHTML(project) {
+  const warning = (project.meta && project.meta.asr_warning) || "";
+  if (!warning) return "";
+  return `<div class="warn-box"><strong>Проверьте язык распознавания.</strong> ${esc(warning)}</div>`;
+}
+
 function clipsGridHTML() {
   const clips = filteredClips();
   const all = (state.detail && state.detail.clips) || [];
@@ -1811,6 +1817,7 @@ function reviewHTML(project) {
       <button class="btn-ghost danger" data-action="delete">${ICONS.trash} Удалить</button>
     </div>
   </div>
+  ${asrWarningHTML(project)}
   <div class="review-card">
     ${project.source_url ? `<video src="${project.source_url}" controls muted playsinline></video>` : ""}
     <div>
@@ -1852,6 +1859,7 @@ function resultsHTML() {
     </div>
   </div>
   ${fallbackHTML(project)}
+  ${asrWarningHTML(project)}
   ${audioPickHTML(project)}
   ${project.error ? `<div class="error-box">${esc(project.error)}</div>` : ""}
   ${clipFilterHTML()}

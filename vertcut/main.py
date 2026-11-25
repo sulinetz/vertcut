@@ -37,6 +37,7 @@ class AppSettingsIn(BaseModel):
     openrouter_key: Optional[str] = None
     openrouter_model: Optional[str] = None
     whisper_model: Optional[str] = None
+    asr_terms: Optional[str] = None
     proxy: Optional[str] = None
     clear_deepseek_key: bool = False
     clear_gemini_key: bool = False
@@ -342,6 +343,13 @@ def app_settings_get() -> Dict[str, Any]:
 
 @app.post("/api/app-settings")
 def app_settings_save(body: AppSettingsIn) -> Dict[str, Any]:
+    if body.whisper_model:
+        normalized = app_settings.normalize_whisper_model(body.whisper_model)
+        if not normalized:
+            raise HTTPException(400, "Неизвестная модель распознавания речи")
+        body.whisper_model = normalized
+    if body.asr_terms is not None and len(body.asr_terms) > 2000:
+        raise HTTPException(400, "Словарь терминов длиннее 2000 символов")
     app_settings.save(body.model_dump(exclude_none=True))
     return {"ok": True, **app_settings.public()}
 

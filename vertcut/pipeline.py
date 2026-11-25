@@ -11,8 +11,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import (analyze, db, downloader, platforms, reframe, render, semantic,
-               subtitles, timeline, transcribe, utils)
+from . import (analyze, app_settings, db, downloader, platforms, reframe, render,
+               semantic, subtitles, timeline, transcribe, utils)
 from .errors import Cancelled
 from .config import PROJECTS_DIR
 
@@ -22,6 +22,8 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "max_dur": 60,
     "target_dur": 32,
     "language": "auto",
+    "asr_profile": "",
+    "whisper_model": "",
     "aspect": "9:16",
     "mode": "auto",
     "subtitles": True,
@@ -252,9 +254,16 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     opts["max_height"] = mh if mh in (2160, 1440, 1080, 720, 480, 360) else 1080
     opts["segments"] = _as_bool(opts.get("segments"), False)
     opts["force_hd"] = _as_bool(opts.get("force_hd"), False)
-    opts["language"] = str(opts.get("language") or "auto")
-    if opts["language"] == "auto":
+    raw_profile = str(opts.get("asr_profile") or "").strip().lower()
+    opts["asr_profile"] = raw_profile if raw_profile in transcribe.ASR_PROFILES else ""
+    opts["whisper_model"] = app_settings.normalize_whisper_model(
+        opts.get("whisper_model")) if opts.get("whisper_model") else ""
+    raw_language = str(opts.get("language") or "auto").strip().lower()
+    if raw_language in ("", "auto"):
         opts["language"] = ""
+    else:
+        code = utils.normalize_language(raw_language)
+        opts["language"] = code if re.fullmatch(r"[a-z]{2,3}", code or "") else ""
     return opts
 
 
@@ -489,6 +498,8 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
             transcript = transcribe.transcribe(
                 audio["path"], workdir, language=opts.get("language") or None,
                 on_progress=lambda p, st: progress(0.32 + p * 0.38, f"{st} {int(p*100)}%"),
+                profile=opts.get("asr_profile") or "",
+                model=opts.get("whisper_model") or "",
             )
         except transcribe.TranscriptionError:
             # музыку и клипы без речи режем на равные части вместо ошибки
@@ -506,6 +517,9 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     db.merge_meta(pid, {"width": 0, "height": 0, "segments_mode": True,
                         "audio_size": audio.get("size"), "engine": engine,
                         "no_speech": bool(no_speech),
+                        "asr_model": (transcript or {}).get("model") or "",
+                        "asr_profile": (transcript or {}).get("asr_profile") or "",
+                        "asr_warning": (transcript or {}).get("warning") or "",
                         "segments": len((transcript or {}).get("segments") or [])})
 
     if select == "even" or no_speech:
@@ -847,58 +861,76 @@ def process_project(pid: str) -> None:
             db.merge_meta(pid, {
                 "engine": transcript.get("engine"),
                 "segments": len(transcript.get("segments") or []),
+                "asr_model": "", "asr_profile": "", "asr_warning": "",
             })
         elif need_text:
-            progress(0.05, "Распознавание речи")
-            if not transcribe.model_cached():
-                progress(0.05, "Скачиваю модель распознавания речи (~460 МБ, один раз)")
-            stop_hb, hb_thread = _heartbeat(pid, "Распознавание речи")
-            try:
-                if dub is not None:
-                    # Дубляж: распознаём русский звук; его время сдвинуто на offset.
-                    transcript = transcribe.transcribe(
-                        dub, workdir, language=opts.get("language") or None,
-                        on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
-                        audio_track=_track_index(opts.get("external_audio_track")),
-                    )
-                    if dub_offset:
-                        transcript["segments"] = timeline.shift_transcript(
-                            transcript.get("segments") or [], dub_offset, duration)
-                else:
-                    transcript = transcribe.transcribe(
-                        source, workdir, language=opts.get("language") or None,
-                        on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
-                        audio_track=_audio_track(opts),
-                    )
-                stop_hb.set(); hb_thread.join(timeout=1)
-            except Cancelled:
-                stop_hb.set(); hb_thread.join(timeout=1)
-                raise
-            except Exception as exc:  # noqa: BLE001
-                stop_hb.set(); hb_thread.join(timeout=1)
-                sub_path = None
-                sub_lang = ""
-                if not project["url"].startswith("local:"):
-                    found_sub = downloader.fetch_subtitles(
-                        project["url"], workdir,
-                        browser=opts.get("cookies_browser") or None)
-                    if found_sub:
-                        sub_path, sub_lang = found_sub
-                if sub_path:
-                    segs = utils.parse_vtt(Path(sub_path))
-                    if segs:
-                        transcript = {"language": sub_lang, "duration": duration,
-                                      "segments": segs, "engine": "source-subtitles"}
-                if transcript is None and isinstance(exc, transcribe.TranscriptionError):
-                    no_speech = True
-                elif transcript is None:
-                    raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
+            cached = None
+            if dub is None:
+                cached = _cached_transcript(
+                    workdir, source, opts.get("language") or None,
+                    _audio_track(opts), opts)
+            if cached is not None:
+                progress(0.35, "Использую сохранённое распознавание")
+                transcript = cached
+            else:
+                progress(0.05, "Распознавание речи")
+                if not transcribe.model_cached(opts.get("asr_profile") or "",
+                                               opts.get("whisper_model") or ""):
+                    progress(0.05, "Скачиваю модель распознавания речи (один раз)")
+                stop_hb, hb_thread = _heartbeat(pid, "Распознавание речи")
+                try:
+                    if dub is not None:
+                        # Дубляж: распознаём русский звук; его время сдвинуто на offset.
+                        transcript = transcribe.transcribe(
+                            dub, workdir, language=opts.get("language") or None,
+                            on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
+                            audio_track=_track_index(opts.get("external_audio_track")),
+                            profile=opts.get("asr_profile") or "",
+                            model=opts.get("whisper_model") or "",
+                        )
+                        if dub_offset:
+                            transcript["segments"] = timeline.shift_transcript(
+                                transcript.get("segments") or [], dub_offset, duration)
+                    else:
+                        transcript = transcribe.transcribe(
+                            source, workdir, language=opts.get("language") or None,
+                            on_progress=lambda p, s: progress(0.05 + p * 0.45, f"{s} {int(p*100)}%"),
+                            audio_track=_audio_track(opts),
+                            profile=opts.get("asr_profile") or "",
+                            model=opts.get("whisper_model") or "",
+                        )
+                    stop_hb.set(); hb_thread.join(timeout=1)
+                except Cancelled:
+                    stop_hb.set(); hb_thread.join(timeout=1)
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    stop_hb.set(); hb_thread.join(timeout=1)
+                    sub_path = None
+                    sub_lang = ""
+                    if not project["url"].startswith("local:"):
+                        found_sub = downloader.fetch_subtitles(
+                            project["url"], workdir,
+                            browser=opts.get("cookies_browser") or None)
+                        if found_sub:
+                            sub_path, sub_lang = found_sub
+                    if sub_path:
+                        segs = utils.parse_vtt(Path(sub_path))
+                        if segs:
+                            transcript = {"language": sub_lang, "duration": duration,
+                                          "segments": segs, "engine": "source-subtitles"}
+                    if transcript is None and isinstance(exc, transcribe.TranscriptionError):
+                        no_speech = True
+                    elif transcript is None:
+                        raise RuntimeError("Не удалось распознать речь. " + str(exc)[:300]) from exc
 
             _update(pid, language=(transcript or {}).get("language"))
             hook_ok = _hook_allowed(transcript or {})
             db.merge_meta(pid, {
                 "engine": (transcript or {}).get("engine"),
                 "segments": len((transcript or {}).get("segments") or []),
+                "asr_model": (transcript or {}).get("model") or "",
+                "asr_profile": (transcript or {}).get("asr_profile") or "",
+                "asr_warning": (transcript or {}).get("warning") or "",
             })
         else:
             _update(pid, language=None)
@@ -1128,6 +1160,21 @@ def load_transcript(workdir: Path) -> Optional[Dict[str, Any]]:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _cached_transcript(workdir: Path, media: Path, language: Optional[str],
+                       audio_track: Optional[int],
+                       opts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Сохранённый транскрипт, если модель, профиль, словарь и файл те же."""
+    saved = load_transcript(workdir)
+    if not saved or not saved.get("cache_key") or not saved.get("segments"):
+        return None
+    expected = transcribe.transcript_key(
+        media, language, audio_track,
+        profile=opts.get("asr_profile") or "",
+        model=opts.get("whisper_model") or "",
+    )
+    return saved if saved.get("cache_key") == expected else None
 
 
 def clip_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, Any]:

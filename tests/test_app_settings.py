@@ -152,5 +152,20 @@ def test_whisper_model_setting(tmp_path, monkeypatch):
     app_settings.save({"whisper_model": "large-v3"})
     assert app_settings.whisper_model() == "large-v3"
     assert app_settings.public()["whisper_model"] == "large-v3"
+    app_settings.save({"whisper_model": "turbo"})
+    assert app_settings.whisper_model() == "large-v3-turbo"
     app_settings.save({"whisper_model": "gigantic"})
     assert app_settings.whisper_model() == "small"
+
+
+def test_asr_terms_are_parsed_and_limited(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    app_settings.save({"asr_terms": "OpenAI, GPT-5\nOpenAI; DeepSeek"})
+    assert app_settings.asr_terms_list() == ["OpenAI", "GPT-5", "DeepSeek"]
+    assert app_settings.public()["asr_terms"].startswith("OpenAI")
+    app_settings.save({"asr_terms": ",,,  "})
+    assert app_settings.asr_terms_list() == []
+    long_list = ", ".join(f"term{i}" for i in range(80))
+    app_settings.save({"asr_terms": long_list})
+    assert len(app_settings.asr_terms_list()) == 50
+
