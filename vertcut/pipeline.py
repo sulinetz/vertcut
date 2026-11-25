@@ -53,6 +53,18 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "cut_zoom": False,
     "bg_video": "random",
     "split_ratio": 0.5,
+    "adhd_bg": "",
+    "adhd_top_fill": "cover",
+    "adhd_bottom_fill": "cover",
+    "adhd_top_scale": 1.0,
+    "adhd_top_offset_x": 0.0,
+    "adhd_top_offset_y": 0.0,
+    "adhd_bottom_scale": 1.0,
+    "adhd_bottom_offset_x": 0.0,
+    "adhd_bottom_offset_y": 0.0,
+    "adhd_bottom_speed": 1.0,
+    "adhd_bottom_start": -1.0,
+    "adhd_bottom_volume": 0.0,
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
@@ -81,6 +93,10 @@ CLIP_SETTING_KEYS = (
     "platform", "layout", "look", "vignette", "grain", "zoom", "bitrate",
     "music_volume", "hflip", "tilt", "speed", "pitch", "jump_cuts", "cut_zoom",
     "bg_video", "split_ratio", "segments", "export_subs",
+    "adhd_bg", "adhd_top_fill", "adhd_bottom_fill",
+    "adhd_top_scale", "adhd_top_offset_x", "adhd_top_offset_y",
+    "adhd_bottom_scale", "adhd_bottom_offset_x", "adhd_bottom_offset_y",
+    "adhd_bottom_speed", "adhd_bottom_start", "adhd_bottom_volume",
     "audio_track", "external_audio", "external_audio_track", "audio_offset",
 )
 
@@ -178,13 +194,35 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         opts["pitch"] = 1.0
     try:
-        opts["split_ratio"] = max(0.3, min(0.7, round(float(opts.get("split_ratio", 0.5) or 0.5), 2)))
+        opts["split_ratio"] = max(0.25, min(0.85, round(float(opts.get("split_ratio", 0.5) or 0.5), 2)))
     except (TypeError, ValueError):
         opts["split_ratio"] = 0.5
     bg = str(opts.get("bg_video") or "random").strip()
     if not bg or "/" in bg or "\\" in bg or ".." in bg:
         bg = "random"
     opts["bg_video"] = bg
+    adhd_bg = str(opts.get("adhd_bg") or "").strip()
+    if adhd_bg and ("/" in adhd_bg or "\\" in adhd_bg or ".." in adhd_bg):
+        adhd_bg = ""
+    opts["adhd_bg"] = adhd_bg
+    for key in ("adhd_top_fill", "adhd_bottom_fill"):
+        if opts.get(key) not in render.ADHD_FILLS:
+            opts[key] = "cover"
+    for key, (low, high, default) in {
+        "adhd_top_scale": (0.5, 2.0, 1.0),
+        "adhd_bottom_scale": (0.5, 2.0, 1.0),
+        "adhd_top_offset_x": (-0.5, 0.5, 0.0),
+        "adhd_top_offset_y": (-0.5, 0.5, 0.0),
+        "adhd_bottom_offset_x": (-0.5, 0.5, 0.0),
+        "adhd_bottom_offset_y": (-0.5, 0.5, 0.0),
+        "adhd_bottom_speed": (0.25, 4.0, 1.0),
+        "adhd_bottom_start": (-1.0, 7200.0, -1.0),
+        "adhd_bottom_volume": (0.0, 50.0, 0.0),
+    }.items():
+        try:
+            opts[key] = round(max(low, min(high, float(opts.get(key, default)))), 3)
+        except (TypeError, ValueError):
+            opts[key] = default
     try:
         opts["line_gap"] = max(0, min(120, int(opts.get("line_gap", 0))))
     except (TypeError, ValueError):
@@ -1115,10 +1153,16 @@ def _external_audio_path(workdir: Path, settings: Dict[str, Any]) -> Optional[Pa
     return _dub_file(workdir)
 
 
-def _adhd_bg_file(choice: str) -> Optional[Path]:
-    """Фон для split-screen: выбранный файл или случайный из папки."""
+def _adhd_bg_file(choice: str, workdir: Optional[Path] = None) -> Optional[Path]:
+    """Фон для split-screen: выбранный файл, файл проекта или случайный."""
     from .config import ASSETS_DIR
 
+    if choice and choice.startswith("local:"):
+        name = Path(choice.split(":", 1)[1]).name
+        target = ((workdir or PROJECTS_DIR) / name)
+        if target.is_file() and target.suffix.lower() in (".mp4", ".webm", ".mov", ".mkv", ".m4v"):
+            return target
+        return None
     folder = ASSETS_DIR / "adhd_bg"
     if not folder.exists():
         return None
@@ -1260,11 +1304,11 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     facecam: Optional[Dict[str, Any]] = None
     exclude = avoid = None
     crop_aspect = settings.get("aspect", "9:16")
-    ratio = float(settings.get("split_ratio", 0.5) or 0.5)
+    ratio = max(0.25, min(0.85, float(settings.get("split_ratio", 0.5) or 0.5)))
 
     if layout == "adhd":
         # Верх — видео, низ — фон. Окно кадрирования считаем под верхнюю часть.
-        top_h = max(2, int(round(1920 * ratio / 2.0)) * 2)
+        top_h = render.split_geometry(1080, 1920, ratio)["top_h"]
         crop_aspect = f"1080:{top_h}"
     elif layout in render.STREAM_LAYOUTS:
         # Пресет стрима: находим врезку и не даём окну кадрирования её накрыть.
@@ -1305,17 +1349,25 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     bg_path = None
     bg_start = 0.0
     if layout == "adhd":
-        bg_path = _adhd_bg_file(str(settings.get("bg_video") or "random"))
+        choice = str(settings.get("adhd_bg") or settings.get("bg_video") or "random")
+        bg_path = _adhd_bg_file(choice, workdir)
         if bg_path is not None:
             try:
-                bg_info = utils.probe(bg_path)
-                span = max(0.0, float(bg_info.get("duration") or 0) - 3.0)
-                if span > 0:
-                    import random
+                wanted_start = float(settings.get("adhd_bottom_start", -1.0))
+            except (TypeError, ValueError):
+                wanted_start = -1.0
+            if wanted_start >= 0:
+                bg_start = wanted_start
+            else:
+                try:
+                    bg_info = utils.probe(bg_path)
+                    span = max(0.0, float(bg_info.get("duration") or 0) - 3.0)
+                    if span > 0:
+                        import random
 
-                    bg_start = round(random.uniform(0.0, span), 2)
-            except Exception:
-                bg_start = 0.0
+                        bg_start = round(random.uniform(0.0, span), 2)
+                except Exception:
+                    bg_start = 0.0
 
     result = render.render_clip(
         source, clip["start"], clip["end"], out_path, ass_path=ass_path,
@@ -1344,6 +1396,16 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         audio_offset=float(settings.get("audio_offset", 0.0) or 0.0),
         external_audio_track=_track_index(settings.get("external_audio_track")),
         is_cancelled=is_cancelled,
+        adhd_top_fill=str(settings.get("adhd_top_fill") or "cover"),
+        adhd_bottom_fill=str(settings.get("adhd_bottom_fill") or "cover"),
+        adhd_top_scale=float(settings.get("adhd_top_scale", 1.0) or 1.0),
+        adhd_top_offset_x=float(settings.get("adhd_top_offset_x", 0.0) or 0.0),
+        adhd_top_offset_y=float(settings.get("adhd_top_offset_y", 0.0) or 0.0),
+        adhd_bottom_scale=float(settings.get("adhd_bottom_scale", 1.0) or 1.0),
+        adhd_bottom_offset_x=float(settings.get("adhd_bottom_offset_x", 0.0) or 0.0),
+        adhd_bottom_offset_y=float(settings.get("adhd_bottom_offset_y", 0.0) or 0.0),
+        adhd_bottom_speed=float(settings.get("adhd_bottom_speed", 1.0) or 1.0),
+        adhd_bottom_volume=float(settings.get("adhd_bottom_volume", 0.0) or 0.0) / 100.0,
     )
     settings = {**settings, "render_encoder": result.get("encoder", "libx264")}
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"

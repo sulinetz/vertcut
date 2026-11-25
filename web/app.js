@@ -426,6 +426,11 @@ function syncHeroFrameOptions() {
   }
 }
 
+function adhdLimits() {
+  const split = state.health && state.health.adhd_split;
+  return { min: Number(split && split.min) || 40, max: Number(split && split.max) || 85 };
+}
+
 const state = {
   projects: [],
   current: null,
@@ -480,6 +485,18 @@ const state = {
     cutZoom: false,
     bgVideo: "random",
     splitRatio: 0.5,
+    adhdBg: "",
+    adhdTopFill: "cover",
+    adhdBottomFill: "cover",
+    adhdTopScale: 1,
+    adhdTopX: 0,
+    adhdTopY: 0,
+    adhdBottomScale: 1,
+    adhdBottomX: 0,
+    adhdBottomY: 0,
+    adhdBottomSpeed: 1,
+    adhdBottomStart: -1,
+    adhdBottomVolume: 0,
     platform: "universal",
     layout: "",
     cookies: "",
@@ -725,6 +742,58 @@ function heroHTML() {
           <button data-val="adhd" class="${o.layout === "adhd" ? "active" : ""}">Сплит-скрин</button>
         </div>
       </div>
+      <div class="opt wide adhd-block ${o.layout === "adhd" ? "" : "hidden"}" id="adhdBlock">
+        <span class="opt-head">${optIcon("frame", "ico-cyan")}<span class="opt-label">СДВГ-композиция</span></span>
+        <div class="substyle">
+          <label class="mini-field grow"><span>Основное видео <b id="splitVal">${Math.round(o.splitRatio * 100)}</b>%</span>
+            <input type="range" id="splitRange" min="${Math.min(adhdLimits().min, Math.round(o.splitRatio * 100))}" max="${adhdLimits().max}" step="1" value="${Math.round(o.splitRatio * 100)}" />
+          </label>
+          <label class="mini-field"><span>Верх: заполнение</span>
+            <select id="adhdTopFill">
+              <option value="cover" ${o.adhdTopFill !== "contain" ? "selected" : ""}>Заполнить</option>
+              <option value="contain" ${o.adhdTopFill === "contain" ? "selected" : ""}>Вписать целиком</option>
+            </select>
+          </label>
+          <label class="mini-field"><span>Низ: заполнение</span>
+            <select id="adhdBottomFill">
+              <option value="cover" ${o.adhdBottomFill !== "contain" ? "selected" : ""}>Заполнить</option>
+              <option value="contain" ${o.adhdBottomFill === "contain" ? "selected" : ""}>Вписать целиком</option>
+            </select>
+          </label>
+          <label class="mini-field"><span>Верх: масштаб <b id="adhdTopScaleVal">${Math.round(o.adhdTopScale * 100)}</b>%</span>
+            <input type="range" id="adhdTopScale" min="50" max="200" step="5" value="${Math.round(o.adhdTopScale * 100)}" />
+          </label>
+          <label class="mini-field"><span>Низ: масштаб <b id="adhdBottomScaleVal">${Math.round(o.adhdBottomScale * 100)}</b>%</span>
+            <input type="range" id="adhdBottomScale" min="50" max="200" step="5" value="${Math.round(o.adhdBottomScale * 100)}" />
+          </label>
+          <label class="mini-field"><span>Верх: смещение X <b id="adhdTopXVal">${Math.round(o.adhdTopX * 100)}</b>%</span>
+            <input type="range" id="adhdTopX" min="-50" max="50" step="1" value="${Math.round(o.adhdTopX * 100)}" />
+          </label>
+          <label class="mini-field"><span>Верх: смещение Y <b id="adhdTopYVal">${Math.round(o.adhdTopY * 100)}</b>%</span>
+            <input type="range" id="adhdTopY" min="-50" max="50" step="1" value="${Math.round(o.adhdTopY * 100)}" />
+          </label>
+          <label class="mini-field"><span>Низ: смещение X <b id="adhdBottomXVal">${Math.round(o.adhdBottomX * 100)}</b>%</span>
+            <input type="range" id="adhdBottomX" min="-50" max="50" step="1" value="${Math.round(o.adhdBottomX * 100)}" />
+          </label>
+          <label class="mini-field"><span>Низ: смещение Y <b id="adhdBottomYVal">${Math.round(o.adhdBottomY * 100)}</b>%</span>
+            <input type="range" id="adhdBottomY" min="-50" max="50" step="1" value="${Math.round(o.adhdBottomY * 100)}" />
+          </label>
+          <label class="mini-field"><span>Низ: скорость <b id="adhdBottomSpeedVal">${Number(o.adhdBottomSpeed).toFixed(2)}</b>×</span>
+            <input type="range" id="adhdBottomSpeed" min="25" max="400" step="5" value="${Math.round(o.adhdBottomSpeed * 100)}" />
+          </label>
+          <label class="mini-field"><span>Низ: звук <b id="adhdBottomVolumeVal">${Math.round(o.adhdBottomVolume)}</b>%</span>
+            <input type="range" id="adhdBottomVolume" min="0" max="50" step="1" value="${Math.round(o.adhdBottomVolume)}" />
+          </label>
+          <label class="mini-field"><span>Низ: старт, с <span class="muted">−1 = случайно</span></span>
+            <input type="number" id="adhdBottomStart" min="-1" max="7200" step="0.1" value="${Number(o.adhdBottomStart)}" />
+          </label>
+          <label class="mini-field"><span>Низ: ролик</span>
+            <select id="bgSelect"><option value="random">Случайный</option></select>
+          </label>
+          <button type="button" class="link-btn" id="bgUploadBtn">добавить фон</button>
+        </div>
+        <span class="opt-hint">Верх — основное видео, низ — зацикленный фон. Ползунок делит кадр 9:16 (рекомендуется 40–85% под основное). Смещения и масштаб двигают картинку внутри своей области; звук нижнего ролика по умолчанию выключен.</span>
+      </div>
       <div class="opt">
         ${optIcon("subs", "ico-yellow")}
         <span class="opt-label">Субтитры</span>
@@ -837,13 +906,6 @@ function heroHTML() {
           <label class="mini-field"><span>Питч <b id="pitchVal">1.00</b>×</span>
             <input type="range" id="pitchRange" min="0.95" max="1.05" step="0.01" value="1" />
           </label>
-          <label class="mini-field"><span>Доля сплита <b id="splitVal">50</b>%</span>
-            <input type="range" id="splitRange" min="30" max="70" step="1" value="50" />
-          </label>
-          <label class="mini-field"><span>Фон сплита</span>
-            <select id="bgSelect"><option value="random">Случайный</option></select>
-          </label>
-          <button type="button" class="link-btn" id="bgUploadBtn">добавить фон</button>
           <span class="opt-hint">Склейки вырезают паузы длиннее 0.5 с и пересчитывают субтитры. Скорость и питч меняют темп; наклон 0–3° без чёрных углов. Всё по умолчанию выключено.</span>
         </div>
       </div>
@@ -864,16 +926,22 @@ function heroHTML() {
   </section>`;
 }
 
+function updateAdhdVisibility() {
+  const block = $("#adhdBlock");
+  if (block) block.classList.toggle("hidden", state.opts.layout !== "adhd");
+}
+
 async function loadAdhdBgs() {
   const select = $("#bgSelect");
   if (!select) return;
   try {
     const data = await api("/api/adhd-bg");
     const files = data.files || [];
-    const current = state.opts.bgVideo || "random";
+    const current = state.opts.adhdBg || state.opts.bgVideo || "random";
     select.innerHTML = '<option value="random">Случайный</option>' +
       files.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join("");
     select.value = files.some((f) => f.name === current) ? current : "random";
+    state.opts.adhdBg = select.value === "random" ? "" : select.value;
     state.opts.bgVideo = select.value;
   } catch (_) {}
 }
@@ -889,6 +957,7 @@ function bindHero() {
       state.opts[group] = group === "count" ? Number(raw) : raw;
       $$("button", seg).forEach((b) => b.classList.toggle("active", b === btn));
       syncExamples();
+      if (group === "layout") updateAdhdVisibility();
     });
   });
 
@@ -1032,8 +1101,39 @@ function bindHero() {
     const label = $("#splitVal");
     if (label) label.textContent = splitRange.value;
   });
+  const bindAdhdRange = (id, key, scale, fmt) => {
+    const el = $("#" + id);
+    if (!el) return;
+    const label = $("#" + id + "Val");
+    const apply = () => {
+      state.opts[key] = Number(el.value) * scale;
+      if (label) label.textContent = fmt ? fmt(state.opts[key]) : el.value;
+    };
+    el.addEventListener("input", apply);
+    apply();
+  };
+  bindAdhdRange("adhdTopScale", "adhdTopScale", 0.01);
+  bindAdhdRange("adhdBottomScale", "adhdBottomScale", 0.01);
+  bindAdhdRange("adhdTopX", "adhdTopX", 0.01);
+  bindAdhdRange("adhdTopY", "adhdTopY", 0.01);
+  bindAdhdRange("adhdBottomX", "adhdBottomX", 0.01);
+  bindAdhdRange("adhdBottomY", "adhdBottomY", 0.01);
+  bindAdhdRange("adhdBottomSpeed", "adhdBottomSpeed", 0.01, (v) => Number(v).toFixed(2));
+  bindAdhdRange("adhdBottomVolume", "adhdBottomVolume", 1);
+  const adhdTopFill = $("#adhdTopFill");
+  if (adhdTopFill) adhdTopFill.addEventListener("change", () => { state.opts.adhdTopFill = adhdTopFill.value; });
+  const adhdBottomFill = $("#adhdBottomFill");
+  if (adhdBottomFill) adhdBottomFill.addEventListener("change", () => { state.opts.adhdBottomFill = adhdBottomFill.value; });
+  const adhdBottomStart = $("#adhdBottomStart");
+  if (adhdBottomStart) adhdBottomStart.addEventListener("change", () => {
+    state.opts.adhdBottomStart = Number(adhdBottomStart.value);
+  });
   const bgSelect = $("#bgSelect");
-  if (bgSelect) bgSelect.addEventListener("change", () => { state.opts.bgVideo = bgSelect.value; });
+  if (bgSelect) bgSelect.addEventListener("change", () => {
+    state.opts.adhdBg = bgSelect.value === "random" ? "" : bgSelect.value;
+    state.opts.bgVideo = bgSelect.value;
+  });
+  updateAdhdVisibility();
   const bgUploadBtn = $("#bgUploadBtn");
   if (bgUploadBtn) bgUploadBtn.addEventListener("click", () => $("#adhdBgInput").click());
   const uniqPresets = $("#uniqPresets");
@@ -1159,6 +1259,18 @@ function heroOptions() {
     cut_zoom: state.opts.cutZoom,
     bg_video: state.opts.bgVideo,
     split_ratio: state.opts.splitRatio,
+    adhd_bg: state.opts.adhdBg || "",
+    adhd_top_fill: state.opts.adhdTopFill,
+    adhd_bottom_fill: state.opts.adhdBottomFill,
+    adhd_top_scale: state.opts.adhdTopScale,
+    adhd_top_offset_x: state.opts.adhdTopX,
+    adhd_top_offset_y: state.opts.adhdTopY,
+    adhd_bottom_scale: state.opts.adhdBottomScale,
+    adhd_bottom_offset_x: state.opts.adhdBottomX,
+    adhd_bottom_offset_y: state.opts.adhdBottomY,
+    adhd_bottom_speed: state.opts.adhdBottomSpeed,
+    adhd_bottom_start: state.opts.adhdBottomStart,
+    adhd_bottom_volume: state.opts.adhdBottomVolume,
     platform: state.opts.platform,
     layout: state.opts.layout,
     cookies_browser: state.opts.cookies,
@@ -2820,6 +2932,10 @@ function openEditor(clipId) {
   const fontPos = s.sub_position || "bottom";
   const fontOffset = Number(s.sub_offset || 0);
   const subSpeed = s.sub_speed || "calm";
+  let editorSplit = Number(s.split_ratio || 0.5);
+  let editorAdhdBg = String(s.adhd_bg || "");
+  const adhdSplitMin = Math.min(adhdLimits().min, Math.round(editorSplit * 100));
+  const adhdSplitMax = adhdLimits().max;
 
   $("#modal").innerHTML = `
     <div class="modal-backdrop" data-close></div>
@@ -2908,6 +3024,37 @@ function openEditor(clipId) {
                 <option value="blur" ${s.mode === "blur" || !s.mode ? "selected" : ""}>Размытый фон</option>
                 <option value="crop" ${s.mode === "crop" ? "selected" : ""}>По центру</option>
               </select>
+            </div>
+          </div>
+          <div class="row2 ed-adhd ${s.layout === "adhd" ? "" : "hidden"}" id="edAdhd">
+            <div class="field">
+              <label>Основное видео <b id="edSplitVal">${Math.round(editorSplit * 100)}</b>%</label>
+              <input type="range" id="edSplit" min="${adhdSplitMin}" max="${adhdSplitMax}" step="1" value="${Math.round(editorSplit * 100)}" />
+              <span class="opt-hint">Границу можно тянуть прямо в превью. Рекомендуется 40–85%.</span>
+            </div>
+            <div class="field">
+              <label>Нижний ролик</label>
+              <select id="edAdhdBg"><option value="">Случайный</option></select>
+              <button type="button" class="link-btn" id="edAdhdUploadBtn">загрузить своё видео</button>
+              <input type="file" id="edAdhdInput" class="hidden" accept="video/*" />
+            </div>
+            <div class="field"><label>Верх: заполнение</label>
+              <select id="edTopFill"><option value="cover" ${s.adhd_top_fill !== "contain" ? "selected" : ""}>Заполнить</option><option value="contain" ${s.adhd_top_fill === "contain" ? "selected" : ""}>Вписать целиком</option></select>
+            </div>
+            <div class="field"><label>Низ: заполнение</label>
+              <select id="edBottomFill"><option value="cover" ${s.adhd_bottom_fill !== "contain" ? "selected" : ""}>Заполнить</option><option value="contain" ${s.adhd_bottom_fill === "contain" ? "selected" : ""}>Вписать целиком</option></select>
+            </div>
+            <div class="field"><label>Верх: масштаб <b id="edTopScaleVal">${Math.round(Number(s.adhd_top_scale || 1) * 100)}</b>%</label>
+              <input type="range" id="edTopScale" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_top_scale || 1) * 100)}" />
+            </div>
+            <div class="field"><label>Низ: масштаб <b id="edBottomScaleVal">${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}</b>%</label>
+              <input type="range" id="edBottomScale" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}" />
+            </div>
+            <div class="field"><label>Низ: скорость <b id="edBottomSpeedVal">${Number(s.adhd_bottom_speed || 1).toFixed(2)}</b>×</label>
+              <input type="range" id="edBottomSpeed" min="25" max="400" step="5" value="${Math.round(Number(s.adhd_bottom_speed || 1) * 100)}" />
+            </div>
+            <div class="field"><label>Низ: звук <b id="edBottomVolumeVal">${Math.round(Number(s.adhd_bottom_volume || 0))}</b>%</label>
+              <input type="range" id="edBottomVolume" min="0" max="50" step="1" value="${Math.round(Number(s.adhd_bottom_volume || 0))}" />
             </div>
           </div>
           <div class="field">
@@ -3086,11 +3233,19 @@ function openEditor(clipId) {
       drawFacecam(ctx, fc, 0, 0, w, bandH, false);
       drawCover(ctx, srcVideo, 0, bandH, w, h - bandH);
     } else if (layout === "adhd") {
-      const ratio = Number((s && s.split_ratio) || 0.5);
-      const topH = Math.round(h * ratio);
+      const geometry = window.VCGeometry
+        ? VCGeometry.splitGeometry(w, h, editorSplit)
+        : { top_h: Math.round(h * editorSplit), bottom_h: h - Math.round(h * editorSplit) };
+      const topH = geometry.top_h;
       drawCover(ctx, srcVideo, 0, 0, w, topH);
       ctx.fillStyle = "#101116";
       ctx.fillRect(0, topH, w, h - topH);
+      ctx.fillStyle = "rgba(255,255,255,0.38)";
+      ctx.textAlign = "center";
+      ctx.font = `${Math.max(9, Math.round(22 * k))}px VCMontserrat, sans-serif`;
+      ctx.fillText("нижний ролик", w / 2, topH + (h - topH) / 2);
+      ctx.textAlign = "start";
+      stage.style.cursor = "ns-resize";
       ctx.strokeStyle = "rgba(255,255,255,0.18)";
       ctx.lineWidth = Math.max(1, Math.round(2 * k));
       ctx.beginPath();
@@ -3178,6 +3333,86 @@ function openEditor(clipId) {
       el.addEventListener("input", updateEditorPreview);
       el.addEventListener("change", () => { updateEditorPreview(); drawFrame(); });
     });
+  const edSplit = $("#edSplit");
+  const setEditorSplit = (value) => {
+    const min = edSplit ? Number(edSplit.min) / 100 : 0.25;
+    editorSplit = Math.min(adhdLimits().max / 100, Math.max(min, Math.round(value * 100) / 100));
+    if (edSplit) edSplit.value = String(Math.round(editorSplit * 100));
+    const label = $("#edSplitVal");
+    if (label) label.textContent = String(Math.round(editorSplit * 100));
+  };
+  if (edSplit) edSplit.addEventListener("input", () => {
+    setEditorSplit(Number(edSplit.value) / 100);
+    drawFrame();
+  });
+  let draggingSplit = false;
+  const splitFromEvent = (ev) => {
+    if (!$("#edAdhd") || $("#edAdhd").classList.contains("hidden")) return;
+    const rect = stage.getBoundingClientRect();
+    if (!rect.height) return;
+    setEditorSplit((ev.clientY - rect.top) / rect.height);
+    drawFrame();
+  };
+  stage.addEventListener("pointerdown", (ev) => {
+    if (!$("#edAdhd") || $("#edAdhd").classList.contains("hidden")) return;
+    draggingSplit = true;
+    try { stage.setPointerCapture(ev.pointerId); } catch (_) {}
+    splitFromEvent(ev);
+  });
+  stage.addEventListener("pointermove", (ev) => { if (draggingSplit) splitFromEvent(ev); });
+  const stopSplitDrag = () => { draggingSplit = false; };
+  stage.addEventListener("pointerup", stopSplitDrag);
+  stage.addEventListener("pointercancel", stopSplitDrag);
+  const edLayoutNow = $("#edLayout");
+  if (edLayoutNow) edLayoutNow.addEventListener("change", () => {
+    const block = $("#edAdhd");
+    if (block) block.classList.toggle("hidden", edLayoutNow.value !== "adhd");
+    stage.style.cursor = edLayoutNow.value === "adhd" ? "ns-resize" : "";
+    drawFrame();
+  });
+  ["edTopScale", "edBottomScale", "edBottomSpeed", "edBottomVolume"].forEach((id) => {
+    const el = $("#" + id);
+    if (!el) return;
+    const label = $("#" + id + "Val");
+    el.addEventListener("input", () => {
+      if (label) label.textContent = id === "edBottomSpeed"
+        ? Number(el.value / 100).toFixed(2) : el.value;
+    });
+  });
+  if (stage) {
+    stage.style.cursor = ($("#edLayout") && $("#edLayout").value === "adhd") ? "ns-resize" : "";
+  }
+  api("/api/adhd-bg").then((data) => {
+    const select = $("#edAdhdBg");
+    if (!select) return;
+    const files = (data && data.files) || [];
+    const local = editorAdhdBg.startsWith("local:") ? editorAdhdBg : "";
+    select.innerHTML = `<option value="">Случайный</option>`
+      + (local && project.adhd_bg_url ? `<option value="${local}">Своё видео проекта</option>` : "")
+      + files.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join("");
+    select.value = files.some((f) => f.name === editorAdhdBg) || local ? editorAdhdBg : "";
+    select.addEventListener("change", () => { editorAdhdBg = select.value; });
+  }).catch(() => {});
+  const adhdUpload = $("#edAdhdUploadBtn");
+  if (adhdUpload) adhdUpload.addEventListener("click", () => $("#edAdhdInput").click());
+  const adhdInput = $("#edAdhdInput");
+  if (adhdInput) adhdInput.addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await api(`/api/projects/${project.id}/adhd-bg`, { method: "POST", body: form });
+      editorAdhdBg = `local:${res.name}`;
+      const select = $("#edAdhdBg");
+      if (select) {
+        select.insertAdjacentHTML("afterbegin", `<option value="${editorAdhdBg}">Своё видео проекта</option>`);
+        select.value = editorAdhdBg;
+      }
+      toast("Нижнее видео загружено");
+    } catch (err) { toast(err.message, "err"); }
+  });
   window.addEventListener("resize", () => { drawFrame(); updateEditorPreview(); });
   setTimeout(() => { updateEditorPreview(); seekSource(); }, 60);
 
@@ -3274,6 +3509,14 @@ function openEditor(clipId) {
       mode: $("#edMode").value,
       platform: $("#edPlatform").value,
       layout: $("#edLayout").value,
+      split_ratio: editorSplit,
+      adhd_bg: editorAdhdBg,
+      adhd_top_fill: $("#edTopFill").value,
+      adhd_bottom_fill: $("#edBottomFill").value,
+      adhd_top_scale: Number($("#edTopScale").value) / 100,
+      adhd_bottom_scale: Number($("#edBottomScale").value) / 100,
+      adhd_bottom_speed: Number($("#edBottomSpeed").value) / 100,
+      adhd_bottom_volume: Number($("#edBottomVolume").value),
       subtitles: $("#edSubs").checked,
       uppercase: $("#edUpper").checked,
       show_hook: $("#edShowHook").checked,
@@ -3382,6 +3625,7 @@ $("#adhdBgInput").addEventListener("change", async (e) => {
   try {
     const res = await api("/api/adhd-bg", { method: "POST", body: form });
     state.opts.bgVideo = res.name;
+    state.opts.adhdBg = res.name;
     await loadAdhdBgs();
     const select = $("#bgSelect");
     if (select) select.value = res.name;

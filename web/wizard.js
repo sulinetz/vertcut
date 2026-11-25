@@ -35,6 +35,10 @@
   const defaults = () => ({
     aspect: "9:16", mode: "auto", platform: "universal", layout: "",
     split_ratio: 0.5, bg_video: "random",
+    adhd_bg: "", adhd_top_fill: "cover", adhd_bottom_fill: "cover",
+    adhd_top_scale: 1, adhd_top_offset_x: 0, adhd_top_offset_y: 0,
+    adhd_bottom_scale: 1, adhd_bottom_offset_x: 0, adhd_bottom_offset_y: 0,
+    adhd_bottom_speed: 1, adhd_bottom_start: -1, adhd_bottom_volume: 0,
     subtitles: true, uppercase: true, show_hook: true,
     sub_font: "montserrat", sub_size: 118, sub_position: "bottom",
     sub_offset: 0, sub_speed: "calm", line_gap: 0, accent: "yellow",
@@ -311,6 +315,7 @@
           <div class="wz-blur-bg" id="wzBlurBg"></div>
           <img id="wzFrame" alt="кадр из видео">
           <div class="wz-zones" id="wzZones"></div>
+          <div class="wz-adhd-bottom" id="wzAdhdBottom"></div>
           <div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
           <button type="button" class="wz-reroll" id="wzReroll">Другой кадр</button>
         </div>
@@ -325,6 +330,26 @@
               <option value="band_top">Лицо крупно сверху</option>
               <option value="adhd">Сплит-скрин</option>
             </select>
+          </div>
+          <div class="wz-block ${wizard.opts.layout === "adhd" ? "" : "hidden"}" id="wzAdhdBlock"><b>СДВГ-композиция</b>
+            <label class="mini-field"><span>Основное видео <b id="wzSplitVal">${Math.round(wizard.opts.split_ratio * 100)}</b>%</span>
+              <input type="range" id="wzSplit" min="${Math.min(40, Math.round(wizard.opts.split_ratio * 100))}" max="85" step="1" value="${Math.round(wizard.opts.split_ratio * 100)}"/>
+            </label>
+            <div class="opt-hint">Границу можно тянуть в превью. Рекомендуется 40–85% под основное видео.</div>
+            <div class="row2">
+              <label class="mini-field"><span>Верх</span><select id="wzTopFill">
+                <option value="cover">Заполнить</option><option value="contain" ${wizard.opts.adhd_top_fill === "contain" ? "selected" : ""}>Вписать</option></select></label>
+              <label class="mini-field"><span>Низ</span><select id="wzBottomFill">
+                <option value="cover">Заполнить</option><option value="contain" ${wizard.opts.adhd_bottom_fill === "contain" ? "selected" : ""}>Вписать</option></select></label>
+            </div>
+            <div class="row2">
+              <label class="mini-field"><span>Низ: скорость <b id="wzBottomSpeedVal">${Number(wizard.opts.adhd_bottom_speed).toFixed(2)}</b>×</span><input type="range" id="wzBottomSpeed" min="25" max="400" step="5" value="${Math.round(wizard.opts.adhd_bottom_speed * 100)}"/></label>
+              <label class="mini-field"><span>Низ: звук <b id="wzBottomVolumeVal">${Math.round(wizard.opts.adhd_bottom_volume)}</b>%</span><input type="range" id="wzBottomVolume" min="0" max="50" step="1" value="${Math.round(wizard.opts.adhd_bottom_volume)}"/></label>
+            </div>
+            <label class="mini-field"><span>Нижний ролик из библиотеки</span>
+              <select id="wzAdhdBg"><option value="">Случайный</option></select></label>
+            <div class="wz-actions"><button class="link-btn" id="wzAdhdUpload">загрузить своё нижнее видео</button>
+            <input type="file" id="wzAdhdInput" class="hidden" accept="video/*"/></div>
           </div>
           <div class="wz-block"><b>Индивидуализация</b>
             <label class="toggle"><input type="checkbox" id="wzHflip" ${wizard.opts.hflip ? "checked" : ""}/><span class="track"></span><span>Зеркало</span></label>
@@ -345,7 +370,90 @@
 
   function bindFrame() {
     $("#wzLayout").value = wizard.opts.layout || "";
-    $("#wzLayout").addEventListener("change", (e) => { wizard.opts.layout = e.target.value; });
+    const updateAdhdBlock = () => {
+      const block = $("#wzAdhdBlock");
+      if (block) block.classList.toggle("hidden", wizard.opts.layout !== "adhd");
+    };
+    updateAdhdBlock();
+    $("#wzLayout").addEventListener("change", (e) => {
+      wizard.opts.layout = e.target.value;
+      updateAdhdBlock();
+      applyPreviewLayout(wizard.lastBox);
+    });
+    const wzSplit = $("#wzSplit");
+    const setSplit = (value) => {
+      const min = wzSplit ? Number(wzSplit.min) / 100 : 0.25;
+      wizard.opts.split_ratio = Math.min(0.85, Math.max(min, Math.round(value * 100) / 100));
+      if (wzSplit) wzSplit.value = String(Math.round(wizard.opts.split_ratio * 100));
+      const label = $("#wzSplitVal");
+      if (label) label.textContent = String(Math.round(wizard.opts.split_ratio * 100));
+    };
+    if (wzSplit) wzSplit.addEventListener("input", () => { setSplit(Number(wzSplit.value) / 100); applyPreviewLayout(wizard.lastBox); });
+    const wzPreview = $("#wzPreview");
+    let dragging = false;
+    const dragSplit = (ev) => {
+      if (wizard.opts.layout !== "adhd" || !wzPreview) return;
+      const rect = wzPreview.getBoundingClientRect();
+      if (!rect.height) return;
+      setSplit((ev.clientY - rect.top) / rect.height);
+      applyPreviewLayout(wizard.lastBox);
+    };
+    if (wzPreview) {
+      wzPreview.addEventListener("pointerdown", (ev) => {
+        if (wizard.opts.layout !== "adhd") return;
+        dragging = true;
+        try { wzPreview.setPointerCapture(ev.pointerId); } catch (_) {}
+        dragSplit(ev);
+      });
+      wzPreview.addEventListener("pointermove", (ev) => { if (dragging) dragSplit(ev); });
+      ["pointerup", "pointercancel"].forEach((name) => wzPreview.addEventListener(name, () => { dragging = false; }));
+    }
+    const topFill = $("#wzTopFill");
+    if (topFill) topFill.addEventListener("change", () => { wizard.opts.adhd_top_fill = topFill.value; });
+    const bottomFill = $("#wzBottomFill");
+    if (bottomFill) bottomFill.addEventListener("change", () => { wizard.opts.adhd_bottom_fill = bottomFill.value; });
+    const bottomSpeed = $("#wzBottomSpeed");
+    if (bottomSpeed) bottomSpeed.addEventListener("input", () => {
+      wizard.opts.adhd_bottom_speed = Number(bottomSpeed.value) / 100;
+      const label = $("#wzBottomSpeedVal");
+      if (label) label.textContent = Number(wizard.opts.adhd_bottom_speed).toFixed(2);
+    });
+    const bottomVolume = $("#wzBottomVolume");
+    if (bottomVolume) bottomVolume.addEventListener("input", () => {
+      wizard.opts.adhd_bottom_volume = Number(bottomVolume.value);
+      const label = $("#wzBottomVolumeVal");
+      if (label) label.textContent = bottomVolume.value;
+    });
+    api("/api/adhd-bg").then((data) => {
+      const select = $("#wzAdhdBg");
+      if (!select) return;
+      const files = (data && data.files) || [];
+      const local = String(wizard.opts.adhd_bg || "").startsWith("local:");
+      select.innerHTML = `<option value="">Случайный</option>`
+        + (local ? `<option value="${wizard.opts.adhd_bg}">Своё видео проекта</option>` : "")
+        + files.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join("");
+      select.value = files.some((f) => f.name === wizard.opts.adhd_bg) || local ? wizard.opts.adhd_bg : "";
+      select.addEventListener("change", () => {
+        wizard.opts.adhd_bg = select.value;
+        applyPreviewLayout(wizard.lastBox);
+      });
+    }).catch(() => {});
+    const adhdUpload = $("#wzAdhdUpload");
+    if (adhdUpload) adhdUpload.addEventListener("click", () => $("#wzAdhdInput").click());
+    const adhdInput = $("#wzAdhdInput");
+    if (adhdInput) adhdInput.addEventListener("change", async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      ev.target.value = "";
+      if (!file || !wizard.pid) return;
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const res = await api(`/api/projects/${wizard.pid}/adhd-bg`, { method: "POST", body: form });
+        wizard.opts.adhd_bg = `local:${res.name}`;
+        applyPreviewLayout(wizard.lastBox);
+        toast("Нижнее видео загружено");
+      } catch (err) { toast(err.message, "err"); }
+    });
     $("#wzLook").value = wizard.opts.look || "none";
     $("#wzLook").addEventListener("change", (e) => { wizard.opts.look = e.target.value; applyFrameStyle(); });
     $("#wzHflip").addEventListener("change", (e) => { wizard.opts.hflip = e.target.checked; applyFrameStyle(); });
@@ -420,6 +528,26 @@
     }
     if (blur) blur.style.display = "none";
     preview.classList.remove("is-blur");
+    const bottomBox = $("#wzAdhdBottom");
+    if (bottomBox) bottomBox.style.display = wizard.opts.layout === "adhd" ? "block" : "none";
+    if (wizard.opts.layout === "adhd") {
+      const H = Math.max(1, preview.clientHeight);
+      const g = window.VCGeometry
+        ? VCGeometry.splitGeometry(W, H, wizard.opts.split_ratio)
+        : { top_h: Math.round(H * wizard.opts.split_ratio), bottom_h: H - Math.round(H * wizard.opts.split_ratio) };
+      img.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${g.top_h}px;object-fit:cover;`;
+      if (bottomBox) {
+        bottomBox.style.top = `${g.top_h}px`;
+        bottomBox.style.height = `${g.bottom_h}px`;
+        const chosen = String(wizard.opts.adhd_bg || "");
+        bottomBox.style.backgroundImage = !chosen ? "" : (chosen.startsWith("local:")
+          ? `url("/api/projects/${wizard.pid}/adhd-bg/file")`
+          : `url("/api/adhd-bg/file/${encodeURIComponent(chosen)}")`);
+      }
+      preview.style.cursor = "ns-resize";
+      return;
+    }
+    preview.style.cursor = "";
     if (!box) {
       img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;";
       return;
@@ -441,6 +569,7 @@
           <div class="wz-blur-bg" id="wzBlurBg"></div>
           <img id="wzFrame" alt="кадр">
           <div class="wz-zones" id="wzZones"></div>
+          <div class="wz-adhd-bottom" id="wzAdhdBottom"></div>
           <div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
           <button type="button" class="wz-reroll" id="wzReroll">Другой кадр</button></div>
         <div class="wz-controls">

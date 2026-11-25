@@ -16,7 +16,8 @@ from starlette.concurrency import run_in_threadpool
 
 from . import app_settings, custom_fonts, db, jobs, pipeline, semantic, transcribe
 from ._version import __version__
-from .config import ASSETS_DIR, DATA_DIR, PROJECTS_DIR, WEB_DIR, ffmpeg
+from .config import (ADHD_SPLIT_BACKEND_MIN, ADHD_SPLIT_UI_MAX, ADHD_SPLIT_UI_MIN,
+                     ASSETS_DIR, DATA_DIR, PROJECTS_DIR, WEB_DIR, ffmpeg)
 
 
 class ProjectIn(BaseModel):
@@ -109,6 +110,18 @@ class ClipEdit(BaseModel):
     cut_zoom: Optional[bool] = None
     bg_video: Optional[str] = None
     split_ratio: Optional[float] = None
+    adhd_bg: Optional[str] = None
+    adhd_top_fill: Optional[str] = None
+    adhd_bottom_fill: Optional[str] = None
+    adhd_top_scale: Optional[float] = None
+    adhd_top_offset_x: Optional[float] = None
+    adhd_top_offset_y: Optional[float] = None
+    adhd_bottom_scale: Optional[float] = None
+    adhd_bottom_offset_x: Optional[float] = None
+    adhd_bottom_offset_y: Optional[float] = None
+    adhd_bottom_speed: Optional[float] = None
+    adhd_bottom_start: Optional[float] = None
+    adhd_bottom_volume: Optional[float] = None
     audio_track: Optional[int] = None
     external_audio: Optional[bool] = None
     external_audio_track: Optional[int] = None
@@ -235,7 +248,7 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 raise HTTPException(400, "Некорректное значение") from None
     for key, low, high in (("speed", 1.0, 1.1), ("pitch", 0.95, 1.05),
-                           ("tilt", 0.0, 3.0), ("split_ratio", 0.3, 0.7)):
+                           ("tilt", 0.0, 3.0), ("split_ratio", 0.25, 0.85)):
         if key in data:
             try:
                 data[key] = max(low, min(high, round(float(data[key]), 3)))
@@ -261,6 +274,32 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
         if name != "random" and ("/" in name or "\\" in name or ".." in name):
             raise HTTPException(400, "Некорректное имя фона")
         data["bg_video"] = name or "random"
+    if "adhd_bg" in data:
+        name = str(data["adhd_bg"] or "").strip()
+        if name and ("/" in name or "\\" in name or ".." in name):
+            raise HTTPException(400, "Некорректное имя фона")
+        data["adhd_bg"] = name
+    for key in ("adhd_top_fill", "adhd_bottom_fill"):
+        if key in data:
+            value = str(data[key] or "cover").strip().lower()
+            if value not in ("cover", "contain"):
+                raise HTTPException(400, "Неизвестный режим заполнения области")
+            data[key] = value
+    for key, low, high, default in (
+            ("adhd_top_scale", 0.5, 2.0, 1.0),
+            ("adhd_bottom_scale", 0.5, 2.0, 1.0),
+            ("adhd_top_offset_x", -0.5, 0.5, 0.0),
+            ("adhd_top_offset_y", -0.5, 0.5, 0.0),
+            ("adhd_bottom_offset_x", -0.5, 0.5, 0.0),
+            ("adhd_bottom_offset_y", -0.5, 0.5, 0.0),
+            ("adhd_bottom_speed", 0.25, 4.0, 1.0),
+            ("adhd_bottom_start", -1.0, 7200.0, -1.0),
+            ("adhd_bottom_volume", 0.0, 50.0, 0.0)):
+        if key in data:
+            try:
+                data[key] = round(max(low, min(high, float(data[key]))), 3)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Некорректное значение настроек СДВГ") from None
     if "line_gap" in data:
         try:
             data["line_gap"] = max(0, min(120, int(data["line_gap"])))
@@ -302,6 +341,9 @@ def health() -> Dict[str, Any]:
         "device": transcribe.device_info(),
         "projects": db.count_projects(),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
+        "adhd_split": {"min": round(ADHD_SPLIT_UI_MIN * 100),
+                       "max": round(ADHD_SPLIT_UI_MAX * 100),
+                       "backend_min": round(ADHD_SPLIT_BACKEND_MIN * 100)},
     }
 
 
@@ -680,6 +722,12 @@ def project_detail(pid: str) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001
             tracks = []
     project["audio_tracks"] = tracks
+    adhd_choice = str((project.get("options") or {}).get("adhd_bg") or "")
+    if adhd_choice.startswith("local:"):
+        project["adhd_bg_url"] = f"/api/projects/{pid}/adhd-bg/file"
+    else:
+        project["adhd_bg_url"] = ""
+    project["adhd_bg"] = adhd_choice
     sub_tracks = (project.get("meta") or {}).get("subtitle_tracks") or []
     if source and not sub_tracks and Path(source).exists():
         try:
@@ -885,6 +933,30 @@ def clip_srt(cid: str) -> Response:
 ADHD_BG_DIR = ASSETS_DIR / "adhd_bg"
 ADHD_BG_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
 ADHD_BG_MAX_BYTES = 300 * 1024 * 1024
+_ADHD_BG_CACHE: Dict[str, Any] = {}
+
+
+def _adhd_bg_info(path: Path) -> Dict[str, Any]:
+    """Длительность и размеры фона; кэш по mtime/size, чтобы не звать ffmpeg каждый раз."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    key = (int(stat.st_mtime), stat.st_size)
+    cached = _ADHD_BG_CACHE.get(str(path))
+    if cached and cached.get("key") == key:
+        return dict(cached["info"])
+    from . import utils
+
+    try:
+        probed = utils.probe(path)
+    except Exception:  # noqa: BLE001
+        return {}
+    info = {"duration": round(float(probed.get("duration") or 0), 2),
+            "width": int(probed.get("width") or 0),
+            "height": int(probed.get("height") or 0)}
+    _ADHD_BG_CACHE[str(path)] = {"key": key, "info": info}
+    return dict(info)
 
 
 def _adhd_bg_files() -> List[Dict[str, Any]]:
@@ -893,13 +965,36 @@ def _adhd_bg_files() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for path in sorted(ADHD_BG_DIR.iterdir()):
         if path.is_file() and path.suffix.lower() in ADHD_BG_SUFFIXES:
-            out.append({"name": path.name, "size": path.stat().st_size})
+            out.append({"name": path.name, "size": path.stat().st_size,
+                        **_adhd_bg_info(path)})
     return out
 
 
 @app.get("/api/adhd-bg")
 def list_adhd_bg() -> Dict[str, Any]:
     return {"files": _adhd_bg_files()}
+
+
+@app.get("/api/adhd-bg/file/{name}")
+def adhd_bg_file(name: str) -> FileResponse:
+    safe = Path(name).name
+    if safe != name or not safe:
+        raise HTTPException(400, "Некорректное имя фона")
+    target = ADHD_BG_DIR / safe
+    if target.suffix.lower() not in ADHD_BG_SUFFIXES or not target.exists():
+        raise HTTPException(404, "Фон не найден")
+    return FileResponse(target, media_type="video/mp4")
+
+
+@app.get("/api/projects/{pid}/adhd-bg/file")
+def project_adhd_bg_file(pid: str) -> FileResponse:
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    for path in (PROJECTS_DIR / pid).glob("adhd_bottom.*"):
+        if path.is_file() and path.suffix.lower() in ADHD_BG_SUFFIXES:
+            return FileResponse(path, media_type="video/mp4")
+    raise HTTPException(404, "Нижнее видео не загружено")
 
 
 @app.post("/api/adhd-bg")
@@ -919,6 +1014,45 @@ async def upload_adhd_bg(file: UploadFile = File(...)) -> Dict[str, Any]:
         counter += 1
     await _stream_upload(file, target, ADHD_BG_MAX_BYTES, "Файл больше 300 МБ")
     return {"ok": True, "name": target.name, "size": target.stat().st_size}
+
+
+@app.post("/api/projects/{pid}/adhd-bg")
+async def upload_project_adhd_bg(pid: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Своё нижнее видео для проекта: лежит рядом с проектом, не в общей библиотеке."""
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ADHD_BG_SUFFIXES:
+        raise HTTPException(400, "Нужен видеофайл: mp4, webm, mov, mkv")
+    workdir = PROJECTS_DIR / pid
+    workdir.mkdir(parents=True, exist_ok=True)
+    for old in workdir.glob("adhd_bottom.*"):
+        old.unlink(missing_ok=True)
+    target = workdir / f"adhd_bottom{suffix}"
+    await _stream_upload(file, target, ADHD_BG_MAX_BYTES, "Файл больше 300 МБ")
+    options = pipeline.normalize_options({
+        **(project.get("options") or {}),
+        "layout": "adhd",
+        "adhd_bg": f"local:{target.name}",
+    })
+    db.update_project(pid, options=options)
+    return {"ok": True, "name": target.name, "size": target.stat().st_size,
+            **_adhd_bg_info(target)}
+
+
+@app.delete("/api/projects/{pid}/adhd-bg")
+def delete_project_adhd_bg(pid: str) -> Dict[str, Any]:
+    project = db.get_project(pid)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    workdir = PROJECTS_DIR / pid
+    for old in workdir.glob("adhd_bottom.*"):
+        old.unlink(missing_ok=True)
+    options = pipeline.normalize_options({
+        **(project.get("options") or {}), "adhd_bg": ""})
+    db.update_project(pid, options=options)
+    return {"ok": True}
 
 
 @app.delete("/api/adhd-bg/{name}")

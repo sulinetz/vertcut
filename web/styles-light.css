@@ -2260,3 +2260,4 @@ input[type="range"]::-webkit-slider-thumb {
 .clip-why { margin: 0 0 2px; font-size: 11px; line-height: 1.4; color: var(--muted-2); }
 .clip-warn { font-size: 10px; line-height: 1.35; color: #ffd166; }
 .clip-parts span.type-tag { color: var(--muted); }
+.wz-adhd-bottom { position: absolute; left: 0; width: 100%; background: #101116 center/cover no-repeat; display: none; }

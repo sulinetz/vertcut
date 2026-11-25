@@ -12,7 +12,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .config import ffmpeg, ffmpeg_capabilities
+from .config import (ADHD_SPLIT_BACKEND_MAX, ADHD_SPLIT_BACKEND_MIN,
+                     ADHD_SPLIT_UI_MAX, ADHD_SPLIT_UI_MIN,
+                     ffmpeg, ffmpeg_capabilities)
 from . import custom_fonts
 from .errors import Cancelled
 from .reframe import crop_expressions
@@ -24,6 +26,32 @@ ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5
 # Пресеты для стримов: игра на весь кадр плюс врезка с лицом.
 STREAM_LAYOUTS = ("band", "band_top")
 BAND_H = 640
+ADHD_FILLS = ("cover", "contain")
+ADHD_SPLIT_MIN = ADHD_SPLIT_UI_MIN
+ADHD_SPLIT_MAX = ADHD_SPLIT_BACKEND_MAX
+
+
+def split_geometry(width: int, height: int, ratio: float = 0.5) -> Dict[str, Any]:
+    """Геометрия split-screen в пикселях кадра. Чистая функция без ffmpeg.
+
+    `ratio` — доля верхней области (основное видео), 0.25–0.85. Высота
+    округляется до чётного, как в фильтре vstack.
+    """
+    w = max(2, int(width))
+    h = max(2, int(height))
+    value = max(ADHD_SPLIT_BACKEND_MIN, min(ADHD_SPLIT_MAX, float(ratio or 0.5)))
+    top_h = max(2, int(math.floor(h * value / 2.0 + 0.5)) * 2)
+    top_h = min(top_h, h - 2)
+    bottom_h = h - top_h
+    return {
+        "width": w,
+        "height": h,
+        "ratio": round(value, 4),
+        "top_h": top_h,
+        "bottom_h": bottom_h,
+        "top": {"x": 0, "y": 0, "w": w, "h": top_h},
+        "bottom": {"x": 0, "y": top_h, "w": w, "h": bottom_h},
+    }
 
 
 def _esc(path: Path) -> str:
@@ -368,14 +396,38 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 split_ratio: float = 0.5, audio_track: Optional[int] = None,
                 external_audio: Optional[Path] = None, audio_offset: float = 0.0,
                 external_audio_track: Optional[int] = None,
-                is_cancelled: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
+                is_cancelled: Optional[Callable[[], bool]] = None,
+                adhd_top_fill: str = "cover",
+                adhd_bottom_fill: str = "cover",
+                adhd_top_scale: float = 1.0,
+                adhd_top_offset_x: float = 0.0,
+                adhd_top_offset_y: float = 0.0,
+                adhd_bottom_scale: float = 1.0,
+                adhd_bottom_offset_x: float = 0.0,
+                adhd_bottom_offset_y: float = 0.0,
+                adhd_bottom_speed: float = 1.0,
+                adhd_bottom_volume: float = 0.0) -> Dict[str, Any]:
     if is_cancelled is not None and is_cancelled():
         raise Cancelled()
     speed = max(1.0, min(1.25, float(speed or 1.0)))
     pitch = max(0.85, min(1.15, float(pitch or 1.0)))
     tilt = max(0.0, min(5.0, float(tilt or 0.0)))
-    ratio = max(0.25, min(0.75, float(split_ratio or 0.5)))
+    ratio = max(ADHD_SPLIT_BACKEND_MIN, min(ADHD_SPLIT_MAX, float(split_ratio or 0.5)))
     is_adhd = layout == "adhd"
+    top_fill = str(adhd_top_fill or "cover").strip().lower()
+    if top_fill not in ADHD_FILLS:
+        top_fill = "cover"
+    bottom_fill = str(adhd_bottom_fill or "cover").strip().lower()
+    if bottom_fill not in ADHD_FILLS:
+        bottom_fill = "cover"
+    top_scale = max(0.5, min(2.0, float(adhd_top_scale or 1.0)))
+    bottom_scale = max(0.5, min(2.0, float(adhd_bottom_scale or 1.0)))
+    top_dx = max(-0.5, min(0.5, float(adhd_top_offset_x or 0.0)))
+    top_dy = max(-0.5, min(0.5, float(adhd_top_offset_y or 0.0)))
+    bottom_dx = max(-0.5, min(0.5, float(adhd_bottom_offset_x or 0.0)))
+    bottom_dy = max(-0.5, min(0.5, float(adhd_bottom_offset_y or 0.0)))
+    bottom_speed = max(0.25, min(4.0, float(adhd_bottom_speed or 1.0)))
+    bottom_level = max(0.0, min(0.5, float(adhd_bottom_volume or 0.0)))
 
     w, h = ASPECTS.get(aspect, ASPECTS["9:16"])
     if is_adhd or (layout in STREAM_LAYOUTS and facecam):
@@ -408,7 +460,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     else:
         seq_src = "[0:v]"
 
-    top_h = max(2, int(round(h * ratio / 2.0)) * 2)
+    top_h = split_geometry(w, h, ratio)["top_h"]
     bot_h = h - top_h
 
     # Входы: 0 — источник, затем фон ADHD, музыка и внешняя дорожка (дубляж).
@@ -445,26 +497,89 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         dub_idx = next_idx
         next_idx += 1
     use_dub = dub_idx is not None
+    bg_audio_ok = False
+    if is_adhd and bg_idx is not None and bg_path is not None and bottom_level > 0:
+        try:
+            bg_audio_ok = bool(probe(bg_path).get("has_audio"))
+        except Exception:  # noqa: BLE001
+            bg_audio_ok = False
 
     if is_adhd:
         top_sharpen = info["width"] < w * 0.75
-        if mode == "auto" and crop_path:
-            vg.append(_auto_chain(w, top_h, crop_path, top_sharpen, src=seq_src, out="[top]"))
-        elif mode == "blur":
-            vg.append(_bg_chain(w, top_h, focus_x, top_sharpen, src=seq_src, out="[top]"))
-        else:
-            vg.append(_crop_chain(w, top_h, focus_x, sharpen=top_sharpen, src=seq_src, out="[top]"))
-        if bg_idx is not None:
+        top_label = "[top]"
+        if top_fill == "contain":
+            fit_w = max(2, int(round(w * top_scale / 2.0)) * 2)
+            fit_h = max(2, int(round(top_h * top_scale / 2.0)) * 2)
+            vg.append(f"{seq_src}scale={fit_w}:{fit_h}:force_original_aspect_ratio=decrease,"
+                      f"setsar=1[topfit]")
+            vg.append(f"color=c=black:s={w}x{top_h}:r=30:d={out_dur + 1:.3f}[topbg]")
             vg.append(
-                f"[{bg_idx}:v]scale={w}:{bot_h}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{bot_h},setsar=1,format=yuv420p[bottom]"
+                f"[topbg][topfit]overlay=x=(W-w)/2+{top_dx * w:.1f}:"
+                f"y=(H-h)/2+{top_dy * top_h:.1f}:shortest=1,format=yuv420p[top]"
             )
+        else:
+            if mode == "auto" and crop_path:
+                vg.append(_auto_chain(w, top_h, crop_path, top_sharpen, src=seq_src, out="[top]"))
+            elif mode == "blur":
+                vg.append(_bg_chain(w, top_h, focus_x, top_sharpen, src=seq_src, out="[top]"))
+            else:
+                vg.append(_crop_chain(w, top_h, focus_x, sharpen=top_sharpen, src=seq_src, out="[top]"))
+            if (abs(top_scale - 1.0) > 1e-4 or abs(top_dx) > 1e-4
+                    or abs(top_dy) > 1e-4):
+                scaled_w = w * top_scale
+                scaled_h = top_h * top_scale
+                margin_x = max(0.0, (scaled_w - w) / 2.0)
+                margin_y = max(0.0, (scaled_h - top_h) / 2.0)
+                shift_x = margin_x + max(-margin_x, min(margin_x, top_dx * w))
+                shift_y = margin_y + max(-margin_y, min(margin_y, top_dy * top_h))
+                vg.append(
+                    f"[top]scale=iw*{top_scale:.4f}:ih*{top_scale:.4f},"
+                    f"crop={w}:{top_h}:{shift_x:.1f}:{shift_y:.1f},setsar=1[top2]"
+                )
+                top_label = "[top2]"
+
+        if bg_idx is not None:
+            if bottom_fill == "contain":
+                fit_w = max(2, int(round(w * bottom_scale / 2.0)) * 2)
+                fit_h = max(2, int(round(bot_h * bottom_scale / 2.0)) * 2)
+                vg.append(f"[{bg_idx}:v]scale={fit_w}:{fit_h}:"
+                          f"force_original_aspect_ratio=decrease,setsar=1[botfit]")
+                vg.append(f"color=c=black:s={w}x{bot_h}:r=30:d={out_dur + 1:.3f}[botbg]")
+                vg.append(
+                    f"[botbg][botfit]overlay=x=(W-w)/2+{bottom_dx * w:.1f}:"
+                    f"y=(H-h)/2+{bottom_dy * bot_h:.1f}:shortest=1,"
+                    f"format=yuv420p[bottom]"
+                )
+            elif (abs(bottom_scale - 1.0) <= 1e-4 and abs(bottom_dx) <= 1e-4
+                    and abs(bottom_dy) <= 1e-4):
+                # Прежний график: при нейтральных настройках команда не меняется.
+                vg.append(
+                    f"[{bg_idx}:v]scale={w}:{bot_h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{bot_h},setsar=1,format=yuv420p[bottom]"
+                )
+            else:
+                fit_w = max(2, int(round(w * bottom_scale)))
+                fit_h = max(2, int(round(bot_h * bottom_scale)))
+                margin_x = max(0.0, (fit_w - w) / 2.0)
+                margin_y = max(0.0, (fit_h - bot_h) / 2.0)
+                shift_x = margin_x + max(-margin_x, min(margin_x, bottom_dx * w))
+                shift_y = margin_y + max(-margin_y, min(margin_y, bottom_dy * bot_h))
+                vg.append(
+                    f"[{bg_idx}:v]scale={fit_w}:{fit_h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{bot_h}:{shift_x:.1f}:{shift_y:.1f},"
+                    f"setsar=1,format=yuv420p[bottom]"
+                )
         else:
             vg.append(
                 f"color=c=0x101116:s={w}x{bot_h}:r=30:d={out_dur + 1:.3f},"
                 f"format=yuv420p[bottom]"
             )
-        vg.append("[top][bottom]vstack=inputs=2[base]")
+
+        bottom_label = "[bottom]"
+        if abs(bottom_speed - 1.0) > 1e-4:
+            vg.append(f"[bottom]setpts=PTS/{bottom_speed:.6f}[bottom2]")
+            bottom_label = "[bottom2]"
+        vg.append(f"{top_label}{bottom_label}vstack=inputs=2[base]")
     elif layout in STREAM_LAYOUTS and facecam:
         vg.append(_stream_chain(w, h, crop_path, facecam, layout, platform,
                                 src=seq_src, out="[base]"))
@@ -617,6 +732,18 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         afilters.append(f"afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out:.3f}:d=0.05")
         audio.append("[seq_a]" + ",".join(afilters) + "[a0]")
 
+        base_audio = "[a0]"
+        if bg_audio_ok and bg_idx is not None:
+            bottom_chain = (f"[{bg_idx}:a]volume={bottom_level:.3f}"
+                            + ("," + ",".join(_atempo_chain(bottom_speed))
+                               if abs(bottom_speed - 1.0) > 1e-4 else "")
+                            + ",afade=t=in:st=0:d=0.3[bga]")
+            audio.append(bottom_chain)
+            audio.append(base_audio + "[bga]"
+                         + _amix_filter(bool(ffmpeg_capabilities().get("amix_normalize", True)))
+                         + "[a0b]")
+            base_audio = "[a0b]"
+
         if music_idx is not None:
             level = max(0.0, min(0.5, float(music_volume or 0.0)))
             end_fade = max(0.0, duration - 1.6)
@@ -624,21 +751,43 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 f"[{music_idx}:a]volume={level:.3f},afade=t=in:st=0:d=1.2,"
                 f"afade=t=out:st={end_fade:.3f}:d=1.6[m]"
             )
-            audio.append("[a0][m]"
+            audio.append(base_audio + "[m]"
                          + _amix_filter(bool(ffmpeg_capabilities().get("amix_normalize", True)))
                          + "[aout]")
             audio_label = "[aout]"
         else:
-            audio_label = "[a0]"
-    elif music_idx is not None:
-        # Немое видео: музыка становится единственной дорожкой, а не теряется.
-        level = max(0.0, min(0.5, float(music_volume or 0.0)))
-        end_fade = max(0.0, duration - 1.6)
-        audio.append(
-            f"[{music_idx}:a]volume={level:.3f},afade=t=in:st=0:d=1.2,"
-            f"afade=t=out:st={end_fade:.3f}:d=1.6[aout]"
-        )
-        audio_label = "[aout]"
+            audio_label = base_audio
+    elif music_idx is not None or bg_audio_ok:
+        # Немое видео: музыка и/или звук нижнего ролика становятся дорожкой.
+        mix_base = ""
+        if bg_audio_ok and bg_idx is not None:
+            bottom_chain = (f"[{bg_idx}:a]volume={bottom_level:.3f}"
+                            + ("," + ",".join(_atempo_chain(bottom_speed))
+                               if abs(bottom_speed - 1.0) > 1e-4 else "")
+                            + ",afade=t=in:st=0:d=0.3[a0]")
+            audio.append(bottom_chain)
+            mix_base = "[a0]"
+        if music_idx is not None:
+            level = max(0.0, min(0.5, float(music_volume or 0.0)))
+            end_fade = max(0.0, duration - 1.6)
+            if not mix_base:
+                # Прежний график для немого видео с музыкой не меняем.
+                audio.append(
+                    f"[{music_idx}:a]volume={level:.3f},afade=t=in:st=0:d=1.2,"
+                    f"afade=t=out:st={end_fade:.3f}:d=1.6[aout]"
+                )
+                audio_label = "[aout]"
+            else:
+                audio.append(
+                    f"[{music_idx}:a]volume={level:.3f},afade=t=in:st=0:d=1.2,"
+                    f"afade=t=out:st={end_fade:.3f}:d=1.6[m]"
+                )
+                audio.append(mix_base + "[m]"
+                             + _amix_filter(bool(ffmpeg_capabilities().get("amix_normalize", True)))
+                             + "[aout]")
+                audio_label = "[aout]"
+        else:
+            audio_label = mix_base
 
     filter_complex = ";".join(vg + audio)
     cmd += ["-filter_complex", filter_complex, "-map", "[v]"]

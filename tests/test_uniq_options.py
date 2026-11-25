@@ -54,7 +54,8 @@ class OptionsTest(unittest.TestCase):
         self.assertEqual(pipeline.normalize_options({"speed": 0.5})["speed"], 1.0)
         self.assertEqual(pipeline.normalize_options({"pitch": 2.0})["pitch"], 1.05)
         self.assertEqual(pipeline.normalize_options({"tilt": 90})["tilt"], 3.0)
-        self.assertEqual(pipeline.normalize_options({"split_ratio": 0.9})["split_ratio"], 0.7)
+        self.assertEqual(pipeline.normalize_options({"split_ratio": 0.9})["split_ratio"], 0.85)
+        self.assertEqual(pipeline.normalize_options({"split_ratio": 0.1})["split_ratio"], 0.25)
 
     def test_bad_bg_name_falls_back(self):
         self.assertEqual(pipeline.normalize_options({"bg_video": "../evil.mp4"})["bg_video"], "random")

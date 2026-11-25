@@ -1835,6 +1835,7 @@ input[type="range"]::-webkit-slider-thumb {
 .wz-zone { position: absolute; left: 0; right: 0; background: rgba(59, 130, 246, .28); border: 1px dashed rgba(147, 197, 253, .55); }
 .wz-zone.top { top: 0; border-top: 0; }
 .wz-zone.bottom { bottom: 0; border-bottom: 0; }
+.wz-adhd-bottom { position: absolute; left: 0; width: 100%; background: #101116 center/cover no-repeat; display: none; }
 
 /* ---------- Общие анимации интерфейса ---------- */
 :root {

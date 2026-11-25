@@ -71,6 +71,14 @@ WHISPER_CUDA_COMPUTE = os.environ.get(
 
 MAX_WORKERS = int(os.environ.get("VERTCUT_WORKERS", "1"))
 
+# СДВГ-композиция: доля верхней области (основное видео).
+# Интерфейс предлагает 40–85%, бэкенд принимает 25% — чтобы старые клипы
+# с split_ratio 0.3–0.4 рендерились как раньше.
+ADHD_SPLIT_UI_MIN = 0.40
+ADHD_SPLIT_UI_MAX = 0.85
+ADHD_SPLIT_BACKEND_MIN = 0.25
+ADHD_SPLIT_BACKEND_MAX = 0.85
+
 _ffmpeg_cache: Optional[str] = None
 _ffmpeg_dir_cache: Optional[Path] = None
 
