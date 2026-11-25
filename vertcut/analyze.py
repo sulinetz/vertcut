@@ -9,7 +9,7 @@ import difflib
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import utils
 
@@ -89,6 +89,63 @@ SPONSOR_MARKERS = (
 INTRO_GUARD = 20.0
 OUTRO_GUARD = 20.0
 
+# Настроение — одно на клип. Ключи те же, что у нейросетевого пикера:
+# `semantic.MOODS = analyze.MOODS`, чтобы фильтр в интерфейсе работал одинаково
+# для обоих способов отбора.
+MOODS: Dict[str, str] = {
+    "funny": "весёлое",
+    "sad": "грустное",
+    "drama": "драма",
+    "shock": "шок",
+    "insight": "мысль",
+    "wholesome": "тёплое",
+    "intense": "жёсткое",
+}
+
+# Тип контента отвечает на вопрос «что это за фрагмент», настроение — «какая
+# у него эмоция». Меток типа может быть несколько, настроение одно.
+CONTENT_TYPES: Dict[str, str] = {
+    "story": "история",
+    "humor": "юмор",
+    "conflict": "конфликт",
+    "insight": "инсайт",
+    "education": "обучение",
+    "reaction": "реакция",
+    "motivation": "мотивация",
+    "provocation": "провокация",
+    "emotion": "эмоциональный момент",
+    "fact": "интересный факт",
+}
+
+# Лексиконы намеренно короткие: это запасной локальный отбор, а не замена
+# нейросети. Слова уже в нижнем регистре и без «ё» (см. _norm).
+_MOOD_LEXICONS: Dict[str, Tuple[str, ...]] = {
+    "funny": ("смешн", "шутк", "прикол", "смех", "ржал", "анекдот", "funny", "joke", "laugh"),
+    "sad": ("груст", "печаль", "плакал", "слез", "потер", "утрат", "sad", "cry", "lost"),
+    "drama": ("конфликт", "ссор", "скандал", "предал", "обман", "драм", "drama", "conflict", "betray"),
+    "shock": ("шок", "невероятн", "безумн", "сенсац", "внезапно", "shock", "insane", "crazy", "unbelievable"),
+    "insight": ("понял", "осознал", "вывод", "смысл", "оказывается", "инсайт", "insight", "realized", "lesson"),
+    "wholesome": ("добро", "тепл", "помог", "поддержк", "забот", "любов", "wholesome", "kind", "helped"),
+    "intense": ("жестк", "жесток", "опасн", "риск", "адрен", "brutal", "danger", "risk", "hardcore"),
+}
+
+_TYPE_LEXICONS: Dict[str, Tuple[str, ...]] = {
+    "story": ("однажды", "история", "случилось", "когда я", "в итоге", "через год", "вспоминаю"),
+    "humor": ("смешн", "шутк", "прикол", "смех", "анекдот", "funny", "joke"),
+    "conflict": ("конфликт", "ссор", "скандал", "спор", "предал", "обман", "против", "conflict"),
+    "insight": ("понял", "осознал", "вывод", "смысл", "оказывается", "инсайт", "insight", "поняла"),
+    "education": ("как ", "способ", "метод", "объясн", "пример", "совет", "шаг", "инструкц", "how to"),
+    "reaction": ("реакц", "смотрю", "увидел", "представь", "вау", "wow", "reaction"),
+    "motivation": ("мотивац", "цель", "мечт", "добейся", "не сдавай", "сила воли", "motivation"),
+    "provocation": ("провок", "специально", "вызов", "спор", "докажи", "provoke", "challenge"),
+    "emotion": ("чувств", "пережив", "слез", "сердц", "больно", "радост", "emotion", "feel"),
+    "fact": ("факт", "исследован", "статистик", "процент", "ученые", "доказан", "fact", "study"),
+}
+
+_TYPE_ORDER = tuple(CONTENT_TYPES)
+_MOOD_ORDER = tuple(MOODS)
+
+
 _NUM_RE = re.compile(r"\d+[.,]?\d*|%|₽|\$|€|руб|тысяч|миллион|миллиард|процент", re.I)
 _SENT_END = re.compile(r"[.!?…]+[\"'»)]*\s*$")
 _WORD_RE = re.compile(r"[\w\-']+", re.U)
@@ -106,6 +163,79 @@ def _norm(text: str) -> str:
 def _count_patterns(text: str, patterns: List[str]) -> int:
     low = _norm(text)
     return sum(1 for p in patterns if re.search(p, low))
+
+
+def _lex_hits(text: str, patterns: Sequence[str]) -> int:
+    """Сколько разных маркеров встретилось. Текст уже нормализован."""
+    return sum(1 for p in patterns if p in text)
+
+
+def _classify_mood(text: str, parts: Optional[Dict[str, float]] = None) -> str:
+    """Одно настроение для локального отбора.
+
+    Возвращает ключ из `MOODS` или пустую строку, если маркеров нет: пустое
+    значение честнее выдуманного — при фильтре такой клип не пройдёт, а без
+    фильтра останется как раньше.
+    """
+    low = _norm(text)
+    if not low.strip():
+        return ""
+    scores = {key: _lex_hits(low, pats) for key, pats in _MOOD_LEXICONS.items()}
+    if parts and not any(scores.values()) and float(parts.get("emotion") or 0) >= 0.5:
+        scores["drama"] = 1
+    best, best_score = "", 0
+    for key in _MOOD_ORDER:
+        if scores[key] > best_score:
+            best, best_score = key, scores[key]
+    return best
+
+
+def _classify_types(text: str, mood: str = "",
+                    parts: Optional[Dict[str, float]] = None) -> List[str]:
+    """До трёх тематических меток, отсортированных по силе сигнала."""
+    low = _norm(text)
+    scores = {key: _lex_hits(low, pats) for key, pats in _TYPE_LEXICONS.items()}
+    mood_type = {
+        "funny": "humor", "sad": "emotion", "wholesome": "emotion",
+        "drama": "conflict", "intense": "conflict", "shock": "reaction",
+        "insight": "insight",
+    }.get(mood)
+    if mood_type:
+        scores[mood_type] += 1
+    if _NUM_RE.search(text):
+        scores["fact"] += 1
+    picked = [key for key in _TYPE_ORDER if scores[key] > 0]
+    picked.sort(key=lambda key: (-scores[key], _TYPE_ORDER.index(key)))
+    return picked[:3]
+
+
+def _why_short(parts: Dict[str, float], mood: str = "",
+               types: Optional[Sequence[str]] = None) -> str:
+    """Одна короткая фраза «почему выбран» без обращения к сети."""
+    labels: List[str] = []
+    if float(parts.get("hook") or 0) >= 0.6:
+        labels.append("сильный хук")
+    if float(parts.get("emotion") or 0) >= 0.4:
+        labels.append("эмоция")
+    if float(parts.get("specificity") or 0) >= 0.4:
+        labels.append("конкретика")
+    if float(parts.get("completeness") or 0) >= 0.8:
+        labels.append("законченная мысль")
+    if float(parts.get("payoff") or 0) >= 0.9:
+        labels.append("есть развязка")
+    if not labels:
+        labels.append("связная мысль без лишней воды")
+    text = ", ".join(labels[:3])
+    return text[:1].upper() + text[1:] + "."
+
+
+def _describe(window: List[Dict[str, Any]], parts: Dict[str, float]) -> Dict[str, Any]:
+    text = " ".join(sent["text"] for sent in window)
+    mood = _classify_mood(text, parts)
+    return {"mood": mood,
+            "content_types": _classify_types(text, mood, parts),
+            "why": _why_short(parts, mood)}
+
 
 
 def _has_filler_start(text: str) -> bool:
@@ -202,6 +332,8 @@ def build_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             token = (w.get("word") or "").strip()
             if token:
                 item = {"word": token, "start": float(w["start"]), "end": float(w["end"])}
+                if w.get("timing"):
+                    item["timing"] = str(w["timing"])
                 if confidence is not None:
                     item["conf"] = float(confidence)
                 words.append(item)
@@ -225,6 +357,8 @@ def build_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         confs = [w["conf"] for w in cur if "conf" in w]
         if confs:
             sentence["conf"] = sum(confs) / len(confs)
+        if any(w.get("timing") == "approx" for w in cur):
+            sentence["timing"] = "approx"
         sentences.append(sentence)
         cur.clear()
 
@@ -521,8 +655,15 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                   count: int = 10, min_dur: float = 15, max_dur: float = 60,
                   target_dur: float = 32, platform: str = "shorts",
                   wav: Optional[Path] = None,
-                  energy_offset: float = 0.0) -> List[Dict[str, Any]]:
-    """Возвращает список клипов: тайминги, score, заголовок, объяснение."""
+                  energy_offset: float = 0.0,
+                  min_score: float = 0.0,
+                  mood_filter: Optional[Sequence[str]] = None,
+                  type_filter: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+    """Возвращает список клипов: тайминги, score, заголовок, объяснение.
+
+    `min_score`, `mood_filter` и `type_filter` — те же фильтры, что у
+    нейросетевого отбора. При пустых значениях выдача не меняется.
+    """
     sents = build_sentences(segments)
     if not sents:
         return []
@@ -573,6 +714,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                         "text": " ".join(x["text"] for x in window),
                         "words": [w for x in window for w in x["words"]],
                         "title": _make_title(window),
+                        **_describe(window, parts),
                     })
                     if len(candidates) >= MAX_CANDIDATES:
                         capped = True
@@ -592,6 +734,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                 "text": " ".join(x["text"] for x in chunk),
                 "words": [w for x in chunk for w in x["words"]],
                 "title": _make_title(chunk),
+                **_describe(chunk, parts),
             })
 
     if not candidates:
@@ -600,6 +743,21 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
     # Разнообразие: не берём пересекающиеся окна
     candidates.sort(key=lambda c: c["score"], reverse=True)
     limit = count if count > 0 else 999
+
+    # Фильтры применяем до разбиения на корзины: иначе счётчик «сколько
+    # клипов» и разнесение по таймлайну считаются по отброшенным окнам.
+    wanted_moods = [mood for mood in (mood_filter or []) if mood in MOODS]
+    wanted_types = [kind for kind in (type_filter or []) if kind in CONTENT_TYPES]
+    threshold = max(0.0, float(min_score or 0.0))
+    if threshold > 0.0 or wanted_moods or wanted_types:
+        candidates = [
+            cand for cand in candidates
+            if float(cand.get("score") or 0.0) >= threshold
+            and (not wanted_moods or cand.get("mood") in wanted_moods)
+            and (not wanted_types or set(wanted_types) & set(cand.get("content_types") or []))
+        ]
+        if not candidates:
+            return []
 
     # Разнообразие по таймлайну: без него топ-N собирается из одного «сильного»
     # куска, а вторая половина видео не попадает в выдачу вовсе (жалоба на
@@ -691,5 +849,8 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
             "caption": _make_caption(c["title"], clip_text, platform),
             "keywords": _keywords(clip_text, 6),
             "words": words,
+            "mood": c.get("mood") or "",
+            "why": c.get("why") or "",
+            "content_types": list(c.get("content_types") or []),
         })
     return out

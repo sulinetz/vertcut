@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .config import ASSETS_DIR, ensure_path, ffmpeg, ffmpeg_bin_dir
 from .errors import Cancelled
+from .utils import normalize_language as _normalize_language
 from .utils import subprocess_kwargs
 
 ProgressCb = Optional[Callable[[float, str], None]]
@@ -28,6 +29,38 @@ FORMAT_HD = (
     "b[height<=1080]/b"
 )
 FORMAT_SD = "18/b[height<=360][ext=mp4]/b[width<=360][ext=mp4]/b[height<=360]/b[width<=360]/b"
+
+
+def audio_language_code(value: Any) -> str:
+    """Короткий код языка для селектора yt-dlp; пустая строка — без предпочтения."""
+    code = str(value or "").strip().lower()
+    if not code or code == "auto":
+        return ""
+    if "-" in code:
+        code = code.split("-", 1)[0]
+    if "_" in code:
+        code = code.split("_", 1)[0]
+    code = _normalize_language(code)
+    return code if re.fullmatch(r"[a-z]{2,3}", code) else ""
+
+
+def _prefer_audio_language(fmt: str, language: Any) -> str:
+    """Дублирует аудиочасть селектора с фильтром языка, оставляя прежний запас.
+
+    `bv*+ba[ext=m4a]` → `bv*+ba[ext=m4a][language^=ru]/bv*+ba[ext=m4a]`.
+    Если язык не задан или в селекторе нет `+ba`, строка возвращается как есть.
+    """
+    code = audio_language_code(language)
+    if not code:
+        return fmt
+    parts: List[str] = []
+    for chunk in fmt.split("/"):
+        video, sep, audio = chunk.rpartition("+")
+        if sep and audio.startswith("ba"):
+            parts.append(f"{video}+{audio}[language^={code}]")
+    if not parts:
+        return fmt
+    return "/".join(parts + [fmt])
 
 
 class DownloadError(Exception):
@@ -365,7 +398,8 @@ def _youtube_info(url: str, browser: Optional[str], pot: bool,
     raise DownloadError("YouTube не отдал видео ни одному клиенту. " + detail[-350:])
 
 
-def _pick_format(info: Dict[str, Any], max_height: int) -> tuple[str, int]:
+def _pick_format(info: Dict[str, Any], max_height: int,
+                 audio_lang: Optional[str] = None) -> tuple[str, int]:
     """Формат из фактически доступных — вместо «слепой» строки селектора.
 
     Возвращает (селектор, реальная высота): подпись в интерфейсе должна
@@ -393,15 +427,22 @@ def _pick_format(info: Dict[str, Any], max_height: int) -> tuple[str, int]:
     audios = [f for f in formats
               if (f.get("vcodec") or "none") == "none" and (f.get("acodec") or "none") != "none"]
     if audios:
-        audio = max(audios, key=lambda f: (1 if f.get("ext") == "m4a" else 0,
-                                           float(f.get("abr") or f.get("tbr") or 0)))
+        want = audio_language_code(audio_lang)
+
+        def audio_rank(f: Dict[str, Any]) -> tuple:
+            lang = _normalize_language(f.get("language"))
+            return (1 if want and lang == want else 0,
+                    1 if f.get("ext") == "m4a" else 0,
+                    float(f.get("abr") or f.get("tbr") or 0))
+
+        audio = max(audios, key=audio_rank)
         return f"{video['format_id']}+{audio['format_id']}", height
     return str(video["format_id"]), height
 
 
 def download(url: str, dest_dir: Path, progress: ProgressCb = None,
              browser: Optional[str] = None, max_height: int = 1080,
-             force_hd: bool = False) -> Dict[str, Any]:
+             force_hd: bool = False, audio_lang: Optional[str] = None) -> Dict[str, Any]:
     """Скачивает видео. По умолчанию цель — 1080p, при блокировке видимый откат к SD."""
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -418,6 +459,9 @@ def download(url: str, dest_dir: Path, progress: ProgressCb = None,
             f"bv*[height<={max_height}]+ba/bv*[width<={max_height}]+ba/"
             f"b[height<={max_height}]/b[width<={max_height}]/b"
         )
+        # Предпочтение языка дорожки — только первая попытка. Откаты идут по
+        # прежним селекторам, поэтому источники без метаданных языка не ломаются.
+        hd_format = _prefer_audio_language(hd_format, audio_lang)
 
     attempts: List[tuple] = []
     if not is_youtube(url):
@@ -433,7 +477,7 @@ def download(url: str, dest_dir: Path, progress: ProgressCb = None,
         picked = None
         try:
             info, args, client_label = _youtube_info(url, browser, pot, progress)
-            picked = (_pick_format(info, max_height), args, client_label)
+            picked = (_pick_format(info, max_height, audio_lang), args, client_label)
         except DownloadError as exc:
             print(f"[youtube] метаданные не получены: {exc}", file=sys.stderr)
         if picked is not None:
@@ -783,7 +827,8 @@ AUDIO_FORMAT = "ba[abr<=64]/ba[abr<=96]/ba/b[height<=360]/b"
 
 
 def download_audio(url: str, dest_dir: Path, progress: ProgressCb = None,
-                   browser: Optional[str] = None) -> Dict[str, Any]:
+                   browser: Optional[str] = None,
+                   audio_lang: Optional[str] = None) -> Dict[str, Any]:
     """Скачивает только звук — в разы меньше полного видео."""
     import yt_dlp
 
@@ -819,9 +864,11 @@ def download_audio(url: str, dest_dir: Path, progress: ProgressCb = None,
             if progress:
                 progress(0.99, "Аудио скачано · распознавание речи")
 
+    code = audio_language_code(audio_lang)
+    audio_format = f"ba[language^={code}]/{AUDIO_FORMAT}" if code else AUDIO_FORMAT
     opts: Dict[str, Any] = {
         "outtmpl": outtmpl,
-        "format": AUDIO_FORMAT,
+        "format": audio_format,
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -872,7 +919,8 @@ def download_audio(url: str, dest_dir: Path, progress: ProgressCb = None,
 
 def download_section(url: str, dest_dir: Path, start: float, end: float,
                      progress: ProgressCb = None, browser: Optional[str] = None,
-                     max_height: int = 1080) -> Path:
+                     max_height: int = 1080,
+                     audio_lang: Optional[str] = None) -> Path:
     """Скачивает только фрагмент видео (для экономного режима)."""
     import yt_dlp
     from yt_dlp.utils import download_range_func
@@ -913,6 +961,7 @@ def download_section(url: str, dest_dir: Path, start: float, end: float,
         )
     if not is_youtube(url):
         fmt = f"b[width<={max_height}]/b[height<={max_height}]/b/" + fmt
+    fmt = _prefer_audio_language(fmt, audio_lang)
 
     def hook(d: Dict[str, Any]) -> None:
         if d.get("status") == "downloading" and progress:

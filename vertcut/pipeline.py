@@ -56,6 +56,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "select": "smart",
     "picker": "local",
     "mood_filter": [],
+    "type_filter": [],
     "min_score": 0.0,
     "subtitle_source": "auto",
     "subtitle_track": -1,
@@ -63,6 +64,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "segments": False,
     "force_hd": False,
     "audio_track": -1,
+    "audio_lang": "auto",
     "external_audio": False,
     "external_audio_track": -1,
     "audio_offset": 0.0,
@@ -198,8 +200,16 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raw_moods = re.split(r"[,\s]+", raw_moods)
     if not isinstance(raw_moods, (list, tuple)):
         raw_moods = []
-    opts["mood_filter"] = [m for m in (str(x).strip().lower() for x in raw_moods)
-                           if m in semantic.MOODS]
+    opts["mood_filter"] = list(dict.fromkeys(
+        m for m in (str(x).strip().lower() for x in raw_moods) if m in semantic.MOODS))
+    raw_types = opts.get("type_filter")
+    if isinstance(raw_types, str):
+        raw_types = re.split(r"[,\s]+", raw_types)
+    if not isinstance(raw_types, (list, tuple)):
+        raw_types = []
+    opts["type_filter"] = list(dict.fromkeys(
+        t for t in (str(x).strip().lower() for x in raw_types)
+        if t in semantic.CONTENT_TYPES))
     try:
         opts["min_score"] = round(max(0.0, min(1.0, float(opts.get("min_score") or 0.0))), 2)
     except (TypeError, ValueError):
@@ -214,6 +224,12 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["audio_track"] = max(-1, min(64, int(opts.get("audio_track", -1))))
     except (TypeError, ValueError):
         opts["audio_track"] = -1
+    raw_lang = str(opts.get("audio_lang") or "auto").strip().lower()
+    if raw_lang in ("", "auto", "none"):
+        opts["audio_lang"] = "auto"
+    else:
+        code = utils.normalize_language(raw_lang)
+        opts["audio_lang"] = code if re.fullmatch(r"[a-z]{2,3}", code or "") else "auto"
     try:
         opts["external_audio_track"] = max(-1, min(64, int(opts.get("external_audio_track", -1))))
     except (TypeError, ValueError):
@@ -301,6 +317,7 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                     db.merge_meta(pid, {"width": info["width"], "height": info["height"],
                                         "source_height": info["height"],
                                         "audio_tracks": info.get("audio_streams") or []})
+                    _apply_audio_pick(pid, opts, info.get("audio_streams"))
                     return cached
     if project["url"].startswith("local:"):
         source = Path(project.get("source") or (workdir / "source.mp4"))
@@ -321,6 +338,7 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                     browser=opts.get("cookies_browser") or None,
                     force_hd=opts.get("force_hd", False),
                     max_height=int(opts.get("max_height", 1080)),
+                    audio_lang=opts.get("audio_lang"),
                 )
         except downloader.DownloadError as exc:
             raise RuntimeError(str(exc)) from exc
@@ -351,7 +369,15 @@ def _download_phase(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
         "audio_tracks": info.get("audio_streams") or [],
         "subtitle_tracks": subtitle_tracks,
     })
+    # Выбор дорожки — один раз на проект: распознавание, замер громкости и
+    # рендер должны получить один и тот же индекс.
+    _apply_audio_pick(pid, opts, info.get("audio_streams"))
     return source
+
+
+def _words_timing(words: List[Dict[str, Any]]) -> str:
+    """`approx` — время слов из готовых субтитров распределено ровно."""
+    return "approx" if any(w.get("timing") == "approx" for w in (words or [])) else "exact"
 
 
 def _clip_settings(opts: Dict[str, Any]) -> Dict[str, Any]:
@@ -373,6 +399,66 @@ def _track_index(value: Any) -> Optional[int]:
     return index if index >= 0 else None
 
 
+def _stream_language(streams: List[Dict[str, Any]], index: Optional[int]) -> str:
+    if index is None:
+        return ""
+    for position, stream in enumerate(streams or []):
+        try:
+            current = int(stream.get("index", position))
+        except (TypeError, ValueError):
+            current = position
+        if current == int(index):
+            return str(stream.get("language") or "")
+    return ""
+
+
+def _resolve_audio_track(opts: Dict[str, Any],
+                         streams: Optional[List[Dict[str, Any]]] = None) -> Optional[int]:
+    """Какую дорожку брать: явный выбор сильнее языка, `auto` — как раньше."""
+    explicit = _track_index(opts.get("audio_track", -1))
+    if explicit is not None:
+        return explicit
+    lang = str(opts.get("audio_lang") or "auto").strip().lower()
+    if not streams or lang in ("", "auto"):
+        return None
+    prefer = (lang, "rus") if lang == "ru" else (lang,)
+    return utils.pick_audio_track(streams, prefer=prefer)
+
+
+def _apply_audio_pick(pid: str, opts: Dict[str, Any],
+                      streams: Optional[List[Dict[str, Any]]]) -> Optional[int]:
+    """Выбирает дорожку один раз при старте и запоминает решение.
+
+    Важно, чтобы распознавание, замер громкости и рендер получили один и тот
+    же индекс: иначе слова не совпадут со звуком.
+    """
+    streams = list(streams or [])
+    explicit = _track_index(opts.get("audio_track", -1))
+    lang = str(opts.get("audio_lang") or "auto").strip().lower()
+    if explicit is not None:
+        chosen: Optional[int] = explicit
+        reason = "manual"
+    else:
+        chosen = _resolve_audio_track(opts, streams)
+        if chosen is None:
+            reason = "default"
+        else:
+            language = _stream_language(streams, chosen)
+            wanted = lang not in ("", "auto")
+            matches = wanted and utils.normalize_language(language) == utils.normalize_language(lang)
+            reason = "language" if matches else ("fallback" if wanted else "quality")
+    opts["audio_track"] = chosen if chosen is not None else -1
+    pick = {
+        "index": chosen,
+        "language": _stream_language(streams, chosen),
+        "reason": reason,
+        "label": utils.describe_audio_pick(streams, chosen),
+        "requested": lang,
+    }
+    db.merge_meta(pid, {"audio_pick": pick})
+    return chosen
+
+
 def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                       workdir: Path, progress: Callable[[float, str], None]) -> None:
     """Экономный режим: аудио → анализ → предпросмотр одного момента."""
@@ -380,10 +466,16 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     audio = downloader.download_audio(
         project["url"], workdir, browser=opts.get("cookies_browser") or None,
         progress=lambda p, st: progress(0.02 + p * 0.28, st),
+        audio_lang=opts.get("audio_lang"),
     )
     duration = float(audio.get("duration") or 0) or utils.media_duration(audio["path"])
     if duration < 5:
         raise RuntimeError("Видео слишком короткое для нарезки.")
+    try:
+        econ_streams = utils.audio_streams(audio["path"])
+    except Exception:  # noqa: BLE001
+        econ_streams = []
+    _apply_audio_pick(pid, opts, econ_streams)
 
     select = opts.get("select") or "smart"
     transcript: Optional[Dict[str, Any]] = None
@@ -425,7 +517,11 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
             transcript["segments"], audio["path"], duration,
             count=opts["count"] or 0, min_dur=opts["min_dur"],
             max_dur=opts["max_dur"], target_dur=opts["target_dur"],
+            platform=opts["platform"],
             wav=workdir / "audio16k.wav",
+            min_score=opts["min_score"],
+            mood_filter=opts["mood_filter"],
+            type_filter=opts["type_filter"],
         )
     if not found:
         raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")
@@ -435,7 +531,13 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
     for i, cand in enumerate(found):
         db.add_clip(pid, i, cand["start"], cand["end"], cand["score"], cand["title"],
                     cand["hook"], cand["caption"], cand["words"],
-                    {**settings, "score_parts": cand.get("parts") or {}}, status="pending")
+                    {**settings, "score_parts": cand.get("parts") or {},
+                     "mood": cand.get("mood") or "",
+                     "why": cand.get("why") or "",
+                     "content_types": list(cand.get("content_types") or []),
+                     "picker": cand.get("source") or "",
+                     "timing": _words_timing(cand.get("words") or [])},
+                    status="pending")
 
     # короткий предпросмотр первого момента, чтобы окно шаблона было с видео
     first = found[0]
@@ -448,6 +550,7 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
             project["url"], workdir / "preview_src", sec_start, sec_end,
             progress=lambda p, st: progress(0.78 + p * 0.16, st),
             browser=opts.get("cookies_browser") or None, max_height=360,
+            audio_lang=opts.get("audio_lang"),
         )
         shutil.copy2(part, preview_path)
         shutil.rmtree(workdir / "preview_src", ignore_errors=True)
@@ -476,7 +579,12 @@ def _process_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
         _check_cancel(pid)
         base = i / total
         label = f"Момент {i + 1} из {total}"
-        db.update_clip(clip["id"], status="rendering", settings=settings)
+        # Настройки клипа могли уточняться в редакторе: не теряем описание
+        # момента и метку точности таймингов при повторной обработке.
+        keep = {key: value for key, value in (clip.get("settings") or {}).items()
+                if key in ("mood", "why", "content_types", "score_parts",
+                           "picker", "timing")}
+        db.update_clip(clip["id"], status="rendering", settings={**settings, **keep})
 
 
         def sub_progress(p: float, st: str, _i: int = i) -> None:
@@ -489,6 +597,7 @@ def _process_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
                 project["url"], sections / clip["id"], sec_start, sec_end,
                 progress=sub_progress, browser=opts.get("cookies_browser") or None,
                 max_height=int(opts.get("max_height", 1080)),
+                audio_lang=opts.get("audio_lang"),
             )
             actual = utils.media_duration(part)
             offset = max(0.0, float(clip["start"]) - sec_start)
@@ -830,7 +939,11 @@ def process_project(pid: str) -> None:
                     count=opts["count"] or 0,
                     min_dur=opts["min_dur"], max_dur=opts["max_dur"],
                     target_dur=opts["target_dur"],
+                    platform=opts["platform"],
                     wav=wav, energy_offset=energy_offset,
+                    min_score=opts["min_score"],
+                    mood_filter=opts["mood_filter"],
+                    type_filter=opts["type_filter"],
                 )
         if not found:
             raise RuntimeError("Не нашлось связных фрагментов. Попробуйте увеличить длину клипа.")
@@ -848,7 +961,9 @@ def process_project(pid: str) -> None:
                 {**clip_settings, "score_parts": cand.get("parts") or {},
                  "mood": cand.get("mood") or "",
                  "why": cand.get("why") or "",
-                 "picker": cand.get("source") or ""},
+                 "content_types": list(cand.get("content_types") or []),
+                 "picker": cand.get("source") or "",
+                 "timing": _words_timing(cand.get("words") or [])},
             )
             clips.append(clip)
 

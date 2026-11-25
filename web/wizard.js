@@ -44,8 +44,8 @@
     jump_cuts: false, cut_zoom: false,
     count: 10, min_dur: 15, max_dur: 60, target_dur: 32,
     select: "smart", export_order: "chrono",
-    picker: "local", mood_filter: [], min_score: 0,
-    audio_track: -1, subtitle_track: -1, subtitle_source: "auto",
+    picker: "local", mood_filter: [], type_filter: [], min_score: 0,
+    audio_track: -1, audio_lang: "auto", subtitle_track: -1, subtitle_source: "auto",
     external_audio: false, external_audio_track: -1, audio_offset: 0,
     cookies_browser: "", language: "auto", max_height: 1080, segments: false,
     force_hd: false
@@ -58,6 +58,7 @@
       ...o,
       count: o.count == null ? 10 : o.count,
       audio_track: o.audio_track == null ? -1 : o.audio_track,
+      audio_lang: o.audio_lang || "auto",
       subtitle_track: o.subtitle_track == null ? -1 : o.subtitle_track
     };
   }
@@ -174,6 +175,18 @@
       <div class="bar"><i style="width:${Math.max(2, project.progress || 0)}%"></i></div>
     </div>`;
 
+  function audioPickHint(meta) {
+    const pick = meta && meta.audio_pick;
+    if (!pick || !pick.requested || pick.requested === "auto") return "";
+    if (pick.reason === "fallback") {
+      return `<div class="warn-box"><strong>Русская дорожка не найдена.</strong> Взята ${esc(pick.label || "другая дорожка")} — распознавание и звук используют её.</div>`;
+    }
+    if (pick.reason === "language") {
+      return `<div class="opt-hint">Выбрана ${esc(pick.label || "русская дорожка")}.</div>`;
+    }
+    return "";
+  }
+
   function stepSource(project) {
     if (["queued", "preparing", "running"].includes(project.status)) return progress(project);
     const meta = project.meta || {};
@@ -196,7 +209,7 @@
           <button class="btn-ghost" id="wzUpload">Загрузить файлом</button>
           <button class="btn-ghost hidden" id="wzNative">Выбрать файл на диске</button></div>
           <div id="wzPicked"></div></div>` : ""}
-        <div class="wz-block"><b>Аудиодорожки</b>${audioRows}</div>
+        <div class="wz-block"><b>Аудиодорожки</b>${audioRows}<label class="mini-field"><span>Язык звука при скачивании</span><select id="wzAudioLang"><option value="auto" ${wizard.opts.audio_lang === "auto" ? "selected" : ""}>Как в источнике</option><option value="ru" ${wizard.opts.audio_lang === "ru" ? "selected" : ""}>Русский</option><option value="uk" ${wizard.opts.audio_lang === "uk" ? "selected" : ""}>Украинский</option><option value="en" ${wizard.opts.audio_lang === "en" ? "selected" : ""}>Английский</option><option value="de" ${wizard.opts.audio_lang === "de" ? "selected" : ""}>Немецкий</option><option value="es" ${wizard.opts.audio_lang === "es" ? "selected" : ""}>Испанский</option></select></label><div class="opt-hint">Если у источника несколько дорожек, возьмём дорожку этого языка. Ручной выбор выше сильнее. Уже скачанный файл не перекачивается.</div>${audioPickHint(meta)}</div>
         <div class="wz-block"><b>Субтитры внутри файла</b>${subRows}
           <label class="toggle"><input type="checkbox" id="wzForceAsr" ${wizard.opts.subtitle_source === "whisper" ? "checked" : ""}/><span class="track"></span><span>Распознать заново (Whisper)</span></label>
         </div>
@@ -218,6 +231,10 @@
     $$('input[name="wzSub"]', audio).forEach((el) => el.addEventListener("change", () => {
       wizard.opts.subtitle_track = Number(el.value);
     }));
+    const audioLang = $("#wzAudioLang");
+    if (audioLang) audioLang.addEventListener("change", () => {
+      wizard.opts.audio_lang = audioLang.value;
+    });
     const asr = $("#wzForceAsr");
     if (asr) asr.addEventListener("change", () => {
       wizard.opts.subtitle_source = asr.checked ? "whisper" : "auto";

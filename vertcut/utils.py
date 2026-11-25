@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .config import ffmpeg
 
@@ -135,6 +135,103 @@ def parse_audio_streams(text: str) -> List[Dict[str, Any]]:
 def audio_streams(path: Path) -> List[Dict[str, Any]]:
     proc = run([ffmpeg(), "-hide_banner", "-i", str(path)])
     return parse_audio_streams(proc.stderr or "")
+
+
+_LANG_ALIASES = {
+    "rus": "ru", "ru": "ru", "russian": "ru",
+    "ukr": "uk", "uk": "uk", "ukrainian": "uk",
+    "bel": "be", "be": "be", "belarusian": "be",
+    "eng": "en", "en": "en", "english": "en",
+    "ger": "de", "deu": "de", "de": "de", "german": "de",
+    "spa": "es", "es": "es", "spanish": "es",
+    "fre": "fr", "fra": "fr", "fr": "fr", "french": "fr",
+}
+
+
+def normalize_language(value: Any) -> str:
+    """Приводит `rus`, `ru-RU`, `Russian` к короткому коду."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if "-" in text:
+        text = text.split("-", 1)[0]
+    if "_" in text:
+        text = text.split("_", 1)[0]
+    return _LANG_ALIASES.get(text, text)
+
+
+def _stream_quality(stream: Dict[str, Any]) -> Tuple[int, int, int]:
+    """Грубая оценка качества дорожки: частота, каналы, флаг default."""
+    channels = str(stream.get("channels") or "").lower()
+    if "stereo" in channels or re.search(r"\b2\s*(?:ch|channels)", channels):
+        ch = 2
+    elif "mono" in channels or re.search(r"\b1\s*(?:ch|channels)", channels):
+        ch = 1
+    else:
+        ch = 1
+    try:
+        rate = int(stream.get("sample_rate") or 0)
+    except (TypeError, ValueError):
+        rate = 0
+    return rate, ch, 1 if stream.get("default") else 0
+
+
+def _indexed_streams(streams: List[Dict[str, Any]]) -> List[Tuple[int, Dict[str, Any]]]:
+    out: List[Tuple[int, Dict[str, Any]]] = []
+    for position, stream in enumerate(streams or []):
+        try:
+            index = int(stream.get("index", position))
+        except (TypeError, ValueError):
+            index = position
+        out.append((index, stream))
+    return out
+
+
+def pick_audio_track(streams: List[Dict[str, Any]],
+                     prefer: Sequence[str] = ("ru", "rus"),
+                     allow_default: bool = True) -> Optional[int]:
+    """Индекс лучшей дорожки: сначала нужный язык, потом лучшая доступная.
+
+    `None` — дорожку не трогаем, ffmpeg возьмёт ту, что помечена default:
+    так вели себя старые проекты.
+    """
+    items = _indexed_streams(streams)
+    if not items:
+        return None
+    wanted = {normalize_language(lang) for lang in prefer if str(lang or "").strip()}
+    matching = [(index, stream) for index, stream in items
+                if normalize_language(stream.get("language")) in wanted]
+    if matching:
+        return max(matching, key=lambda pair: _stream_quality(pair[1]))[0]
+    if not allow_default:
+        return None
+    defaults = [(index, stream) for index, stream in items if stream.get("default")]
+    if defaults:
+        return max(defaults, key=lambda pair: _stream_quality(pair[1]))[0]
+    if len(items) == 1:
+        return items[0][0]
+    return max(items, key=lambda pair: _stream_quality(pair[1]))[0]
+
+
+def describe_audio_pick(streams: List[Dict[str, Any]], index: Optional[int]) -> str:
+    """Подпись для интерфейса: «русская дорожка 2 из 4 · aac»."""
+    items = _indexed_streams(streams)
+    if not items:
+        return "дорожка по умолчанию"
+    total = len(items)
+    if index is None:
+        default = next((stream for _, stream in items if stream.get("default")), None)
+        lang = normalize_language((default or {}).get("language")) or "?"
+        return f"дорожка по умолчанию · {lang}"
+    for position, (stream_index, stream) in enumerate(items):
+        if stream_index != index:
+            continue
+        lang = normalize_language(stream.get("language"))
+        label = "русская" if lang == "ru" else (lang or "без языка")
+        codec = str(stream.get("codec") or "audio").strip()
+        return f"{label} дорожка {position + 1} из {total} · {codec}"
+    return "дорожка по умолчанию"
+
 
 
 def media_duration(path: Path) -> float:
@@ -444,13 +541,19 @@ def _stamp(h: str, m: str, s: str, frac: str) -> float:
 
 
 def _words_from_text(text: str, start: float, end: float) -> List[Dict[str, Any]]:
+    """Слова из готовых субтитров: время внутри реплики распределено ровно.
+
+    Для SRT/VTT это единственный возможный вариант, но точным он не является.
+    Метка `timing` доходит до интерфейса, чтобы не выдавать оценку за факт.
+    """
     tokens = [w for w in text.split() if w]
     if not tokens:
         return []
     span = max(0.05, end - start)
     step = span / len(tokens)
     return [{"word": tok, "start": round(start + i * step, 3),
-             "end": round(start + (i + 1) * step, 3)} for i, tok in enumerate(tokens)]
+             "end": round(start + (i + 1) * step, 3), "timing": "approx"}
+            for i, tok in enumerate(tokens)]
 
 
 def _segments_from_cues(cues: List[tuple], merge: bool = True) -> List[Dict[str, Any]]:

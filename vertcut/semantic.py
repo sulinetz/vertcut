@@ -23,20 +23,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import analyze, app_settings
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 REQUEST_TIMEOUT = float(os.environ.get("VERTCUT_LLM_TIMEOUT", "90"))
 DEBUG = bool(os.environ.get("VERTCUT_LLM_DEBUG"))
 
-# Метки настроения. Ключи английские — так стабильнее в JSON и в фильтре.
-MOODS: Dict[str, str] = {
-    "funny": "весёлое",
-    "sad": "грустное",
-    "drama": "драма",
-    "shock": "шок",
-    "insight": "мысль",
-    "wholesome": "тёплое",
-    "intense": "жёсткое",
-}
+# Метки настроения и типы контента живут в `analyze`, чтобы локальный отбор и
+# нейросетевой фильтровали по одним и тем же ключам.
+MOODS: Dict[str, str] = analyze.MOODS
+CONTENT_TYPES: Dict[str, str] = analyze.CONTENT_TYPES
 
 _MOOD_ALIASES = {
     "веселое": "funny", "весёлое": "funny", "смешное": "funny", "fun": "funny",
@@ -50,6 +44,22 @@ _MOOD_ALIASES = {
     "жёсткое": "intense", "жесткое": "intense", "brutal": "intense",
     "aggressive": "intense",
 }
+
+_TYPE_ALIASES = {
+    "история": "story", "story": "story", "storytelling": "story",
+    "юмор": "humor", "humor": "humor", "humour": "humor", "comedy": "humor",
+    "конфликт": "conflict", "conflict": "conflict", "controversy": "conflict",
+    "инсайт": "insight", "insight": "insight", "epiphany": "insight",
+    "обучение": "education", "education": "education", "educational": "education",
+    "tutorial": "education",
+    "реакция": "reaction", "reaction": "reaction",
+    "мотивация": "motivation", "motivation": "motivation", "motivational": "motivation",
+    "провокация": "provocation", "provocation": "provocation", "challenge": "provocation",
+    "эмоциональный момент": "emotion", "эмоция": "emotion", "emotion": "emotion",
+    "emotional": "emotion",
+    "интересный факт": "fact", "факт": "fact", "fact": "fact", "trivia": "fact",
+}
+
 
 PROVIDERS: Dict[str, Dict[str, Any]] = {
     "deepseek": {
@@ -85,13 +95,18 @@ SYSTEM_PROMPT = """Ты — редактор вирусных вертикаль
 - Не бери рекламу, приветствия, прощания, воду и служебные фразы.
 - Длительность держи в указанном диапазоне.
 - Моменты не должны пересекаться.
-- mood — одно слово строго из списка: funny, sad, drama, shock, insight, wholesome, intense.
-- score 0..1 — насколько момент залетит. Оценивай по смыслу, а не по словарю.
+- mood — ровно одно слово строго из списка: funny, sad, drama, shock, insight, wholesome, intense.
+- types — от одного до трёх типов содержания строго из списка: story, humor, conflict, insight,
+  education, reaction, motivation, provocation, emotion, fact. Тип отвечает на вопрос «что это»,
+  настроение — «какая эмоция».
+- score 0..1 — насколько момент залетит. Оценивай по абсолютной шкале, а не «лучшее в этом куске»:
+  0.9 — переслал бы другу, 0.7 — сильный момент, 0.5 — нормально, 0.2 — проходное.
 - title — короткий цепляющий заголовок на языке речи, до 70 символов.
 - why — одна фраза, почему момент сильный.
 
 Верни ТОЛЬКО JSON без пояснений:
-{"clips":[{"from":12,"to":17,"score":0.82,"mood":"funny","title":"...","why":"...",
+{"clips":[{"from":12,"to":17,"score":0.82,"mood":"funny","types":["humor","story"],
+"title":"...","why":"...",
 "hook":0.9,"conflict":0.5,"specificity":0.6,"emotion":0.8,"payoff":0.7}]}
 """
 
@@ -102,6 +117,25 @@ class LLMError(Exception):
     def __init__(self, message: str, status: int = 0):
         super().__init__(message)
         self.status = status
+
+
+# Финальное сравнение: короткие тексты кандидатов, без повторной отправки
+# транскрипта. 24 — компромисс между качеством рейтинга и ценой запроса.
+CALIBRATE_LIMIT = 24
+CALIBRATE_SYSTEM_PROMPT = """Ты — редактор вирусных вертикальных видео.
+Тебе дают кандидатов из разных частей одного видео. Оценки между частями
+несопоставимы, потому что их выставляли отдельные запросы.
+
+Сравни кандидатов между собой по смыслу и верни итоговый рейтинг:
+содержательность, интересное начало, эмоция, самостоятельность мысли,
+понятность без исходного видео, завершённость, пригодность для короткого формата.
+
+Правила:
+- Не добавляй новых кандидатов и не меняй id.
+- score 0..1 по одной общей шкале: 0.9 — переслал бы другу, 0.7 — сильный,
+  0.5 — нормально, 0.2 — проходное.
+- Верни ТОЛЬКО JSON: {"clips":[{"id":0,"score":0.8}]}
+"""
 
 
 def _http_message(status: int, body: str) -> str:
@@ -333,8 +367,32 @@ def _clean_mood(value: Any) -> str:
     return _MOOD_ALIASES.get(mood, "")
 
 
-def _clean_items(payload: Any, total: int, limit: int) -> List[Dict[str, Any]]:
-    """Проверка ответа модели: индексы в пределах, from <= to, score 0..1."""
+def _clean_types(value: Any, limit: int = 3) -> List[str]:
+    """До `limit` валидных типов контента. Мусор от модели отбрасывается."""
+    if isinstance(value, str):
+        raw = re.split(r"[,;/|\s]+", value)
+    elif isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        raw = []
+    out: List[str] = []
+    for item in raw:
+        key = str(item or "").strip().lower()
+        key = key if key in CONTENT_TYPES else _TYPE_ALIASES.get(key, "")
+        if key and key not in out:
+            out.append(key)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _clean_items(payload: Any, total: int, limit: int,
+                 allowed: Optional[set] = None) -> List[Dict[str, Any]]:
+    """Проверка ответа модели: индексы в пределах, from <= to, score 0..1.
+
+    `allowed` — номера предложений, которые реально были в запросе. Модель не
+    должна возвращать индексы из соседних частей: такие ответы отбрасываем.
+    """
     data = payload.get("clips") if isinstance(payload, dict) else payload
     if not isinstance(data, list):
         return []
@@ -349,6 +407,8 @@ def _clean_items(payload: Any, total: int, limit: int) -> List[Dict[str, Any]]:
             continue
         if start < 0 or end < start or end >= total:
             continue
+        if allowed is not None and (start not in allowed or end not in allowed):
+            continue
         if limit and len(cleaned) >= limit:
             break
         cleaned.append({
@@ -356,6 +416,7 @@ def _clean_items(payload: Any, total: int, limit: int) -> List[Dict[str, Any]]:
             "to": end,
             "score": _as_float(item.get("score")),
             "mood": _clean_mood(item.get("mood")),
+            "types": _clean_types(item.get("types") or item.get("content_types")),
             "title": re.sub(r"\s+", " ", str(item.get("title") or "")).strip()[:90],
             "why": re.sub(r"\s+", " ", str(item.get("why") or "")).strip()[:280],
             "hook": _maybe_float(item.get("hook")),
@@ -399,10 +460,14 @@ def _prompt(sents: List[Dict[str, Any]], indexes: List[int], duration: float,
     mood_hint = ""
     if moods:
         mood_hint = "\nНужны только эти настроения: " + ", ".join(moods) + "."
+    types = [t for t in (opts.get("type_filter") or []) if t in CONTENT_TYPES]
+    type_hint = ""
+    if types:
+        type_hint = "\nНужны только эти типы содержания: " + ", ".join(types) + "."
     return (
         f"Видео длится {_stamp(duration)}. Клипы от {opts.get('min_dur')} до "
         f"{opts.get('max_dur')} секунд, цель — около {opts.get('target_dur')}.\n"
-        f"Верни не больше {want} лучших моментов.{mood_hint}\n\n"
+        f"Верни не больше {want} лучших моментов.{mood_hint}{type_hint}\n\n"
         + "\n".join(lines)
     )
 
@@ -423,6 +488,7 @@ def _cache_key(provider: str, sents: List[Dict[str, Any]], duration: float,
     digest.update(f"|{round(duration)}|{opts.get('count')}|{opts.get('min_dur')}"
                   f"|{opts.get('max_dur')}|{opts.get('target_dur')}".encode())
     digest.update(("|" + ",".join(sorted(opts.get("mood_filter") or []))).encode())
+    digest.update(("|t:" + ",".join(sorted(opts.get("type_filter") or []))).encode())
     for sent in sents:
         digest.update(f"|{round(float(sent['start']), 2)}|{sent['text']}".encode("utf-8"))
     return digest.hexdigest()
@@ -475,7 +541,9 @@ def _ask(provider: str, sents: List[Dict[str, Any]], duration: float,
             {"role": "user", "content": _prompt(sents, indexes, duration, opts)},
         ]
         content, _usage = _chat(provider, messages)
-        for item in _clean_items(_extract_json(content), len(sents), limit=60):
+        allowed = set(indexes)
+        for item in _clean_items(_extract_json(content), len(sents),
+                                 limit=60, allowed=allowed):
             signature = (item["from"], item["to"])
             if signature in seen:
                 continue
@@ -486,6 +554,115 @@ def _ask(provider: str, sents: List[Dict[str, Any]], duration: float,
     return items
 
 
+def _calibrate_prompt(sents: List[Dict[str, Any]], items: List[Dict[str, Any]],
+                      duration: float) -> str:
+    blocks: List[str] = []
+    for rank, item in enumerate(items):
+        window = sents[item["from"]:item["to"] + 1]
+        text = " ".join(sent["text"] for sent in window)
+        if len(text) > 300:
+            text = text[:300].rstrip() + "…"
+        mood = item.get("mood") or "-"
+        types = ",".join(item.get("types") or []) or "-"
+        blocks.append(
+            f"#{rank} [{_stamp(sents[item['from']]['start'])}] "
+            f"score={float(item.get('score') or 0):.2f} mood={mood} types={types}\n{text}")
+    return (
+        f"Видео длится {_stamp(duration)}.\n"
+        f"Кандидатов: {len(items)}. Верни рейтинг для всех.\n\n"
+        + "\n\n".join(blocks)
+    )
+
+
+def _clean_ranking(payload: Any, size: int) -> List[Dict[str, Any]]:
+    """Разбор ответа финального сравнения: id из shortlist и новые score."""
+    data = payload.get("clips") if isinstance(payload, dict) else payload
+    if isinstance(data, dict):
+        data = data.get("ranking")
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for item in data:
+        if isinstance(item, int):
+            index, raw_score = item, None
+        elif isinstance(item, dict):
+            try:
+                index = int(item.get("id", item.get("index")))
+            except (TypeError, ValueError):
+                continue
+            raw_score = item.get("score")
+        else:
+            continue
+        if index < 0 or index >= size or index in seen:
+            continue
+        seen.add(index)
+        score = _maybe_float(raw_score) if raw_score is not None else -1.0
+        out.append({"id": index, "score": score})
+    return out
+
+
+def _calibrate(provider: str, sents: List[Dict[str, Any]],
+               items: List[Dict[str, Any]], duration: float,
+               opts: Dict[str, Any], workdir: Optional[Path]) -> List[Dict[str, Any]]:
+    """Общий рейтинг кандидатов одним запросом.
+
+    Оценки из разных чанков несопоставимы. Сравниваем только shortlist из
+    коротких текстов и метаданных. Любая ошибка — возвращаем исходный порядок:
+    клипы терять нельзя.
+    """
+    if len(items) < 3:
+        return items
+    shortlist = sorted(items, key=lambda item: float(item.get("score") or 0),
+                       reverse=True)[:CALIBRATE_LIMIT]
+    digest = hashlib.sha256()
+    digest.update(f"cal|v{PROMPT_VERSION}|{provider}"
+                  f"|{app_settings.model_for(provider)}".encode())
+    for item in shortlist:
+        digest.update(f"|{item['from']}-{item['to']}-{float(item.get('score') or 0):.3f}".encode())
+        digest.update(("|" + ",".join(item.get("types") or [])).encode())
+    key = digest.hexdigest()
+    path = _cache_path(workdir)
+    ranking = _cache_read(path, key)
+    if ranking is None:
+        ranking = []
+        try:
+            content, _usage = _chat(provider, [
+                {"role": "system", "content": CALIBRATE_SYSTEM_PROMPT},
+                {"role": "user", "content": _calibrate_prompt(sents, shortlist, duration)},
+            ])
+            ranking = _clean_ranking(_extract_json(content), len(shortlist))
+        except LLMError as exc:
+            if DEBUG:
+                print(f"[semantic] {provider}: сравнение не удалось: {exc}")
+            ranking = []
+        except Exception as exc:  # noqa: BLE001
+            if DEBUG:
+                print(f"[semantic] {provider}: сравнение: неожиданная ошибка: {exc}")
+            ranking = []
+        if ranking:
+            _cache_write(path, key, provider, ranking)
+    scores = {row["id"]: row["score"] for row in (ranking or [])
+              if row.get("score") is not None and float(row["score"]) >= 0}
+    if not scores:
+        return items
+    calibrated: List[Dict[str, Any]] = []
+    for rank, item in enumerate(shortlist):
+        copy = dict(item)
+        if rank in scores:
+            copy["score"] = round(float(scores[rank]), 4)
+        calibrated.append(copy)
+    short_ids = {id(item) for item in shortlist}
+    floor = min(scores.values())
+    for item in items:
+        if id(item) in short_ids:
+            continue
+        copy = dict(item)
+        copy["score"] = min(float(copy.get("score") or 0.0), floor)
+        calibrated.append(copy)
+    return calibrated
+
+
 def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
                    duration: float, opts: Dict[str, Any], curve: List[float],
                    mean_db: float, hop: float, energy_offset: float,
@@ -494,12 +671,15 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
     min_dur = float(opts.get("min_dur") or 15)
     min_score = float(opts.get("min_score") or 0.0)
     moods = [m for m in (opts.get("mood_filter") or []) if m in MOODS]
+    types_wanted = [t for t in (opts.get("type_filter") or []) if t in CONTENT_TYPES]
 
     candidates: List[Dict[str, Any]] = []
     for item in items:
         if item.get("score", 0.0) < min_score:
             continue
         if moods and item.get("mood") not in moods:
+            continue
+        if types_wanted and not set(types_wanted) & set(item.get("types") or []):
             continue
         start_i, end_i = item["from"], item["to"]
         start_i, end_i = analyze._extend_window(sents, start_i, end_i, max_dur)
@@ -531,6 +711,7 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
             "hook": title,
             "mood": item.get("mood") or "",
             "why": item.get("why") or "",
+            "content_types": list(item.get("types") or []),
             "source": provider,
         })
 
@@ -583,6 +764,7 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
             "words": words,
             "mood": cand["mood"],
             "why": cand["why"],
+            "content_types": list(cand.get("content_types") or []),
             "source": cand["source"],
         })
     return out
@@ -620,6 +802,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
             continue
         if not items:
             continue
+        items = _calibrate(provider, sents, items, duration, opts, workdir)
         found = _to_candidates(items, sents, duration, opts, curve, mean_db,
                                hop, energy_offset, provider)
         if found:

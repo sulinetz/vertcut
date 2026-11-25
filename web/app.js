@@ -446,6 +446,7 @@ const state = {
   pendingFile: null,
   pendingSubs: null,
   subsToTemplate: false,
+  clipView: { mood: "any", type: "any", sort: "chrono" },
   opts: {
     count: 10,
     dur: "20-45",
@@ -1388,6 +1389,7 @@ function openProject(id) {
     state.current = id;
     state.detail = null;
     state.mainKey = "";
+    state.clipView = { mood: "any", type: "any", sort: "chrono" };
     history.replaceState(null, "", "#" + id);
   }
   renderSidebar();
@@ -1567,10 +1569,65 @@ const MOOD_LABELS = {
   insight: "мысль", wholesome: "тёплое", intense: "жёсткое"
 };
 
+const TYPE_LABELS = {
+  story: "история", humor: "юмор", conflict: "конфликт", insight: "инсайт",
+  education: "обучение", reaction: "реакция", motivation: "мотивация",
+  provocation: "провокация", emotion: "эмоция", fact: "факт"
+};
+
+function filteredClips() {
+  const view = state.clipView || {};
+  let clips = ((state.detail && state.detail.clips) || []).slice();
+  if (view.mood && view.mood !== "any") {
+    clips = clips.filter((c) => (c.settings?.mood || "") === view.mood);
+  }
+  if (view.type && view.type !== "any") {
+    clips = clips.filter((c) => (c.settings?.content_types || []).includes(view.type));
+  }
+  if (view.sort === "score") clips.sort((a, b) => (b.score || 0) - (a.score || 0));
+  return clips;
+}
+
+function clipFilterHTML() {
+  const all = (state.detail && state.detail.clips) || [];
+  if (!all.length) return "";
+  const view = state.clipView || {};
+  return `<div class="clip-filters">
+    <label class="mini-field"><span>Настроение</span>
+      <select id="clipMoodFilter"><option value="any">Любое</option>${Object.entries(MOOD_LABELS)
+        .map(([k, v]) => `<option value="${k}" ${view.mood === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+    </label>
+    <label class="mini-field"><span>Тип</span>
+      <select id="clipTypeFilter"><option value="any">Любой</option>${Object.entries(TYPE_LABELS)
+        .map(([k, v]) => `<option value="${k}" ${view.type === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+    </label>
+    <label class="mini-field"><span>Сортировка</span>
+      <select id="clipSort"><option value="chrono" ${view.sort === "chrono" ? "selected" : ""}>Как нашлось</option>
+        <option value="score" ${view.sort === "score" ? "selected" : ""}>По оценке</option></select>
+    </label>
+  </div>`;
+}
+
+function audioPickHTML(project) {
+  const pick = (project.meta && project.meta.audio_pick) || null;
+  if (!pick || !pick.requested || pick.requested === "auto") return "";
+  if (pick.reason === "fallback") {
+    return `<div class="warn-box"><strong>Русская дорожка не найдена.</strong> Взята ${esc(pick.label || "другая дорожка")}. Распознавание и звук используют её — проверьте язык в настройках звука.</div>`;
+  }
+  if (pick.reason === "language") {
+    return `<div class="opt-hint">Звук: ${esc(pick.label || "русская дорожка")}.</div>`;
+  }
+  return "";
+}
+
 function clipsGridHTML() {
-  const clips = (state.detail && state.detail.clips) || [];
+  const clips = filteredClips();
+  const all = (state.detail && state.detail.clips) || [];
   const project = state.detail && state.detail.project;
   if (!clips.length) {
+    if (all.length) {
+      return `<div class="empty-clips">Под выбранные фильтры ничего не подошло. Сбросьте настроение или тип.</div>`;
+    }
     return `<div class="empty-clips">Клипы появятся здесь, как только будет найден первый момент…</div>`;
   }
   const cards = clips.map((c) => {
@@ -1589,7 +1646,13 @@ function clipsGridHTML() {
       .map(([k, v]) => `<span>${k} ${Math.round(v * 100)}</span>`).join("") : "";
     const moodLabel = MOOD_LABELS[c.settings?.mood] || "";
     const moodLine = moodLabel
-      ? `<span class="mood-tag" title="${esc(c.settings?.why || "")}">${moodLabel}</span>` : "";
+      ? `<span class="mood-tag" title="Настроение момента">${moodLabel}</span>` : "";
+    const typeTags = (c.settings?.content_types || [])
+      .map((k) => TYPE_LABELS[k]).filter(Boolean)
+      .map((label) => `<span class="type-tag">${label}</span>`).join("");
+    const whyLine = c.settings?.why ? `<div class="clip-why">${esc(c.settings.why)}</div>` : "";
+    const approxLine = c.settings?.timing === "approx"
+      ? `<div class="clip-warn" title="Слова взяты из готовых субтитров: время внутри реплики распределено ровно, точность ниже Whisper">тайминги субтитров приблизительные</div>` : "";
     if (c.status === "error") {
       return `<div class="clip-card${wide}">
         <div class="clip-media" style="display:grid;place-items:center;padding:16px;text-align:center">
@@ -1617,7 +1680,8 @@ function clipsGridHTML() {
       </div>
       <div class="clip-body">
         <div class="clip-title">${esc(c.title || "Без названия")}</div>
-        ${(partsLine || moodLine) ? `<div class="clip-parts">${moodLine}${partsLine}</div>` : ""}
+        ${(partsLine || moodLine || typeTags) ? `<div class="clip-parts">${moodLine}${typeTags}${partsLine}</div>` : ""}
+        ${whyLine}${approxLine}
         <div class="clip-tools">
           <a class="download-btn" href="/api/clips/${c.id}/download" download data-download-clip="${c.id}" title="Скачать MP4">
             ${ICONS.download}<span>Скачать MP4</span>
@@ -1788,8 +1852,10 @@ function resultsHTML() {
     </div>
   </div>
   ${fallbackHTML(project)}
+  ${audioPickHTML(project)}
   ${project.error ? `<div class="error-box">${esc(project.error)}</div>` : ""}
-  ${clipsGridHTML()}`;
+  ${clipFilterHTML()}
+  <div id="clipsArea">${clipsGridHTML()}</div>`;
 }
 
 function renderMain(force) {
@@ -1847,8 +1913,30 @@ function bindClips() {
       }
     });
   }
+  const applyView = () => {
+    const area = $("#clipsArea");
+    if (area) {
+      area.innerHTML = clipsGridHTML();
+      bindClipGrid();
+    }
+  };
+  const viewFields = [["clipMoodFilter", "mood"], ["clipTypeFilter", "type"], ["clipSort", "sort"]];
+  viewFields.forEach(([id, key]) => {
+    const el = $("#" + id);
+    if (!el || el.dataset.bound === "1") return;
+    el.dataset.bound = "1";
+    el.addEventListener("change", () => {
+      state.clipView = { ...(state.clipView || {}), [key]: el.value };
+      applyView();
+    });
+  });
+  bindClipGrid();
+}
+
+function bindClipGrid() {
   const grid = $("#clipsGrid");
-  if (grid) {
+  if (grid && grid.dataset.bound !== "1") {
+    grid.dataset.bound = "1";
     grid.addEventListener("pointerover", (e) => {
       const media = e.target.closest(".clip-media");
       if (!media) return;
@@ -2066,6 +2154,7 @@ function templateDefaults(project) {
     showHook: o.show_hook !== false,
     subtitles: o.subtitles !== false,
     audio: Number(o.audio_track == null ? -1 : o.audio_track),
+    audioLang: o.audio_lang || "auto",
     externalAudio: !!o.external_audio,
     externalTrack: Number(o.external_audio_track == null ? -1 : o.external_audio_track),
     audioOffset: Number(o.audio_offset || 0),
@@ -2092,6 +2181,7 @@ function templateOptions() {
     uppercase: $("#tpUpper").checked,
     show_hook: $("#tpHook").checked,
     audio_track: audioEl && audioEl.value !== "" ? Number(audioEl.value) : -1,
+    audio_lang: $("#tpAudioLang") ? $("#tpAudioLang").value : (base.audio_lang || "auto"),
     external_audio: dubUse ? !!dubUse.checked : !!base.external_audio,
     external_audio_track: dubTrack && dubTrack.value !== "" ? Number(dubTrack.value) : -1,
     audio_offset: dubOffset && dubOffset.value !== "" ? Number(dubOffset.value) : 0,
@@ -2385,6 +2475,18 @@ function openTemplate(pid) {
             <label>Дорожка звука</label>
             <select id="tpAudio"></select>
           </div>
+          <div class="field">
+            <label>Язык звука</label>
+            <select id="tpAudioLang">
+              <option value="auto">Как в источнике</option>
+              <option value="ru">Русский</option>
+              <option value="uk">Украинский</option>
+              <option value="en">Английский</option>
+              <option value="de">Немецкий</option>
+              <option value="es">Испанский</option>
+            </select>
+            <span class="opt-hint">Для нового скачивания: если у источника несколько дорожек, возьмём дорожку этого языка. Ручной выбор ниже сильнее. Старые проекты не меняются.</span>
+          </div>
           <div class="field" id="tpDubField">
             <label>Внешняя дорожка (дубляж)</label>
             <div class="dub-row">
@@ -2588,6 +2690,8 @@ async function tmplPoll() {
       state.tmplAccent = defaults.accent;
       $$("#tpAccents .swatch").forEach((b) => b.classList.toggle("active", b.dataset.val === defaults.accent));
       renderAudioTracks(project, defaults.audio);
+      const tpAudioLang = $("#tpAudioLang");
+      if (tpAudioLang) tpAudioLang.value = defaults.audioLang;
       renderDub(project);
       if (state.tmplUniq === null) {
         const o = project.options || {};
