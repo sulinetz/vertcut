@@ -1292,6 +1292,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
 
     ad_events: List[Dict[str, Any]] = []
     ad_files: Dict[str, Path] = {}
+    inserts: List[Any] = []
     if settings.get("ads_enabled", True):
         for event in settings.get("ad_events") or []:
             if not isinstance(event, dict):
@@ -1341,6 +1342,9 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             platform=settings.get("platform", platforms.DEFAULT_PLATFORM),
             bottom_reserve=(render.BAND_H if layout == "band" else 0),
             top_reserve=(render.BAND_H if layout == "band_top" else 0),
+            blackouts=[(float(item["final_start"]),
+                        float(item["final_start"]) + float(item["duration"]))
+                       for item in inserts],
         )
         ass_path = ass_dir / f"{clip['id']}.ass"
         ass_path.write_text(text, encoding="utf-8")

@@ -1,6 +1,7 @@
 """FastAPI-приложение VertCut."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import uuid
@@ -1041,6 +1042,7 @@ def clip_ad_timeline(cid: str, events: Optional[str] = None) -> Dict[str, Any]:
     span = [(0.0, max(0.1, float(clip["end"]) - float(clip["start"])))]
     segments = info["segments"] or span
     events = []
+    inserts_by_id = {str(item["event"].get("id")): item for item in info["inserts"]}
     for event in settings.get("ad_events") or []:
         if not isinstance(event, dict):
             continue
@@ -1051,8 +1053,13 @@ def clip_ad_timeline(cid: str, events: Optional[str] = None) -> Dict[str, Any]:
             continue
         base_start = timeline.remap_time(local, segments, info["speed"])
         base_end = timeline.remap_time(local + length, segments, info["speed"])
-        start = timeline.inserted_time(base_start, info["inserts"], inclusive=True)
-        end = timeline.inserted_time(base_end, info["inserts"], inclusive=False)
+        own = inserts_by_id.get(str(event.get("id"))) if event.get("kind") == "replace" else None
+        if own is not None:
+            start = own["final_start"]
+            end = round(start + own["duration"], 3)
+        else:
+            start = timeline.inserted_time(base_start, info["inserts"], inclusive=True)
+            end = timeline.inserted_time(base_end, info["inserts"], inclusive=False)
         events.append({**event, "start_final": start, "end_final": end})
     return {"base_length": info["length"], "duration": info["duration"],
             "speed": info["speed"],

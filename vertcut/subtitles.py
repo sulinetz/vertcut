@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from .utils import ass_time
 
@@ -417,7 +417,8 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               font: str = "montserrat",
               position: str = "bottom", offset: int = 0,
               speed: str = "calm", platform: str = "", bottom_reserve: int = 0,
-              line_gap: int = 0, top_reserve: int = 0) -> str:
+              line_gap: int = 0, top_reserve: int = 0,
+              blackouts: Optional[List[Tuple[float, float]]] = None) -> str:
     """Собирает ASS-файл для фрагмента. Тайминги слов абсолютные (от начала видео)."""
     accent_color = ACCENTS.get(accent, ACCENTS["yellow"])
     info = font_info(font)
@@ -500,6 +501,26 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
             nxt = max(start + 0.3, float(cues[index + 1][0]["start"]) - 0.02)
             end = min(end, nxt)
         timed.append((cue, start, end))
+
+    # Вставки рекламы: субтитры не должны висеть над рекламой даже с hold.
+    if blackouts:
+        clipped: List[Any] = []
+        for cue, cue_start, cue_end in timed:
+            pieces = [(cue_start, cue_end)]
+            for b_start, b_end in blackouts:
+                next_pieces = []
+                for a, b in pieces:
+                    if b <= b_start or a >= b_end:
+                        next_pieces.append((a, b))
+                        continue
+                    if a < b_start:
+                        next_pieces.append((a, min(b, b_start)))
+                    if b > b_end:
+                        next_pieces.append((max(a, b_end), b))
+                pieces = next_pieces
+            if pieces:
+                clipped.append((cue, pieces[0][0], pieces[0][1]))
+        timed = clipped
 
     fade_in, fade_out = preset["fade"]
     for cue, cue_start, cue_end in timed:

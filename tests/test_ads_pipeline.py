@@ -28,6 +28,7 @@ def test_render_one_shifts_subtitles_and_passes_files(tmp_path: Path):
         captured["words"] = [dict(word) for word in words]
         captured["start"] = start
         captured["end"] = end
+        captured["blackouts"] = kwargs.get("blackouts")
         return "[Script Info]\n"
 
     def render(_source, _start, _end, out, **kwargs):
@@ -51,6 +52,7 @@ def test_render_one_shifts_subtitles_and_passes_files(tmp_path: Path):
     assert words["после"]["start"] == 108.0
     assert captured["render"]["ad_events"][0]["asset"] == "ad1"
     assert captured["render"]["ad_files"]["ad1"] == asset
+    assert captured["blackouts"] == [(4.0, 6.0)]
 
 
 def test_disabled_ads_are_not_passed(tmp_path: Path):
