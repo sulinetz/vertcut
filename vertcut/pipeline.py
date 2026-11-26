@@ -11,8 +11,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import (ads, analyze, app_settings, db, downloader, platforms, reframe, render,
-               semantic, subtitles, timeline, transcribe, utils)
+from . import (ads, analyze, app_settings, composition, db, downloader, platforms,
+               reframe, render, semantic, subtitles, timeline, transcribe, utils)
 from .errors import Cancelled
 from .config import PROJECTS_DIR
 
@@ -103,22 +103,8 @@ CLIP_SETTING_KEYS = (
     "audio_track", "external_audio", "external_audio_track", "audio_offset",
 )
 
-_TRUE = {"1", "true", "yes", "on", "да", "y", "t"}
-_FALSE = {"0", "false", "no", "off", "нет", "n", "f", ""}
-
-
-def _as_bool(value: Any, default: bool = False) -> bool:
-    """bool("false") — это True; для настроек из JSON/форм нужен явный разбор."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = str(value if value is not None else "").strip().lower()
-    if text in _TRUE:
-        return True
-    if text in _FALSE:
-        return False
-    return bool(default)
+# Разбор да/нет живёт в composition: один код для проекта, редактора и API.
+_as_bool = composition.as_bool
 
 
 def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -127,34 +113,26 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         for key, value in raw.items():
             if value is not None:
                 opts[key] = value
+
+    # Простые диапазоны и перечисления берём из composition, чтобы проект,
+    # редактор клипа и API не расходились в границах. Сложные правила
+    # (длительности, имена файлов, фильтры) остаются ниже.
+    special = {"sub_position", "bg_video", "adhd_bg", "sub_font", "ad_events"}
+    opts.update(composition.apply({
+        key: opts.get(key) for key in composition.EDITABLE
+        if key in opts and key not in special
+    }))
+
     try:
-        opts["count"] = int(opts["count"])
-    except Exception:
-        opts["count"] = 10
-    opts["count"] = max(0, min(200, opts["count"]))
+        opts["count"] = max(0, min(200, int(opts.get("count") or 0)))
+    except (TypeError, ValueError):
+        opts["count"] = 0
     try:
         opts["min_dur"] = max(8, min(120, int(opts["min_dur"])))
         opts["max_dur"] = max(opts["min_dur"] + 5, min(180, int(opts["max_dur"])))
         opts["target_dur"] = max(opts["min_dur"], min(opts["max_dur"], int(opts["target_dur"])))
-    except Exception:
+    except (TypeError, ValueError):
         opts.update({"min_dur": 15, "max_dur": 60, "target_dur": 32})
-    if opts["aspect"] not in render.ASPECTS:
-        opts["aspect"] = "9:16"
-    if opts["mode"] not in ("auto", "blur", "crop"):
-        opts["mode"] = "auto"
-    if opts["accent"] not in subtitles.ACCENTS:
-        opts["accent"] = "yellow"
-    try:
-        raw_size = opts.get("sub_size", 118)
-        # Мастер одно время сохранял сюда false вместо числа.
-        if isinstance(raw_size, bool):
-            raw_size = 118
-        size = int(raw_size)
-        if size < 70:
-            size = 70
-        opts["sub_size"] = max(70, min(180, size))
-    except Exception:
-        opts["sub_size"] = 118
     if not subtitles.font_exists(opts.get("sub_font") or ""):
         opts["sub_font"] = "montserrat"
     if opts.get("sub_position") not in subtitles.POSITIONS:
@@ -162,48 +140,7 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if (opts.get("layout") == "adhd" and (raw or {}).get("sub_position") is None
             and (raw or {}).get("layout") == "adhd"):
         opts["sub_position"] = "middle"
-    if opts.get("sub_speed") not in subtitles.SPEEDS:
-        opts["sub_speed"] = "calm"
-    opts["keep_fps"] = _as_bool(opts.get("keep_fps", True), True)
-    opts["export_subs"] = _as_bool(opts.get("export_subs", False), False)
-    opts["subtitles"] = _as_bool(opts.get("subtitles", True), True)
-    opts["uppercase"] = _as_bool(opts.get("uppercase", True), True)
-    opts["show_hook"] = _as_bool(opts.get("show_hook", True), True)
-    if opts.get("look") not in ("none", "warm", "cool", "contrast", "cinematic", "soft"):
-        opts["look"] = "none"
-    opts["vignette"] = _as_bool(opts.get("vignette", False), False)
-    opts["grain"] = _as_bool(opts.get("grain", False), False)
-    try:
-        opts["zoom"] = max(100, min(120, int(opts.get("zoom", 100))))
-    except (TypeError, ValueError):
-        opts["zoom"] = 100
-    try:
-        opts["bitrate"] = max(0, min(40, int(opts.get("bitrate", 0))))
-    except (TypeError, ValueError):
-        opts["bitrate"] = 0
-    try:
-        opts["music_volume"] = max(0, min(50, int(opts.get("music_volume", 8))))
-    except (TypeError, ValueError):
-        opts["music_volume"] = 8
-    opts["hflip"] = _as_bool(opts.get("hflip", False), False)
-    opts["jump_cuts"] = _as_bool(opts.get("jump_cuts", False), False)
-    opts["cut_zoom"] = _as_bool(opts.get("cut_zoom", False), False)
-    try:
-        opts["tilt"] = max(0.0, min(3.0, round(float(opts.get("tilt", 0.0) or 0.0), 2)))
-    except (TypeError, ValueError):
-        opts["tilt"] = 0.0
-    try:
-        opts["speed"] = max(1.0, min(1.1, round(float(opts.get("speed", 1.0) or 1.0), 3)))
-    except (TypeError, ValueError):
-        opts["speed"] = 1.0
-    try:
-        opts["pitch"] = max(0.95, min(1.05, round(float(opts.get("pitch", 1.0) or 1.0), 3)))
-    except (TypeError, ValueError):
-        opts["pitch"] = 1.0
-    try:
-        opts["split_ratio"] = max(0.25, min(0.85, round(float(opts.get("split_ratio", 0.5) or 0.5), 2)))
-    except (TypeError, ValueError):
-        opts["split_ratio"] = 0.5
+
     bg = str(opts.get("bg_video") or "random").strip()
     if not bg or "/" in bg or "\\" in bg or ".." in bg:
         bg = "random"
@@ -212,34 +149,9 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if adhd_bg and ("/" in adhd_bg or "\\" in adhd_bg or ".." in adhd_bg):
         adhd_bg = ""
     opts["adhd_bg"] = adhd_bg
-    for key in ("adhd_top_fill", "adhd_bottom_fill"):
-        if opts.get(key) not in render.ADHD_FILLS:
-            opts[key] = "cover"
-    for key, (low, high, default) in {
-        "adhd_top_scale": (0.5, 2.0, 1.0),
-        "adhd_bottom_scale": (0.5, 2.0, 1.0),
-        "adhd_top_offset_x": (-0.5, 0.5, 0.0),
-        "adhd_top_offset_y": (-0.5, 0.5, 0.0),
-        "adhd_bottom_offset_x": (-0.5, 0.5, 0.0),
-        "adhd_bottom_offset_y": (-0.5, 0.5, 0.0),
-        "adhd_bottom_speed": (0.25, 4.0, 1.0),
-        "adhd_bottom_start": (-1.0, 7200.0, -1.0),
-        "adhd_bottom_volume": (0.0, 50.0, 0.0),
-    }.items():
-        try:
-            opts[key] = round(max(low, min(high, float(opts.get(key, default)))), 3)
-        except (TypeError, ValueError):
-            opts[key] = default
-    opts["ads_enabled"] = _as_bool(opts.get("ads_enabled", True), True)
+
     opts["ad_events"] = ads.normalize_events(opts.get("ad_events"))
-    try:
-        opts["line_gap"] = max(0, min(120, int(opts.get("line_gap", 0))))
-    except (TypeError, ValueError):
-        opts["line_gap"] = 0
-    if not platforms.is_known(opts.get("platform")):
-        opts["platform"] = platforms.DEFAULT_PLATFORM
-    if opts.get("layout") not in ("", *render.STREAM_LAYOUTS, "adhd"):
-        opts["layout"] = ""
+
     if opts.get("select") not in ("smart", "even"):
         opts["select"] = "smart"
     if opts.get("picker") not in semantic.PICKERS:
@@ -269,37 +181,21 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["subtitle_track"] = max(-1, min(64, int(opts.get("subtitle_track", -1))))
     except (TypeError, ValueError):
         opts["subtitle_track"] = -1
-    try:
-        opts["audio_track"] = max(-1, min(64, int(opts.get("audio_track", -1))))
-    except (TypeError, ValueError):
-        opts["audio_track"] = -1
     raw_lang = str(opts.get("audio_lang") or "auto").strip().lower()
     if raw_lang in ("", "auto", "none"):
         opts["audio_lang"] = "auto"
     else:
         code = utils.normalize_language(raw_lang)
         opts["audio_lang"] = code if re.fullmatch(r"[a-z]{2,3}", code or "") else "auto"
-    try:
-        opts["external_audio_track"] = max(-1, min(64, int(opts.get("external_audio_track", -1))))
-    except (TypeError, ValueError):
-        opts["external_audio_track"] = -1
-    try:
-        opts["audio_offset"] = round(max(-300.0, min(300.0, float(opts.get("audio_offset", 0.0) or 0.0))), 2)
-    except (TypeError, ValueError):
-        opts["audio_offset"] = 0.0
-    opts["external_audio"] = _as_bool(opts.get("external_audio", False), False)
     if opts.get("export_order") not in ("chrono", "score"):
         opts["export_order"] = "chrono"
     try:
-        opts["sub_offset"] = max(-1600, min(1600, int(opts.get("sub_offset", 0))))
-    except Exception:
-        opts["sub_offset"] = 0
-    try:
         mh = int(opts.get("max_height", 1080))
-    except Exception:
+    except (TypeError, ValueError):
         mh = 1080
     opts["max_height"] = mh if mh in (2160, 1440, 1080, 720, 480, 360) else 1080
     opts["segments"] = _as_bool(opts.get("segments"), False)
+    opts["keep_fps"] = _as_bool(opts.get("keep_fps", True), True)
     opts["force_hd"] = _as_bool(opts.get("force_hd"), False)
     raw_profile = str(opts.get("asr_profile") or "").strip().lower()
     opts["asr_profile"] = raw_profile if raw_profile in transcribe.ASR_PROFILES else ""
@@ -1270,14 +1166,7 @@ def clip_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, A
 def ad_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, Any]:
     """Базовая шкала клипа и вставки рекламы для интерфейса и рендера."""
     tl = clip_timeline(clip, settings)
-    span = [(0.0, max(0.1, float(clip["end"]) - float(clip["start"])))]
-    events = [event for event in (settings.get("ad_events") or [])
-              if isinstance(event, dict)]
-    local = [{**event,
-              "start": max(0.0, float(event.get("start") or 0.0) - float(clip["start"]))}
-             for event in events if event.get("kind") == "replace"]
-    plan = timeline.insert_spans(tl["segments"] or span, local,
-                                 speed=tl["speed"], duration=tl["length"])
+    plan = composition.ad_inserts(clip, settings, tl)
     return {"base": float(tl["base"]), "length": float(tl["length"]),
             "speed": float(tl["speed"]), "segments": tl["segments"],
             "inserts": plan["inserts"], "duration": plan["duration"]}
@@ -1319,22 +1208,10 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
                 ad_files[asset] = path
                 ad_events.append(event)
     if ad_events:
-        source_span = [(0.0, float(clip["end"]) - float(clip["start"]))]
-        local_events = [{**event,
-                         "start": max(0.0, float(event.get("start") or 0.0) - float(clip["start"]))}
-                        for event in ad_events if event.get("kind") == "replace"]
-        plan = timeline.insert_spans(segs or source_span, local_events,
-                                     speed=tl["speed"], duration=ass_len)
+        plan = composition.ad_inserts(clip, settings, tl, ad_events)
         inserts = plan["inserts"]
         if inserts:
-            relative = [{**word,
-                         "start": float(word["start"]) - ass_base,
-                         "end": float(word["end"]) - ass_base}
-                        for word in words]
-            shifted = timeline.insert_words(relative, inserts)
-            words = [{**word, "start": round(float(word["start"]) + ass_base, 3),
-                      "end": round(float(word["end"]) + ass_base, 3)}
-                     for word in shifted]
+            words = timeline.rebase_insert_words(words, ass_base, inserts)
             ass_len = plan["duration"]
             out_duration = plan["duration"]
 

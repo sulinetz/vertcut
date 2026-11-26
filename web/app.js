@@ -4,6 +4,39 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+/* Схема композиции: единые границы настроек с сервером. */
+let compositionSchema = null;
+
+async function loadCompositionSchema() {
+  try {
+    compositionSchema = await api("/api/composition/schema");
+  } catch (_) {
+    compositionSchema = null;
+  }
+  window.VCComposition = compositionSchema;
+  applyCompositionSchema(document);
+}
+
+function applyCompositionSchema(root) {
+  if (!compositionSchema) return;
+  const byKey = {};
+  (compositionSchema.settings || []).forEach((item) => { byKey[item.key] = item; });
+  $$("[data-schema]", root || document).forEach((el) => {
+    const item = byKey[el.dataset.schema];
+    if (!item) return;
+    const scale = Number(el.dataset.schemaScale || 1) || 1;
+    if (item.min != null) el.min = String(item.min * scale);
+    if (item.max != null) el.max = String(item.max * scale);
+    if (item.step != null) el.step = String(item.step * scale);
+    if (item.hint && !el.title) el.title = item.hint;
+    const label = item.label || el.dataset.schema;
+    el.setAttribute("aria-label", label);
+  });
+}
+
+window.VCApplySchema = () => applyCompositionSchema(document);
+window.VCLoadSchema = loadCompositionSchema;
+
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -819,7 +852,7 @@ function heroHTML() {
           </label>
           <label class="mini-field grow">
             <span>Размер <b id="sizeVal">${o.subSize}</b></span>
-            <input type="range" id="sizeRange" min="70" max="180" step="2" value="${o.subSize}" />
+            <input type="range" id="sizeRange" data-schema="sub_size" min="70" max="180" step="2" value="${o.subSize}" />
           </label>
           <label class="mini-field">
             <span>Положение</span>
@@ -840,7 +873,7 @@ function heroHTML() {
           </label>
           <label class="mini-field grow">
             <span>Межстрочный интервал <b id="lineGapVal">${o.lineGap}</b></span>
-            <input type="range" id="lineGapRange" min="0" max="80" step="2" value="${o.lineGap}" />
+            <input type="range" id="lineGapRange" data-schema="line_gap" min="0" max="80" step="2" value="${o.lineGap}" />
           </label>
           <label class="mini-field">
             <span>Темп</span>
@@ -867,7 +900,7 @@ function heroHTML() {
           </label>
           <label class="mini-field grow">
             <span>Зум <b id="zoomVal">100</b>%</span>
-            <input type="range" id="zoomRange" min="100" max="115" step="1" value="100" />
+            <input type="range" id="zoomRange" data-schema="zoom" min="100" max="115" step="1" value="100" />
           </label>
           <label class="mini-field">
             <span>Битрейт</span>
@@ -882,7 +915,7 @@ function heroHTML() {
           <label class="toggle"><input type="checkbox" id="grainToggle" /><span class="track"></span><span>Зерно</span></label>
           <label class="mini-field grow">
             <span>Музыка <b id="musicVal">8</b>%</span>
-            <input type="range" id="musicRange" min="0" max="30" step="1" value="8" />
+            <input type="range" id="musicRange" data-schema="music_volume" min="0" max="30" step="1" value="8" />
           </label>
           <button type="button" class="link-btn" id="musicBtn">приложить музыку</button>
           <span id="pendingMusic" class="pending-file hidden"></span>
@@ -898,13 +931,13 @@ function heroHTML() {
           <label class="toggle"><input type="checkbox" id="jumpCutsToggle" /><span class="track"></span><span>Склейки пауз</span></label>
           <label class="toggle"><input type="checkbox" id="cutZoomToggle" /><span class="track"></span><span>Зум на склейках</span></label>
           <label class="mini-field"><span>Наклон <b id="tiltVal">0</b>°</span>
-            <input type="range" id="tiltRange" min="0" max="3" step="0.5" value="0" />
+            <input type="range" id="tiltRange" data-schema="tilt" min="0" max="3" step="0.5" value="0" />
           </label>
           <label class="mini-field"><span>Скорость <b id="speedVal">1.00</b>×</span>
-            <input type="range" id="speedRange" min="1" max="1.1" step="0.01" value="1" />
+            <input type="range" id="speedRange" data-schema="speed" min="1" max="1.1" step="0.01" value="1" />
           </label>
           <label class="mini-field"><span>Питч <b id="pitchVal">1.00</b>×</span>
-            <input type="range" id="pitchRange" min="0.95" max="1.05" step="0.01" value="1" />
+            <input type="range" id="pitchRange" data-schema="pitch" min="0.95" max="1.05" step="0.01" value="1" />
           </label>
           <span class="opt-hint">Склейки вырезают паузы длиннее 0.5 с и пересчитывают субтитры. Скорость и питч меняют темп; наклон 0–3° без чёрных углов. Всё по умолчанию выключено.</span>
         </div>
@@ -3063,16 +3096,16 @@ function openEditor(clipId) {
               <select id="edBottomFill"><option value="cover" ${s.adhd_bottom_fill !== "contain" ? "selected" : ""}>Заполнить</option><option value="contain" ${s.adhd_bottom_fill === "contain" ? "selected" : ""}>Вписать целиком</option></select>
             </div>
             <div class="field"><label>Верх: масштаб <b id="edTopScaleVal">${Math.round(Number(s.adhd_top_scale || 1) * 100)}</b>%</label>
-              <input type="range" id="edTopScale" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_top_scale || 1) * 100)}" />
+              <input type="range" id="edTopScale" data-schema="adhd_top_scale" data-schema-scale="100" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_top_scale || 1) * 100)}" />
             </div>
             <div class="field"><label>Низ: масштаб <b id="edBottomScaleVal">${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}</b>%</label>
-              <input type="range" id="edBottomScale" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}" />
+              <input type="range" id="edBottomScale" data-schema="adhd_bottom_scale" data-schema-scale="100" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}" />
             </div>
             <div class="field"><label>Низ: скорость <b id="edBottomSpeedVal">${Number(s.adhd_bottom_speed || 1).toFixed(2)}</b>×</label>
-              <input type="range" id="edBottomSpeed" min="25" max="400" step="5" value="${Math.round(Number(s.adhd_bottom_speed || 1) * 100)}" />
+              <input type="range" id="edBottomSpeed" data-schema="adhd_bottom_speed" data-schema-scale="100" min="25" max="400" step="5" value="${Math.round(Number(s.adhd_bottom_speed || 1) * 100)}" />
             </div>
             <div class="field"><label>Низ: звук <b id="edBottomVolumeVal">${Math.round(Number(s.adhd_bottom_volume || 0))}</b>%</label>
-              <input type="range" id="edBottomVolume" min="0" max="50" step="1" value="${Math.round(Number(s.adhd_bottom_volume || 0))}" />
+              <input type="range" id="edBottomVolume" data-schema="adhd_bottom_volume" min="0" max="50" step="1" value="${Math.round(Number(s.adhd_bottom_volume || 0))}" />
             </div>
           </div>
           <div class="opt wide" id="edAdsBlock">
@@ -3082,6 +3115,7 @@ function openEditor(clipId) {
             <div class="ad-add-row">
               <button type="button" class="link-btn" id="edAdUpload">+ файл</button>
               <input type="file" id="edAdInput" class="hidden" accept="image/*,video/mp4,video/webm,video/quicktime"/>
+              <div class="layers-row" id="edLayers" title="Порядок слоёв снизу вверх"></div>
               <input type="text" id="edAdText" maxlength="300" placeholder="Текст плашки или промокод" />
               <button type="button" class="link-btn" id="edAdTextAdd">добавить текст</button>
             </div>
@@ -3133,15 +3167,15 @@ function openEditor(clipId) {
           <div class="row2">
             <div class="field">
               <label>Размер <b id="edSizeVal">${fontSize}</b></label>
-              <input type="range" id="edSize" min="70" max="180" step="2" value="${fontSize}" />
+              <input type="range" id="edSize" data-schema="sub_size" min="70" max="180" step="2" value="${fontSize}" />
             </div>
             <div class="field">
               <label title="Двигает субтитры по всей высоте кадра: от низа до верха">Сдвиг по вертикали <b id="edOffVal">${fontOffset}</b></label>
-              <input type="range" id="edOffset" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${fontOffset}" />
+              <input type="range" id="edOffset" data-schema="sub_offset" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${fontOffset}" />
             </div>
             <div class="field">
               <label>Межстрочный интервал <b id="edLineGapVal">${Number(s.line_gap || 0)}</b></label>
-              <input type="range" id="edLineGap" min="0" max="80" step="2" value="${Number(s.line_gap || 0)}" />
+              <input type="range" id="edLineGap" data-schema="line_gap" min="0" max="80" step="2" value="${Number(s.line_gap || 0)}" />
             </div>
           </div>
           <div class="field">
@@ -3167,15 +3201,15 @@ function openEditor(clipId) {
           <div class="row2">
             <div class="field">
               <label>Наклон <b id="edTiltVal">${Number(s.tilt || 0)}</b>°</label>
-              <input type="range" id="edTilt" min="0" max="3" step="0.5" value="${Number(s.tilt || 0)}" />
+              <input type="range" id="edTilt" data-schema="tilt" min="0" max="3" step="0.5" value="${Number(s.tilt || 0)}" />
             </div>
             <div class="field">
               <label>Скорость <b id="edSpeedRVal">${Number(s.speed || 1).toFixed(2)}</b>×</label>
-              <input type="range" id="edSpeedR" min="1" max="1.1" step="0.01" value="${Number(s.speed || 1)}" />
+              <input type="range" id="edSpeedR" data-schema="speed" min="1" max="1.1" step="0.01" value="${Number(s.speed || 1)}" />
             </div>
             <div class="field">
               <label>Питч <b id="edPitchVal">${Number(s.pitch || 1).toFixed(2)}</b>×</label>
-              <input type="range" id="edPitch" min="0.95" max="1.05" step="0.01" value="${Number(s.pitch || 1)}" />
+              <input type="range" id="edPitch" data-schema="pitch" min="0.95" max="1.05" step="0.01" value="${Number(s.pitch || 1)}" />
             </div>
           </div>
           <div class="field">
@@ -3579,10 +3613,18 @@ function openEditor(clipId) {
       toast("Плашка добавлена");
     } catch (err) { toast(err.message, "err"); }
   });
+  const renderLayerChips = (items) => {
+    const box = $("#edLayers");
+    if (!box) return;
+    box.innerHTML = (items || []).map((layer) =>
+      `<span class="layer-chip ${layer.active ? "on" : ""}" title="${esc(layer.title)}${layer.kind === "audio" ? " · звук" : ""}">${esc(layer.title)}</span>`).join("");
+  };
+  api(`/api/clips/${clip.id}/composition`).then((data) => renderLayerChips(data.layers)).catch(() => {});
   refreshAdTimeline();
   window.addEventListener("resize", () => { drawFrame(); updateEditorPreview(); });
   setTimeout(() => { updateEditorPreview(); seekSource(); }, 60);
 
+  applyCompositionSchema($("#modal"));
   $("#edSize").addEventListener("input", (e) => { $("#edSizeVal").textContent = e.target.value; });
   $("#edFont").addEventListener("change", () => {
     const sample = $("#edFontSample");
@@ -3949,6 +3991,7 @@ function renderSystem(data) {
 }
 
 async function checkHealth() {
+  loadCompositionSchema();
   try {
     const h = await api("/api/health");
     state.health = h;

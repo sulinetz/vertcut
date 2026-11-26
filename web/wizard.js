@@ -173,6 +173,7 @@
     if (wizard.step === 3) { body.innerHTML = stepSubs(project); bindSubs(); }
     if (wizard.step === 4) { body.innerHTML = stepCount(project); bindCount(); }
     bindSource(project);
+    if (window.VCApplySchema) window.VCApplySchema();
   }
 
   const progress = (project) => `
@@ -343,8 +344,8 @@
                 <option value="cover">Заполнить</option><option value="contain" ${wizard.opts.adhd_bottom_fill === "contain" ? "selected" : ""}>Вписать</option></select></label>
             </div>
             <div class="row2">
-              <label class="mini-field"><span>Низ: скорость <b id="wzBottomSpeedVal">${Number(wizard.opts.adhd_bottom_speed).toFixed(2)}</b>×</span><input type="range" id="wzBottomSpeed" min="25" max="400" step="5" value="${Math.round(wizard.opts.adhd_bottom_speed * 100)}"/></label>
-              <label class="mini-field"><span>Низ: звук <b id="wzBottomVolumeVal">${Math.round(wizard.opts.adhd_bottom_volume)}</b>%</span><input type="range" id="wzBottomVolume" min="0" max="50" step="1" value="${Math.round(wizard.opts.adhd_bottom_volume)}"/></label>
+              <label class="mini-field"><span>Низ: скорость <b id="wzBottomSpeedVal">${Number(wizard.opts.adhd_bottom_speed).toFixed(2)}</b>×</span><input type="range" id="wzBottomSpeed" data-schema="adhd_bottom_speed" data-schema-scale="100" min="25" max="400" step="5" value="${Math.round(wizard.opts.adhd_bottom_speed * 100)}"/></label>
+              <label class="mini-field"><span>Низ: звук <b id="wzBottomVolumeVal">${Math.round(wizard.opts.adhd_bottom_volume)}</b>%</span><input type="range" id="wzBottomVolume" data-schema="adhd_bottom_volume" min="0" max="50" step="1" value="${Math.round(wizard.opts.adhd_bottom_volume)}"/></label>
             </div>
             <label class="mini-field"><span>Нижний ролик из библиотеки</span>
               <select id="wzAdhdBg"><option value="">Случайный</option></select></label>
@@ -583,10 +584,10 @@
             <div class="swatches" id="wzAccents">${swatchesHTML(wizard.opts.accent)}</div>
           </div>
           <div class="wz-block">
-            <label class="mini-field"><span>Размер <b id="wzSizeVal">${wizard.opts.sub_size}</b></span><input type="range" id="wzSize" min="70" max="180" step="2" value="${wizard.opts.sub_size}"/></label>
+            <label class="mini-field"><span>Размер <b id="wzSizeVal">${wizard.opts.sub_size}</b></span><input type="range" id="wzSize" data-schema="sub_size" min="70" max="180" step="2" value="${wizard.opts.sub_size}"/></label>
             <label class="mini-field"><span>Положение</span><select id="wzPos">${SUB_POSITIONS.map(([k, l]) => `<option value="${k}" ${wizard.opts.sub_position === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-            <label class="mini-field"><span>Сдвиг по вертикали <b id="wzOffVal">${wizard.opts.sub_offset}</b></span><input type="range" id="wzOff" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${wizard.opts.sub_offset}"/></label>
-            <label class="mini-field"><span>Межстрочный интервал <b id="wzGapVal">${wizard.opts.line_gap}</b></span><input type="range" id="wzGap" min="0" max="80" step="2" value="${wizard.opts.line_gap}"/></label>
+            <label class="mini-field"><span>Сдвиг по вертикали <b id="wzOffVal">${wizard.opts.sub_offset}</b></span><input type="range" id="wzOff" data-schema="sub_offset" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${wizard.opts.sub_offset}"/></label>
+            <label class="mini-field"><span>Межстрочный интервал <b id="wzGapVal">${wizard.opts.line_gap}</b></span><input type="range" id="wzGap" data-schema="line_gap" min="0" max="80" step="2" value="${wizard.opts.line_gap}"/></label>
             <label class="mini-field"><span>Темп</span><select id="wzSpeedSel">${SUB_SPEEDS.map(([k, l]) => `<option value="${k}" ${wizard.opts.sub_speed === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
             <label class="toggle"><input type="checkbox" id="wzExport" ${wizard.opts.export_subs ? "checked" : ""}/><span class="track"></span><span>Файлы субтитров отдельно</span></label>
           </div>

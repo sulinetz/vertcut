@@ -442,3 +442,42 @@ def dub_pieces(segments: Sequence[Span], offset: float = 0.0,
         if tail > 0.03:
             out.append({"audio": False, "duration": round(tail, 3)})
     return out
+
+
+def event_window(local_start: float, local_end: float, *,
+                 segments: Optional[Sequence[Span]], speed: float,
+                 inserts: Sequence[Dict[str, Any]],
+                 duration: float) -> Tuple[float, float]:
+    """Окно события в финальной шкале клипа (после склеек и вставок).
+
+    Одна формула для рендера и для интерфейса: таймлайн рекламы в редакторе
+    обязан совпадать с тем, что реально попадёт в файл.
+    """
+    span = list(segments or [(0.0, max(0.1, float(local_end)))])
+    base_start = remap_time(local_start, span, speed)
+    base_end = remap_time(local_end, span, speed)
+    start = inserted_time(base_start, inserts, inclusive=True)
+    end = min(float(duration), inserted_time(base_end, inserts, inclusive=False))
+    return start, end
+
+
+def insert_window(insert: Dict[str, Any]) -> Tuple[float, float]:
+    """Вставка живёт в финальной шкале ровно свою длину."""
+    start = float(insert.get("final_start") or 0.0)
+    return start, start + float(insert.get("duration") or 0.0)
+
+
+def rebase_insert_words(words: Sequence[Dict[str, Any]], base: float,
+                        inserts: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Слова с абсолютной шкалой -> сдвинутые на вставки (снова абсолютные)."""
+    if not inserts:
+        return list(words)
+    relative = [{**word,
+                 "start": float(word["start"]) - base,
+                 "end": float(word["end"]) - base}
+                for word in words]
+    shifted = insert_words(relative, inserts)
+    return [{**word,
+             "start": round(float(word["start"]) + base, 3),
+             "end": round(float(word["end"]) + base, 3)}
+            for word in shifted]

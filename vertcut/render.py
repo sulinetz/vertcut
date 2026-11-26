@@ -18,8 +18,8 @@ from .config import (ADHD_SPLIT_BACKEND_MAX, ADHD_SPLIT_BACKEND_MIN,
 from . import custom_fonts
 from .errors import Cancelled
 from .reframe import crop_expressions
-from .timeline import (dub_pieces, inserted_time, insert_spans, remap_time,
-                       offsets as timeline_offsets)
+from .timeline import (dub_pieces, event_window, inserted_time, insert_spans,
+                       remap_time, offsets as timeline_offsets)
 from .utils import MediaError, probe, probe_audio, run, subprocess_kwargs
 
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}
@@ -754,11 +754,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 continue
             local_start = max(0.0, float(event.get("start") or 0.0) - clip_start)
             local_end = local_start + max(0.2, float(event.get("duration") or 1.0))
-            base_segments = segs or [(0.0, src_dur)]
-            base_start = remap_time(local_start, base_segments, speed)
-            base_end = remap_time(local_end, base_segments, speed)
-            start = inserted_time(base_start, inserts, inclusive=True)
-            end = min(duration, inserted_time(base_end, inserts, inclusive=False))
+            start, end = event_window(local_start, local_end, segments=segs,
+                                      speed=speed, inserts=inserts,
+                                      duration=duration)
             span = end - start
             if span < 0.05:
                 continue

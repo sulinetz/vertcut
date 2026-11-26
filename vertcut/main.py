@@ -15,8 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import (ads, app_settings, custom_fonts, db, jobs, pipeline, semantic,
-               transcribe)
+from . import (ads, app_settings, composition, custom_fonts, db, jobs, pipeline,
+               semantic, transcribe)
 from ._version import __version__
 from .config import (ADHD_SPLIT_BACKEND_MIN, ADHD_SPLIT_UI_MAX, ADHD_SPLIT_UI_MIN,
                      ASSETS_DIR, DATA_DIR, PROJECTS_DIR, WEB_DIR, ffmpeg)
@@ -228,69 +228,35 @@ async def _static_cache_headers(request, call_next):
 
 
 def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
-    """Проверяет правку клипа до постановки в очередь: 400 вместо «клип упал».
+    """Проверка правок клипа из редактора: 400 вместо «тихо упало».
 
-    Раньше значения уезжали в фоновую задачу, и клип молча переходил в error.
+    Диапазоны, перечисления и да/нет берутся из ``composition`` — там же, где
+    их проверяет проект. Иначе редактор и API жили бы с разными границами.
     """
-    from . import platforms, render, subtitles
+    from . import ads, composition
 
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     allowed = {"text", "start", "end", "hook", "title", "caption", "focus_x"}
     allowed |= set(pipeline.CLIP_SETTING_KEYS)
     data = {k: v for k, v in data.items() if k in allowed}
-    if "aspect" in data and data["aspect"] not in render.ASPECTS:
-        raise HTTPException(400, "Неизвестный формат кадра")
-    if "mode" in data and data["mode"] not in ("auto", "blur", "crop"):
-        raise HTTPException(400, "Неизвестный режим кадрирования")
-    if "accent" in data and data["accent"] not in subtitles.ACCENTS:
-        raise HTTPException(400, "Неизвестный цвет акцента")
-    if "sub_position" in data and data["sub_position"] not in subtitles.POSITIONS:
-        raise HTTPException(400, "Неизвестное положение субтитров")
-    if "sub_speed" in data and data["sub_speed"] not in subtitles.SPEEDS:
-        raise HTTPException(400, "Неизвестная скорость субтитров")
-    if "platform" in data and not platforms.is_known(data["platform"]):
-        raise HTTPException(400, "Неизвестная площадка")
-    if "layout" in data:
-        from . import render as _render
-        if data["layout"] not in ("", *_render.STREAM_LAYOUTS, "adhd"):
-            raise HTTPException(400, "Неизвестный пресет кадра")
-    if "sub_font" in data and not subtitles.font_exists(data["sub_font"]):
-        raise HTTPException(400, "Шрифт не найден")
-    if "sub_size" in data:
+
+    special = {"text", "start", "end", "hook", "title", "caption", "focus_x",
+               "bg_video", "adhd_bg", "sub_font", "ad_events"}
+    for key in list(data):
+        if key in special:
+            continue
+        if key not in composition.SPEC:
+            data.pop(key)
+            continue
         try:
-            data["sub_size"] = max(70, min(180, int(data["sub_size"])))
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Некорректный размер субтитров") from None
-    if "look" in data and data["look"] not in ("none", "warm", "cool", "contrast", "cinematic", "soft"):
-        raise HTTPException(400, "Неизвестный цветовой пресет")
-    for key, low, high in (("zoom", 100, 120), ("bitrate", 0, 40), ("music_volume", 0, 50)):
-        if key in data:
-            try:
-                data[key] = max(low, min(high, int(data[key])))
-            except (TypeError, ValueError):
-                raise HTTPException(400, "Некорректное значение") from None
-    for key, low, high in (("speed", 1.0, 1.1), ("pitch", 0.95, 1.05),
-                           ("tilt", 0.0, 3.0), ("split_ratio", 0.25, 0.85)):
-        if key in data:
-            try:
-                data[key] = max(low, min(high, round(float(data[key]), 3)))
-            except (TypeError, ValueError):
-                raise HTTPException(400, "Некорректное значение") from None
-    for key in ("hflip", "jump_cuts", "cut_zoom"):
-        if key in data:
-            data[key] = bool(data[key])
-    if "external_audio" in data:
-        data["external_audio"] = bool(data["external_audio"])
-    if "external_audio_track" in data:
-        try:
-            data["external_audio_track"] = max(-1, min(64, int(data["external_audio_track"])))
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Некорректная дорожка дубляжа") from None
-    if "audio_offset" in data:
-        try:
-            data["audio_offset"] = round(max(-300.0, min(300.0, float(data["audio_offset"]))), 2)
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Некорректный сдвиг дубляжа") from None
+            data[key] = composition.clamp_strict(key, data[key])
+        except composition.CompositionError as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    if "sub_font" in data:
+        from . import subtitles as _subtitles
+        if not _subtitles.font_exists(data["sub_font"]):
+            raise HTTPException(400, "Шрифт не найден")
     if "bg_video" in data:
         name = str(data["bg_video"] or "random").strip()
         if name != "random" and ("/" in name or "\\" in name or ".." in name):
@@ -301,47 +267,9 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
         if name and ("/" in name or "\\" in name or ".." in name):
             raise HTTPException(400, "Некорректное имя фона")
         data["adhd_bg"] = name
-    for key in ("adhd_top_fill", "adhd_bottom_fill"):
-        if key in data:
-            value = str(data[key] or "cover").strip().lower()
-            if value not in ("cover", "contain"):
-                raise HTTPException(400, "Неизвестный режим заполнения области")
-            data[key] = value
-    for key, low, high, default in (
-            ("adhd_top_scale", 0.5, 2.0, 1.0),
-            ("adhd_bottom_scale", 0.5, 2.0, 1.0),
-            ("adhd_top_offset_x", -0.5, 0.5, 0.0),
-            ("adhd_top_offset_y", -0.5, 0.5, 0.0),
-            ("adhd_bottom_offset_x", -0.5, 0.5, 0.0),
-            ("adhd_bottom_offset_y", -0.5, 0.5, 0.0),
-            ("adhd_bottom_speed", 0.25, 4.0, 1.0),
-            ("adhd_bottom_start", -1.0, 7200.0, -1.0),
-            ("adhd_bottom_volume", 0.0, 50.0, 0.0)):
-        if key in data:
-            try:
-                data[key] = round(max(low, min(high, float(data[key]))), 3)
-            except (TypeError, ValueError):
-                raise HTTPException(400, "Некорректное значение настроек СДВГ") from None
     if "ad_events" in data:
         known = {asset["id"] for asset in ads.list_assets()}
         data["ad_events"] = ads.normalize_events(data["ad_events"], known)
-    if "ads_enabled" in data:
-        data["ads_enabled"] = bool(data["ads_enabled"])
-    if "line_gap" in data:
-        try:
-            data["line_gap"] = max(0, min(120, int(data["line_gap"])))
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Некорректный межстрочный интервал") from None
-    if "audio_track" in data:
-        try:
-            data["audio_track"] = max(-1, min(64, int(data["audio_track"])))
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Некорректная аудиодорожка") from None
-    if "sub_offset" in data:
-        try:
-            data["sub_offset"] = max(-1600, min(1600, int(data["sub_offset"])))
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Некорректное смещение субтитров") from None
     if "text" in data:
         data["text"] = str(data["text"] or "").strip()[:4000]
     for key in ("start", "end"):
@@ -351,6 +279,21 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 raise HTTPException(400, "Некорректные границы клипа") from None
     return data
+
+
+@app.get("/api/composition/schema")
+def composition_schema() -> Dict[str, Any]:
+    """Слои клипа и допустимые значения настроек для интерфейса."""
+    return composition.schema()
+
+
+@app.get("/api/clips/{cid}/composition")
+def clip_composition(cid: str) -> Dict[str, Any]:
+    """Какие слои сейчас активны у клипа — для панели в редакторе."""
+    clip = db.get_clip(cid)
+    if not clip:
+        raise HTTPException(404, "Клип не найден")
+    return {"layers": composition.layers(clip.get("settings") or {})}
 
 
 @app.get("/api/health")
@@ -1051,15 +994,14 @@ def clip_ad_timeline(cid: str, events: Optional[str] = None) -> Dict[str, Any]:
             length = max(0.2, float(event.get("duration") or 1.0))
         except (TypeError, ValueError):
             continue
-        base_start = timeline.remap_time(local, segments, info["speed"])
-        base_end = timeline.remap_time(local + length, segments, info["speed"])
         own = inserts_by_id.get(str(event.get("id"))) if event.get("kind") == "replace" else None
         if own is not None:
-            start = own["final_start"]
-            end = round(start + own["duration"], 3)
+            start, end = timeline.insert_window(own)
+            end = round(end, 3)
         else:
-            start = timeline.inserted_time(base_start, info["inserts"], inclusive=True)
-            end = timeline.inserted_time(base_end, info["inserts"], inclusive=False)
+            start, end = timeline.event_window(
+                local, local + length, segments=segments, speed=info["speed"],
+                inserts=info["inserts"], duration=info["duration"])
         events.append({**event, "start_final": start, "end_final": end})
     return {"base_length": info["length"], "duration": info["duration"],
             "speed": info["speed"],
