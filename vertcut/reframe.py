@@ -157,8 +157,9 @@ def _facecam_box(face_w: float, face_h: float, cx: float, cy: float,
 
 
 def detect_facecam(source: Path, start: float, end: float,
-                   sample_fps: float = 2.0, max_width: int = 960,
-                   min_share: float = 0.45) -> Optional[Dict[str, Any]]:
+                   sample_fps: float = 2.0, max_width: int = 640,
+                   min_share: float = 0.45,
+                   info: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Ищет врезку с лицом: маленькое лицо, которое стоит на одном месте.
 
     Возвращает {"x","y","w","h","share","source"} в пикселях исходника
@@ -168,8 +169,9 @@ def detect_facecam(source: Path, start: float, end: float,
         import cv2
     except Exception:
         return None
-    info = utils.probe(source)
-    src_w, src_h = info["width"], info["height"]
+    if info is None:
+        info = utils.probe(source)
+    src_w, src_h = int(info.get("width") or 0), int(info.get("height") or 0)
     if not src_w or not src_h:
         return None
 
@@ -322,9 +324,10 @@ def frame_box(source: Path, at: float, aspect: str = "9:16") -> Optional[Dict[st
 
 
 def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16",
-                    sample_fps: float = 2.0, max_width: int = 960,
+                    sample_fps: float = 2.0, max_width: int = 640,
                     exclude: Optional[Tuple[float, float, float, float]] = None,
-                    avoid: Optional[Tuple[float, float, float, float]] = None) -> Optional[Dict[str, Any]]:
+                    avoid: Optional[Tuple[float, float, float, float]] = None,
+                    info: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Анализирует фрагмент и возвращает keyframes окна кадрирования.
 
     exclude — прямоугольник, лица внутри которого игнорируются (врезка).
@@ -338,8 +341,11 @@ def build_crop_path(source: Path, start: float, end: float, aspect: str = "9:16"
     except Exception:
         return None
 
-    info = utils.probe(source)
-    src_w, src_h = info["width"], info["height"]
+    if info is None:
+        info = utils.probe(source)
+    src_w, src_h = int(info.get("width") or 0), int(info.get("height") or 0)
+    if not src_w or not src_h:
+        return None
     aw, ah = (9, 16)
     try:
         aw, ah = [int(v) for v in aspect.split(":")]

@@ -73,6 +73,7 @@ class RunnerTest(unittest.TestCase):
             src.write_bytes(b"x" * 100)
             with mock.patch.object(render, "probe", _probe), \
                  mock.patch.object(render, "_measure_loudness", lambda *a, **k: None), \
+                 mock.patch.object(render, "hw_decode", lambda: None), \
                  mock.patch.object(render, "hw_encoder", lambda: "h264_nvenc"), \
                  mock.patch.object(render, "subprocess") as sub:
                 sub.Popen.side_effect = fake
@@ -97,6 +98,7 @@ class RunnerTest(unittest.TestCase):
             src.write_bytes(b"x" * 100)
             with mock.patch.object(render, "probe", _probe), \
                  mock.patch.object(render, "_measure_loudness", lambda *a, **k: None), \
+                 mock.patch.object(render, "hw_decode", lambda: None), \
                  mock.patch.object(render, "hw_encoder", lambda: None), \
                  mock.patch.object(render, "subprocess") as sub:
                 sub.Popen.side_effect = fake

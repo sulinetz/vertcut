@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -95,11 +96,16 @@ def _stream_chain(w: int, h: int, crop_path: Optional[Dict[str, Any]],
 def _bg_chain(w: int, h: int, focus_x: float = 0.5, sharpen: bool = False,
               src: str = "[0:v]", out: str = "[base]") -> str:
     sharp = ",unsharp=5:5:0.7:5:5:0.0" if sharpen else ""
+    fg_flags = "lanczos" if sharpen else "bicubic"
+    small_w = max(2, (w // 4) // 2 * 2)
+    small_h = max(2, (h // 4) // 2 * 2)
     return (
         f"{src}split=2[bg][fg];"
-        f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
-        f"gblur=sigma=34:steps=2,eq=brightness=-0.12:saturation=0.8[bgb];"
-        f"[fg]scale={w}:-2:flags=lanczos{sharp}[fgs];"
+        f"[bg]scale={small_w}:{small_h}:force_original_aspect_ratio=increase:flags=bicubic,"
+        f"crop={small_w}:{small_h},"
+        f"gblur=sigma=8.5:steps=2,eq=brightness=-0.12:saturation=0.8,"
+        f"scale={w}:{h}:flags=bilinear[bgb];"
+        f"[fg]scale={w}:-2:flags={fg_flags}{sharp}[fgs];"
         f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2:shortest=1{out}"
     )
 
@@ -168,6 +174,57 @@ def hw_encoder() -> Optional[str]:
     return found
 
 
+_HW_DECODE_CACHE: Dict[str, Any] = {}
+
+
+def _hw_decode_works() -> bool:
+    """Пробный CUDA-декод 3-кадрового yuv420p H.264 клипа.
+
+    На части драйверов (в т.ч. RTX 5070 Ti) `-hwaccel cuda` без проверки
+    вывода тихо падает на CPU с кодом 0, поэтому кодируем эталонный H.264
+    yuv420p и проверяем и returncode, и stderr при `-hwaccel_output_format cuda`.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "probe.mp4"
+            gen = run([
+                ffmpeg(), "-y", "-hide_banner", "-v", "error",
+                "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=0.2",
+                "-frames:v", "3", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                str(clip),
+            ], timeout=20)
+            if gen.returncode != 0:
+                return False
+            proc = run([
+                ffmpeg(), "-hide_banner", "-v", "error",
+                "-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
+                "-i", str(clip), "-frames:v", "1", "-f", "null", "-",
+            ], timeout=20)
+    except Exception:  # noqa: BLE001
+        return False
+    err = (proc.stderr or "").lower()
+    return proc.returncode == 0 and not any(
+        tok in err for tok in ("failed", "error", "lacking", "cuvid")
+    )
+
+
+def hw_decode() -> Optional[str]:
+    """Аппаратный декодер основного видео (CUDA); кэшируется как hw_encoder()."""
+    if "value" in _HW_DECODE_CACHE:
+        return _HW_DECODE_CACHE["value"]
+    if os.environ.get("VERTCUT_HW_DECODE", "auto").strip().lower() in ("0", "false", "no", "off"):
+        _HW_DECODE_CACHE["value"] = None
+        return None
+    try:
+        proc = run([ffmpeg(), "-hide_banner", "-hwaccels"], timeout=15)
+        text = (proc.stdout or "") + (proc.stderr or "")
+    except Exception:  # noqa: BLE001
+        text = ""
+    found = "cuda" if ("cuda" in text.split() and _hw_decode_works()) else None
+    _HW_DECODE_CACHE["value"] = found
+    return found
+
+
 def _hw_args(encoder: str, crf: int) -> List[str]:
     if encoder == "h264_videotoolbox":
         return ["-c:v", encoder, "-b:v", "9M", "-maxrate", "14M", "-bufsize", "14M",
@@ -189,7 +246,8 @@ def _measure_loudness(source: Path, start: float, duration: float,
                "-i", str(source)]
         if audio_track is not None:
             cmd += ["-map", f"0:a:{max(0, int(audio_track))}"]
-        cmd += ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
+        cmd += ["-vn", "-sn", "-dn",
+                "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
                 "-f", "null", "-"]
         proc = subprocess.run(
             cmd,
@@ -410,7 +468,8 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 adhd_bottom_speed: float = 1.0,
                 adhd_bottom_volume: float = 0.0,
                 ad_events: Optional[List[Dict[str, Any]]] = None,
-                ad_files: Optional[Dict[str, Path]] = None) -> Dict[str, Any]:
+                ad_files: Optional[Dict[str, Path]] = None,
+                info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if is_cancelled is not None and is_cancelled():
         raise Cancelled()
     speed = max(1.0, min(1.25, float(speed or 1.0)))
@@ -443,7 +502,8 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     out_dur = max(0.4, out_dur)
     duration = out_dur
 
-    info = probe(source)
+    if info is None:
+        info = probe(source)
     if info["height"] >= 1000:
         crf = min(crf, 20)
         preset = "veryfast"
@@ -831,8 +891,10 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     else:
         vg.append(f"{prefix}scale=in_range=auto:out_range=tv,format=yuv420p[v]")
 
+    dec = hw_decode()
+    decode_args = ["-hwaccel", dec] if dec else []
     cmd = [ffmpeg(), "-y", "-hide_banner", "-v", "error", "-nostats",
-           "-progress", "pipe:1",
+           "-progress", "pipe:1"] + decode_args + [
            "-ss", f"{clip_start:.3f}", "-t", f"{src_dur:.3f}", "-i", str(source)]
     if bg_idx is not None and bg_path is not None:
         cmd += ["-stream_loop", "-1", "-ss", f"{max(0.0, float(bg_start)):.3f}",
@@ -1069,7 +1131,28 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     if result["killed"]:
         out_path.unlink(missing_ok=True)
         raise MediaError(f"Рендер остановлен: {result['killed']}. Попробуйте ещё раз.")
+
+    active_dec = dec
+    active_enc = hw or "libx264"
     fallback_used = False
+
+    if active_dec and (result["returncode"] != 0 or not out_path.exists()):
+        dec_error = (result["tail"] or "")[-300:]
+        print(f"[render] hwaccel {active_dec} не сработал, повтор без аппаратного декода: {dec_error}",
+              file=sys.stderr, flush=True)
+        fallback_used = True
+        d_idx = cmd.index("-hwaccel")
+        del cmd[d_idx:d_idx + len(decode_args)]
+        active_dec = None
+        out_path.unlink(missing_ok=True)
+        result = _run_ffmpeg(cmd, duration, on_progress, is_cancelled)
+        if result["cancelled"]:
+            out_path.unlink(missing_ok=True)
+            raise Cancelled()
+        if result["killed"]:
+            out_path.unlink(missing_ok=True)
+            raise MediaError(f"Рендер остановлен: {result['killed']}. Попробуйте ещё раз.")
+
     if hw and (result["returncode"] != 0 or not out_path.exists()):
         # аппаратный энкодер не завёлся (нет GPU/драйвера) — повторяем на libx264.
         # Заменяем ровно те аргументы, что добавили, иначе срезается хвост команды.
@@ -1077,6 +1160,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         print(f"[render] {hw} не сработал, повтор на libx264: {hw_error}",
               file=sys.stderr, flush=True)
         fallback_used = True
+        active_enc = "libx264"
         fallback = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
                     "-profile:v", "high", "-pix_fmt", "yuv420p"]
         if mbps:
@@ -1097,18 +1181,29 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     if on_progress:
         on_progress(1.0)
     return {"path": out_path, "duration": round(duration, 2), "width": w, "height": h,
-            "encoder": "libx264" if (not hw or fallback_used) else hw,
+            "encoder": active_enc,
+            "hw_decode": active_dec,
             "fallback": fallback_used}
 
 
 def make_preview(clip_path: Path, out_path: Path, width: int = 540) -> Optional[Path]:
     """Лёгкая копия для быстрого предпросмотра в интерфейсе."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [ffmpeg(), "-y", "-v", "error", "-i", str(clip_path),
-           "-vf", f"scale={width}:-2", "-c:v", "libx264", "-preset", "veryfast",
-           "-crf", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
-           str(out_path)]
-    proc = run(cmd)
+    hw = hw_encoder()
+    if hw == "h264_nvenc":
+        v_args = ["-c:v", hw, "-preset", "p4", "-rc", "vbr", "-cq", "30",
+                  "-b:v", "0", "-pix_fmt", "yuv420p"]
+    elif hw:
+        v_args = _hw_args(hw, 30)
+    else:
+        v_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "30"]
+    base = [ffmpeg(), "-y", "-v", "error", "-i", str(clip_path), "-vf", f"scale={width}:-2"]
+    tail = ["-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out_path)]
+    proc = run(base + v_args + tail)
+    if hw and (proc.returncode != 0 or not out_path.exists()):
+        out_path.unlink(missing_ok=True)
+        cpu_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "30"]
+        proc = run(base + cpu_args + tail)
     return out_path if proc.returncode == 0 and out_path.exists() else None
 
 

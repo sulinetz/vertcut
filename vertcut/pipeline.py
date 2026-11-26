@@ -970,7 +970,7 @@ def process_project(pid: str) -> None:
                 return False
             try:
                 _render_one(source, workdir, clip, clip_settings, lambda p: None,
-                            is_cancelled=lambda: pid in CANCELLED)
+                            is_cancelled=lambda: pid in CANCELLED, info=info)
             except Cancelled:
                 with lock:
                     state["cancel"] = True
@@ -1017,8 +1017,8 @@ def process_project(pid: str) -> None:
 def _render_workers() -> int:
     """Сколько клипов рендерить параллельно.
 
-    Один ffmpeg занимает ~3 ядра, поэтому на 8–10 ядрах это 2–3 рендера: суммарно
-    в 1.5–2 раза быстрее, а машина остаётся отзывчивой.
+    При аппаратном кодировании держим 1–2 потока (узкое место — сессии NVENC
+    и декодер), на CPU — до 3 потоков по ~3 ядра на ffmpeg.
     """
     raw = os.environ.get("VERTCUT_RENDER_WORKERS")
     if raw:
@@ -1027,6 +1027,8 @@ def _render_workers() -> int:
         except ValueError:
             pass
     cpu = os.cpu_count() or 4
+    if render.hw_encoder():
+        return max(1, min(2, cpu // 8))
     return max(1, min(3, cpu // 3))
 
 
@@ -1174,7 +1176,8 @@ def ad_timeline(clip: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, Any
 
 def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
                 settings: Dict[str, Any], on_progress: Optional[Callable[[float], None]] = None,
-                is_cancelled: Optional[Callable[[], bool]] = None) -> None:
+                is_cancelled: Optional[Callable[[], bool]] = None,
+                info: Optional[Dict[str, Any]] = None) -> None:
     out_dir = workdir / "clips"
     ass_dir = workdir / "ass"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1255,6 +1258,13 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     crop_aspect = settings.get("aspect", "9:16")
     ratio = max(0.25, min(0.85, float(settings.get("split_ratio", 0.5) or 0.5)))
 
+    source_info: Optional[Dict[str, Any]] = info
+    if source_info is None:
+        try:
+            source_info = utils.probe(source)
+        except Exception:  # noqa: BLE001
+            source_info = None
+
     if layout == "adhd":
         # Верх — видео, низ — фон. Окно кадрирования считаем под верхнюю часть.
         top_h = render.split_geometry(1080, 1920, ratio)["top_h"]
@@ -1262,7 +1272,8 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     elif layout in render.STREAM_LAYOUTS:
         # Пресет стрима: находим врезку и не даём окну кадрирования её накрыть.
         try:
-            facecam = reframe.detect_facecam(source, clip["start"], clip["end"])
+            facecam = reframe.detect_facecam(source, clip["start"], clip["end"],
+                                             info=source_info)
             if facecam:
                 # координаты врезки нужны предпросмотру в редакторе
                 settings = {**settings, "facecam": facecam}
@@ -1281,7 +1292,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         try:
             crop_path = reframe.build_crop_path(
                 source, clip["start"], clip["end"], aspect=crop_aspect,
-                exclude=exclude, avoid=avoid)
+                exclude=exclude, avoid=avoid, info=source_info)
         except Exception:
             crop_path = None
         # если лиц почти нет (скринкаст, слайды) — сохраняем весь кадр на размытом фоне
@@ -1357,6 +1368,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         adhd_bottom_volume=float(settings.get("adhd_bottom_volume", 0.0) or 0.0) / 100.0,
         ad_events=ad_events,
         ad_files=ad_files,
+        info=source_info,
     )
     settings = {**settings, "render_encoder": result.get("encoder", "libx264")}
     thumb_path = workdir / "thumbs" / f"{clip['id']}.jpg"

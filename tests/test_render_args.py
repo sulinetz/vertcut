@@ -56,6 +56,7 @@ class RenderCommandTest(unittest.TestCase):
 
         with mock.patch.object(render, "probe", _probe), \
              mock.patch.object(render, "_measure_loudness", lambda *a, **k: None), \
+             mock.patch.object(render, "hw_decode", lambda: None), \
              mock.patch.object(render, "hw_encoder", lambda: None), \
              mock.patch.object(render, "subprocess") as sub:
             sub.Popen.side_effect = fake
@@ -120,6 +121,7 @@ class RenderCommandTest(unittest.TestCase):
 
         with mock.patch.object(render, "probe", lambda _p: info), \
              mock.patch.object(render, "_measure_loudness", side_effect=fake_measure), \
+             mock.patch.object(render, "hw_decode", lambda: None), \
              mock.patch.object(render, "hw_encoder", lambda: "h264_nvenc"), \
              mock.patch.object(render, "subprocess") as sub:
             sub.Popen.side_effect = fake
@@ -143,6 +145,7 @@ class RenderCommandTest(unittest.TestCase):
 
         with mock.patch.object(render, "probe", _probe), \
              mock.patch.object(render, "_measure_loudness", lambda *a, **k: None), \
+             mock.patch.object(render, "hw_decode", lambda: None), \
              mock.patch.object(render, "hw_encoder", lambda: "h264_nvenc"), \
              mock.patch.object(render, "subprocess") as sub:
             sub.Popen.side_effect = fake

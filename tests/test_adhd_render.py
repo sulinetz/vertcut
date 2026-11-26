@@ -56,6 +56,7 @@ def render_graph(source: Path, out: Path, **kwargs) -> str:
 
     with mock.patch.object(render, "probe", _probe), \
          mock.patch.object(render, "_measure_loudness", lambda *a, **k: None), \
+         mock.patch.object(render, "hw_decode", lambda: None), \
          mock.patch.object(render, "hw_encoder", lambda: None), \
          mock.patch.object(render, "subprocess") as sub:
         sub.Popen.side_effect = fake
@@ -82,7 +83,7 @@ def test_neutral_defaults_keep_old_graph(render_dir):
 def test_old_low_split_ratio_still_renders(render_dir):
     source, bg, out = render_dir
     graph = render_graph(source, out, layout="adhd", bg_path=bg, split_ratio=0.3)
-    assert "crop=1080:576" in graph
+    assert "1080:576" in graph
     assert "scale=1080:1344" in graph
 
 
@@ -143,6 +144,7 @@ def test_bottom_volume_without_bg_audio_is_ignored(render_dir):
 
     with mock.patch.object(render, "probe", lambda p: silent), \
          mock.patch.object(render, "_measure_loudness", lambda *a, **k: None), \
+         mock.patch.object(render, "hw_decode", lambda: None), \
          mock.patch.object(render, "hw_encoder", lambda: None), \
          mock.patch.object(render, "subprocess") as sub:
         sub.Popen.side_effect = fake
