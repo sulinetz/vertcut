@@ -145,7 +145,11 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if opts["accent"] not in subtitles.ACCENTS:
         opts["accent"] = "yellow"
     try:
-        size = int(opts.get("sub_size", 118))
+        raw_size = opts.get("sub_size", 118)
+        # Мастер одно время сохранял сюда false вместо числа.
+        if isinstance(raw_size, bool):
+            raw_size = 118
+        size = int(raw_size)
         if size < 70:
             size = 70
         opts["sub_size"] = max(70, min(180, size))

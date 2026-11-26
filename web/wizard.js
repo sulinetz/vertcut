@@ -61,7 +61,7 @@
     wizard.opts = {
       ...defaults(),
       ...o,
-      count: o.count == null ? 10 : o.count,
+      count: o.count == null ? 0 : o.count,
       audio_track: o.audio_track == null ? -1 : o.audio_track,
       audio_lang: o.audio_lang || "auto",
       asr_profile: o.asr_profile || "",
@@ -597,11 +597,14 @@
   function bindSubs() {
     wizard.frameT = wizard.frameT < 0 ? -1 : wizard.frameT;
     loadFrame();
-    const on = (id, key, prop = "checked") => {
+    const on = (id, key) => {
       const el = $("#" + id);
       if (!el) return;
       el.addEventListener("input", () => {
-        wizard.opts[key] = prop === "checked" ? el.checked : Number(el.value);
+        // Тип берём у самого элемента: раньше ползунки (размер, сдвиг,
+        // интервал) писали el.checked, то есть false, и настройка пропадала.
+        const isCheck = el.type === "checkbox" || el.type === "radio";
+        wizard.opts[key] = isCheck ? el.checked : Number(el.value);
         if (key === "sub_size") $("#wzSizeVal").textContent = el.value;
         if (key === "sub_offset") { $("#wzOffVal").textContent = el.value; }
         if (key === "line_gap") $("#wzGapVal").textContent = el.value;
