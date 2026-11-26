@@ -2967,6 +2967,7 @@ function clipUrl(clip) {
 }
 
 function openEditor(clipId) {
+  if (!state.detail || !state.detail.clips) return;
   const clip = state.detail.clips.find((c) => c.id === clipId);
   if (!clip) return;
   const project = state.detail.project;

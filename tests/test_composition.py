@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from vertcut import composition, pipeline, timeline
 
@@ -188,6 +189,28 @@ class AdTimelineTest(unittest.TestCase):
         active = {item["name"]: item["active"] for item in data["layers"]}
         self.assertTrue(active["adhd_bottom"])
         self.assertTrue(active["ads"])
+
+
+class UiSchemaTest(unittest.TestCase):
+    WEB = Path(__file__).resolve().parents[1] / "web"
+
+    def test_app_reads_schema_and_marks_sliders(self):
+        text = (self.WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn("/api/composition/schema", text)
+        self.assertIn("applyCompositionSchema", text)
+        self.assertIn("data-schema", text)
+        self.assertIn("VCApplySchema", text)
+
+    def test_wizard_applies_schema(self):
+        text = (self.WEB / "wizard.js").read_text(encoding="utf-8")
+        self.assertIn("VCApplySchema", text)
+        self.assertIn('data-schema="sub_size"', text)
+
+    def test_layers_and_reduced_motion_styles(self):
+        for name in ("styles.css", "styles-light.css"):
+            text = (self.WEB / name).read_text(encoding="utf-8")
+            self.assertIn(".layer-chip", text)
+            self.assertIn("prefers-reduced-motion", text)
 
 
 if __name__ == "__main__":

@@ -18,8 +18,8 @@ from .config import (ADHD_SPLIT_BACKEND_MAX, ADHD_SPLIT_BACKEND_MIN,
 from . import custom_fonts
 from .errors import Cancelled
 from .reframe import crop_expressions
-from .timeline import (dub_pieces, event_window, inserted_time, insert_spans,
-                       remap_time, offsets as timeline_offsets)
+from .timeline import (dub_pieces, event_window, insert_spans,
+                       offsets as timeline_offsets)
 from .utils import MediaError, probe, probe_audio, run, subprocess_kwargs
 
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}

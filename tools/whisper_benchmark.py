@@ -130,6 +130,11 @@ def download_item(url: str, workdir: Path, language: str) -> Tuple[Path, Path]:
     import yt_dlp
 
     workdir.mkdir(parents=True, exist_ok=True)
+    cached_wavs = sorted(workdir.glob("audio*.wav"))
+    cached_subs = sorted(workdir.glob("sub*.vtt"))
+    if cached_wavs and cached_subs:
+        # Повторный запуск после сбоя не должен качать материал заново.
+        return cached_wavs[0], cached_subs[0]
     outtmpl = str(workdir / "audio.%(ext)s")
     audio_opts: Dict[str, Any] = {
         "format": "ba[ext=m4a]/ba/b",
@@ -262,6 +267,12 @@ def markdown(rows: List[Dict[str, Any]], items: List[Dict[str, Any]]) -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Русская консоль Windows часто в cp1251: стрелка «→» в таблице роняла
+    # скрипт уже после расчётов. Заменяем непечатаемое, а не падаем.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
     parser = argparse.ArgumentParser(description="Бенчмарк моделей и профилей Whisper")
     parser.add_argument("--items", required=True, help="JSON со списком фрагментов")
     parser.add_argument("--profiles", default="", help="fast,balance,max")
@@ -329,12 +340,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Не удалось получить ни одного результата.", file=sys.stderr)
         return 1
     table = markdown(rows, items)
-    print(table)
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(table, encoding="utf-8")
         print(f"Сохранено: {out}", file=sys.stderr)
+    print(table)
     return 0
 
 

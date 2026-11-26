@@ -60,3 +60,55 @@ def test_timing_stats_counts_sane_words():
 
 def test_punctuation_count():
     assert bench.punctuation_count("Привет, мир! Как дела?") == 3
+
+def test_download_item_reuses_cached_media(tmp_path, monkeypatch):
+    """Повторный запуск после сбоя не должен качать материал заново."""
+    import sys
+    import types
+
+    workdir = tmp_path / "item"
+    workdir.mkdir()
+    audio = workdir / "audio.wav"
+    subs = workdir / "sub.ru.vtt"
+    audio.write_bytes(b"RIFF")
+    subs.write_text("WEBVTT\n", encoding="utf-8")
+
+    class Boom:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("сеть не должна вызываться при кэше")
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=Boom))
+    found_audio, found_subs = bench.download_item("https://example.com/x", workdir, "ru")
+    assert Path(found_audio) == audio
+    assert Path(found_subs) == subs
+
+
+def test_main_writes_markdown_file(tmp_path, monkeypatch):
+    import json
+
+    items = tmp_path / "items.json"
+    items.write_text(json.dumps({"items": [
+        {"url": "https://example.com/x", "start": 0, "duration": 60, "kind": "тест"}
+    ]}), encoding="utf-8")
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"")
+    subs = tmp_path / "s.vtt"
+    subs.write_text("WEBVTT\n", encoding="utf-8")
+    monkeypatch.setattr(bench, "download_item", lambda *_a, **_k: (audio, subs))
+    monkeypatch.setattr(bench, "cut_audio", lambda *_a, **_k: audio)
+    monkeypatch.setattr(bench.utils, "parse_vtt", lambda _p: [
+        {"words": [{"word": word, "start": i * 0.5, "end": i * 0.5 + 0.4}
+                   for i, word in enumerate(
+                       ["привет", "мир", "это", "тестовая", "запись", "речи"])]}])
+    monkeypatch.setattr(bench, "evaluate", lambda *_a, **_k: {
+        "config": "profile=fast model=small", "wer": 12.5,
+        "terms_wrong": 0, "terms_checked": 1, "punct_ref": 3, "punct_hyp": 2,
+        "words": 10, "median_word": 0.4, "sane_share": 1.0, "speed": 30.0,
+        "vram_mb": 3000, "ram_mb": 900,
+    })
+    out = tmp_path / "bench.md"
+    code = bench.main(["--items", str(items), "--profiles", "fast",
+                       "--out", str(out)])
+    assert code == 0
+    assert out.exists()
+    assert "WER" in out.read_text(encoding="utf-8")
