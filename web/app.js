@@ -453,7 +453,7 @@ const state = {
   subsToTemplate: false,
   clipView: { mood: "any", type: "any", sort: "chrono" },
   opts: {
-    count: 10,
+    count: 0,
     dur: "20-45",
     aspect: "9:16",
     mode: "auto",
@@ -958,6 +958,15 @@ function bindHero() {
       $$("button", seg).forEach((b) => b.classList.toggle("active", b === btn));
       syncExamples();
       if (group === "layout") updateAdhdVisibility();
+      if (group === "dur") {
+        // Длительность клипа важнее прежнего числа: иначе 10 клипов
+        // режут трёхминутное видео по 20 секунд.
+        state.opts.count = 0;
+        const ci = $("#countInput");
+        if (ci) ci.value = "";
+        $$('.seg[data-group="count"] button', main).forEach((b) =>
+          b.classList.toggle("active", b.dataset.val === "0"));
+      }
     });
   });
 
@@ -1403,6 +1412,7 @@ async function createFromProbe(height) {
       method: "POST",
       body: JSON.stringify({ url, title: "", options })
     });
+    await uploadPendingExtras(project.id);
     state.probeOpen = false;
     $("#modal").classList.add("hidden");
     $("#modal").innerHTML = "";
@@ -1444,6 +1454,33 @@ function uploadFile(file) {
   toast("Файл выбран — настройте параметры и нажмите «Запустить нарезку»");
 }
 
+async function uploadPendingExtras(projectId) {
+  if (state.pendingMusic) {
+    const musicForm = new FormData();
+    musicForm.append("file", state.pendingMusic);
+    try {
+      await api(`/api/projects/${projectId}/music`, { method: "POST", body: musicForm });
+    } catch (err) {
+      toast("Музыка не принята: " + err.message, "err");
+    }
+    state.pendingMusic = null;
+    const mchip = $("#pendingMusic");
+    if (mchip) mchip.classList.add("hidden");
+  }
+  if (!state.pendingSubs) return;
+  const subsForm = new FormData();
+  subsForm.append("file", state.pendingSubs);
+  try {
+    await api(`/api/projects/${projectId}/subtitles`, { method: "POST", body: subsForm });
+    toast("Субтитры приложены: распознавание речи не понадобится");
+  } catch (err) {
+    toast("Субтитры не приняты: " + err.message, "err");
+  }
+  state.pendingSubs = null;
+  const chip = $("#pendingSubs");
+  if (chip) chip.classList.add("hidden");
+}
+
 async function startLocalFile() {
   const file = state.pendingFile;
   if (!file) return;
@@ -1455,30 +1492,7 @@ async function startLocalFile() {
       method: "POST",
       body: JSON.stringify({ title: file.name, options: heroOptions() })
     });
-    if (state.pendingMusic) {
-      const musicForm = new FormData();
-      musicForm.append("file", state.pendingMusic);
-      try {
-        await api(`/api/projects/${project.id}/music`, { method: "POST", body: musicForm });
-      } catch (err) {
-        toast("Музыка не принята: " + err.message, "err");
-      }
-      state.pendingMusic = null;
-      const mchip = $("#pendingMusic");
-      if (mchip) mchip.classList.add("hidden");
-    }
-    if (state.pendingSubs) {
-      const subsForm = new FormData();
-      subsForm.append("file", state.pendingSubs);
-      try {
-        await api(`/api/projects/${project.id}/subtitles`, { method: "POST", body: subsForm });
-      } catch (err) {
-        toast("Субтитры не приняты: " + err.message, "err");
-      }
-      state.pendingSubs = null;
-      const chip = $("#pendingSubs");
-      if (chip) chip.classList.add("hidden");
-    }
+    await uploadPendingExtras(project.id);
     const form = new FormData();
     form.append("file", file);
     await api(`/api/projects/${project.id}/upload`, { method: "POST", body: form });

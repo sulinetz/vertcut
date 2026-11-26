@@ -46,7 +46,7 @@
     look: "none", vignette: false, grain: false, zoom: 100, bitrate: 0,
     music_volume: 8, hflip: false, tilt: 0, speed: 1, pitch: 1,
     jump_cuts: false, cut_zoom: false,
-    count: 10, min_dur: 15, max_dur: 60, target_dur: 32,
+    count: 0, min_dur: 15, max_dur: 60, target_dur: 32,
     select: "smart", export_order: "chrono",
     picker: "local", mood_filter: [], type_filter: [], min_score: 0,
     audio_track: -1, audio_lang: "auto", subtitle_track: -1, subtitle_source: "auto",
@@ -744,7 +744,13 @@
     });
     $("#wzDur").addEventListener("change", (e) => {
       const preset = DUR_PRESETS[e.target.value];
-      if (preset) Object.assign(wizard.opts, { min_dur: preset.min, max_dur: preset.max, target_dur: preset.target });
+      if (!preset) return;
+      Object.assign(wizard.opts, { min_dur: preset.min, max_dur: preset.max,
+                                   target_dur: preset.target, count: 0 });
+      const input = $("#wzCount");
+      if (input) input.value = "";
+      $$("#wzCountSeg button").forEach((b) =>
+        b.classList.toggle("active", Number(b.dataset.val) === 0));
     });
     $("#wzSelect").addEventListener("change", (e) => { wizard.opts.select = e.target.value; });
     const asr = $("#wzAsrProfile");

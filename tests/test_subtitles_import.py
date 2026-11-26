@@ -43,12 +43,48 @@ class SubtitleParseTest(unittest.TestCase):
         self.assertAlmostEqual(segs[0]["start"], 2.5)
         self.assertAlmostEqual(segs[0]["end"], 5.0)
 
+    def test_repeated_cues_with_gaps_keep_words(self):
+        path = self.dir / "repeat.srt"
+        path.write_text(
+            "1\n00:00:00,000 --> 00:00:20,000\nОдна и та же фраза\n\n"
+            "2\n00:00:20,500 --> 00:00:40,000\nОдна и та же фраза\n\n",
+            encoding="utf-8")
+        segs = utils.parse_srt(path)
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(len(segs[1]["words"]), 5)
+        self.assertAlmostEqual(segs[1]["start"], 20.5)
+
+    def test_contiguous_duplicate_cues_still_merge(self):
+        path = self.dir / "merge.srt"
+        path.write_text(
+            "1\n00:00:00,000 --> 00:00:02,000\nПовтор\n\n"
+            "2\n00:00:02,000 --> 00:00:04,000\nПовтор\n\n",
+            encoding="utf-8")
+        segs = utils.parse_srt(path)
+        self.assertEqual(len(segs), 1)
+        self.assertAlmostEqual(segs[0]["end"], 4.0)
+
     def test_dispatch_by_content(self):
         path = self.dir / "unknown.txt"
         path.write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nТест\n", encoding="utf-8")
         segs = utils.parse_subtitles(path)
         self.assertTrue(segs)
         self.assertEqual(segs[0]["text"], "Тест")
+
+    def test_cp1251_srt_is_readable(self):
+        path = self.dir / "cp1251.srt"
+        path.write_bytes(
+            "1\n00:00:01,000 --> 00:00:03,000\nПривет мир\n\n".encode("cp1251"))
+        segs = utils.parse_srt(path)
+        self.assertEqual(segs[0]["text"], "Привет мир")
+        self.assertEqual([w["word"] for w in segs[0]["words"]], ["Привет", "мир"])
+
+    def test_utf16_srt_with_bom_is_readable(self):
+        path = self.dir / "utf16.srt"
+        path.write_bytes(
+            "1\n00:00:01,000 --> 00:00:03,000\nПривет мир\n\n".encode("utf-16"))
+        segs = utils.parse_srt(path)
+        self.assertEqual(segs[0]["text"], "Привет мир")
 
 
 class EvenSplitTest(unittest.TestCase):

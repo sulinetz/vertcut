@@ -409,13 +409,33 @@ def ass_time(seconds: float) -> str:
     return f"{h:d}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+def _read_text_any(path: Path) -> str:
+    """Читает субтитры в UTF-8, UTF-16 или CP1251.
+
+    Русские .srt часто лежат в CP1251; раньше они превращались в «кракозябры»
+    и на кадре не появлялось ни одной читаемой строки.
+    """
+    raw = Path(path).read_bytes()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16")
+        except UnicodeDecodeError:
+            pass
+    for encoding in ("utf-8-sig", "cp1251"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def parse_vtt(path: Path) -> List[Dict[str, Any]]:
     """Парсер WebVTT: понимает и HH:MM:SS.mmm, и MM:SS.mmm.
 
     Автосубтитры YouTube «плывут»: каждая следующая реплика повторяет
     предыдущую строку и добавляет новую. Такие реплики схлопываем.
     """
-    raw = Path(path).read_text(encoding="utf-8", errors="replace")
+    raw = _read_text_any(path)
     blocks = re.split(r"\n\s*\n", raw.replace("\r\n", "\n"))
     ts = re.compile(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})")
     segs: List[Dict[str, Any]] = []
@@ -565,7 +585,9 @@ def _segments_from_cues(cues: List[tuple], merge: bool = True) -> List[Dict[str,
         words = _words_from_text(text, start, end)
         if not words:
             continue
-        if merge and out and text == out[-1]["text"]:
+        if merge and out and text == out[-1]["text"] and start <= out[-1]["end"] + 0.05:
+            # Только вплотную идущие дубли (автосубтитры): не теряем слова
+            # повторяющихся реплик через длинные паузы.
             out[-1]["end"] = round(max(out[-1]["end"], end), 3)
             continue
         out.append({"start": round(start, 3), "end": round(end, 3),
@@ -574,7 +596,7 @@ def _segments_from_cues(cues: List[tuple], merge: bool = True) -> List[Dict[str,
 
 
 def parse_srt(path: Path) -> List[Dict[str, Any]]:
-    raw = Path(path).read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    raw = _read_text_any(path).replace("\r\n", "\n")
     cues: List[tuple] = []
     for block in re.split(r"\n\s*\n", raw):
         lines = block.split("\n")
@@ -597,7 +619,7 @@ def parse_srt(path: Path) -> List[Dict[str, Any]]:
 
 
 def parse_ass(path: Path) -> List[Dict[str, Any]]:
-    raw = Path(path).read_text(encoding="utf-8", errors="replace")
+    raw = _read_text_any(path)
     cues: List[tuple] = []
     for line in raw.splitlines():
         if not line.lower().startswith("dialogue:"):
@@ -628,7 +650,7 @@ def parse_subtitles(path: Path) -> List[Dict[str, Any]]:
     if suffix == ".srt":
         return parse_srt(path)
     # неизвестное расширение — пробуем по содержимому
-    head = Path(path).read_text(encoding="utf-8", errors="replace")[:400].lower()
+    head = _read_text_any(path)[:400].lower()
     if "[script info]" in head or "dialogue:" in head:
         return parse_ass(path)
     if "webvtt" in head:

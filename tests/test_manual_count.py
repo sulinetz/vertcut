@@ -24,6 +24,25 @@ class ManualCountTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertAlmostEqual(found[0]["end"] - found[0]["start"], 60.0, places=1)
 
+    def test_default_count_is_auto(self):
+        # Иначе «1–2 минуты» превращаются в 20-секундные куски: число 10
+        # из формы перебивает выбранную длительность.
+        self.assertEqual(pipeline.DEFAULT_OPTIONS["count"], 0)
+        self.assertEqual(pipeline.normalize_options({})["count"], 0)
+
+    def test_auto_count_respects_chosen_duration(self):
+        found = pipeline._even_segments(140.0, {"count": 0, "target_dur": 90,
+                                                "max_dur": 120, "min_dur": 60}, None)
+        self.assertEqual(len(found), 2)
+        for clip in found:
+            self.assertGreaterEqual(clip["end"] - clip["start"], 60.0)
+            self.assertLessEqual(clip["end"] - clip["start"], 120.0)
+
+    def test_auto_count_helper(self):
+        self.assertEqual(pipeline._auto_count(140.0, {"target_dur": 90}), 2)
+        self.assertEqual(pipeline._auto_count(600.0, {"target_dur": 90}), 7)
+        self.assertEqual(pipeline._auto_count(10.0, {"target_dur": 90}), 1)
+
     def test_smart_search_honours_one(self):
         words = [{"word": "слово", "start": float(i), "end": float(i) + 0.5}
                  for i in range(0, 80, 2)]

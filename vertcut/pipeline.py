@@ -17,7 +17,7 @@ from .errors import Cancelled
 from .config import PROJECTS_DIR
 
 DEFAULT_OPTIONS: Dict[str, Any] = {
-    "count": 10,
+    "count": 0,
     "min_dur": 15,
     "max_dur": 60,
     "target_dur": 32,
@@ -572,7 +572,7 @@ def _prepare_segments(pid: str, project: Dict[str, Any], opts: Dict[str, Any],
         progress(0.72, "Поиск вирусных моментов")
         found = analyze.find_segments(
             transcript["segments"], audio["path"], duration,
-            count=opts["count"] or 0, min_dur=opts["min_dur"],
+            count=opts["count"] or _auto_count(duration, opts), min_dur=opts["min_dur"],
             max_dur=opts["max_dur"], target_dur=opts["target_dur"],
             platform=opts["platform"],
             wav=workdir / "audio16k.wav",
@@ -726,6 +726,16 @@ def prepare_project(pid: str) -> None:
         _update(pid, status="error", error=str(exc)[:600], stage="Ошибка загрузки")
 
 
+def _auto_count(duration: float, opts: Dict[str, Any]) -> int:
+    """Сколько клипов получится при выбранной длине, если число не задано.
+
+    Иначе «1–2 минуты» превращаются в десятки 20-секундных кусков: жёсткое
+    число из формы перебивает длительность.
+    """
+    target = max(1.0, float(opts.get("target_dur") or 60))
+    return max(1, min(200, int(round(max(1.0, float(duration)) / target))))
+
+
 def _even_segments(duration: float, opts: Dict[str, Any],
                    transcript: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Ровная нарезка: делит видео на равные части без анализа речи.
@@ -736,10 +746,9 @@ def _even_segments(duration: float, opts: Dict[str, Any],
     """
     duration = max(1.0, float(duration))
     count = int(opts.get("count") or 0)
-    target = max(1.0, float(opts.get("target_dur") or 60))
     explicit = count > 0
     if count <= 0:
-        count = int(round(duration / target))
+        count = _auto_count(duration, opts)
     count = max(1, min(200, count))
     max_dur = max(5.0, float(opts.get("max_dur") or 60))
     min_dur = max(3.0, float(opts.get("min_dur") or 15))
@@ -983,6 +992,9 @@ def process_project(pid: str) -> None:
 
         if select == "smart" and no_speech:
             select = "even"
+            # Без речи число 10 из формы не должно превращать выбранные
+            # «1–2 минуты» в 20-секундные куски.
+            opts["count"] = 0
             progress(0.55, "Речи не нашлось — режу на равные части")
             db.merge_meta(pid, {"engine": "even-split", "no_speech": True})
         if select == "even":
