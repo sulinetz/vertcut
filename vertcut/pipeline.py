@@ -1270,6 +1270,12 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
     )
 
     sub_position = settings.get("sub_position", "bottom")
+    out_aspect = (
+        "9:16"
+        if (promo_split_active or layout in ("adhd", *render.STREAM_LAYOUTS))
+        else str(settings.get("aspect", "9:16"))
+    )
+    play_w, play_h = render.ASPECTS.get(out_aspect, render.ASPECTS["9:16"])
     ass_path = None
     burn_subs = bool(settings.get("subtitles", True))
     export_subs = bool(settings.get("export_subs", False))
@@ -1292,6 +1298,8 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             blackouts=[(float(item["final_start"]),
                         float(item["final_start"]) + float(item["duration"]))
                        for item in inserts],
+            play_w=play_w,
+            play_h=play_h,
         )
         ass_path = ass_dir / f"{clip['id']}.ass"
         ass_path.write_text(text, encoding="utf-8")

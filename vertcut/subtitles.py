@@ -1,9 +1,11 @@
 """Генерация ASS-субтитров: шрифт, размер и положение настраиваются."""
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from .config import FONTS_DIR
 from .utils import ass_time
 
 PLAY_W, PLAY_H = 1080, 1920
@@ -146,16 +148,16 @@ SPEEDS = tuple(SPEED_PRESETS)
 
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {play_w}
+PlayResY: {play_h}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Sub,{font_family},{sub_size},{sub_primary},{sub_secondary},&H00000000,&H78000000,0,0,0,0,100,100,1,0,1,{outline},3,2,70,70,320,1
-Style: Hook,{font_family},{hook_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H50000000,0,0,0,0,100,100,0.5,0,1,8,4,8,80,80,240,1
+Style: Sub,{font_family},{sub_size},{sub_primary},{sub_secondary},&H00000000,&H78000000,0,0,0,0,100,100,1,0,1,{outline},3,2,{margin_sub},{margin_sub},320,1
+Style: Hook,{font_family},{hook_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H50000000,0,0,0,0,100,100,0.5,0,1,8,4,8,{margin_hook},{margin_hook},240,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -170,6 +172,126 @@ _RENDER_FACTOR = 0.45
 _WIDTH_FACTOR = 0.62
 _SAFE_WIDTH = 940.0
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+_FONT_OBJ_CACHE: Dict[Tuple[str, int], Any] = {}
+
+
+def _font_ttf_path(key: str, info: Dict[str, Any]) -> Optional[Path]:
+    """Путь к TTF/OTF файла шрифта для точного измерения ширины строки."""
+    if key in FONTS:
+        p = FONTS_DIR / str(info.get("file") or "")
+        return p if p.is_file() else None
+    try:
+        from . import custom_fonts
+
+        custom = custom_fonts.get(key)
+        if custom and custom.get("file"):
+            p = custom_fonts.CUSTOM_DIR / str(custom["file"])
+            return p if p.is_file() else None
+    except Exception:
+        pass
+    return None
+
+
+def _line_px(text: str, info: Dict[str, Any], size: int, *,
+             font_key: str = "", outline: float = 7.0, spacing: float = 1.0) -> float:
+    """Оценка ширины строки в пикселях PlayResX с учётом кернинга и обводки."""
+    clean = str(text or "")
+    if not clean:
+        return 0.0
+    extra = max(0, len(clean) - 1) * spacing + outline * 2.0
+    ttf = _font_ttf_path(font_key, info)
+    if ttf is not None:
+        try:
+            from PIL import ImageFont
+
+            sz = max(12, int(size))
+            cache_key = (str(ttf), sz)
+            font_obj = _FONT_OBJ_CACHE.get(cache_key)
+            if font_obj is None:
+                font_obj = ImageFont.truetype(str(ttf), sz)
+                _FONT_OBJ_CACHE[cache_key] = font_obj
+            return float(font_obj.getlength(clean)) + extra
+        except Exception:  # noqa: BLE001
+            pass
+    # Запасной расчёт при отсутствии TTF: прописные кириллицы шире строчных.
+    is_upper = clean == clean.upper() and clean != clean.lower()
+    factor = 0.80 if is_upper else _WIDTH_FACTOR
+    advance = max(0.35, float(info.get("avg") or 0.85)) * max(12, size) * factor
+    return len(clean) * advance + extra
+
+
+def _split_cue_lines(tokens: List[str], info: Dict[str, Any], size: int,
+                     safe_w: float, *, font_key: str = "") -> List[List[int]]:
+    """Делит реплику на 1–3 строки по пробелам так, чтобы влезали в safe_w."""
+    n = len(tokens)
+    if n <= 1:
+        return [list(range(n))] if n else []
+    full = " ".join(tokens)
+    if _line_px(full, info, size, font_key=font_key) <= safe_w:
+        return [list(range(n))]
+
+    # Пробуем 2 сбалансированные строки, укладывающиеся в safe_w.
+    best_split = None
+    best_score = 1e18
+    for split in range(1, n):
+        lw = _line_px(" ".join(tokens[:split]), info, size, font_key=font_key)
+        rw = _line_px(" ".join(tokens[split:]), info, size, font_key=font_key)
+        if lw <= safe_w and rw <= safe_w:
+            diff = abs(lw - rw)
+            if diff < best_score:
+                best_split, best_score = split, diff
+    if best_split is not None:
+        return [list(range(best_split)), list(range(best_split, n))]
+
+    # Если 2 строки не помещаются (много длинных слов) — собираем до 3 строк.
+    groups: List[List[int]] = []
+    cur: List[int] = []
+    for idx, tok in enumerate(tokens):
+        cand = " ".join(tokens[i] for i in (*cur, idx))
+        if cur and _line_px(cand, info, size, font_key=font_key) > safe_w:
+            groups.append(cur)
+            cur = [idx]
+        else:
+            cur.append(idx)
+    if cur:
+        groups.append(cur)
+    if len(groups) <= 3:
+        return groups
+
+    # Слишком много коротких слов — сводим в 2 минимально широкие строки.
+    best_split = max(1, n // 2)
+    best_peak = 1e18
+    for split in range(1, n):
+        peak = max(
+            _line_px(" ".join(tokens[:split]), info, size, font_key=font_key),
+            _line_px(" ".join(tokens[split:]), info, size, font_key=font_key),
+        )
+        if peak < best_peak:
+            best_peak = peak
+            best_split = split
+    return [list(range(best_split)), list(range(best_split, n))]
+
+
+def _fit_fontsize(lines: List[str], info: Dict[str, Any], size: int,
+                  safe_w: float, *, font_key: str = "", min_size: int = 28,
+                  outline: float = 7.0, spacing: float = 1.0) -> int:
+    """Уменьшает кегль ровно до того, чтобы самая длинная строка влезла в экран."""
+    if not lines or safe_w <= 0:
+        return size
+    max_px = max(_line_px(line, info, size, font_key=font_key,
+                          outline=outline, spacing=spacing)
+                 for line in lines)
+    if max_px <= safe_w:
+        return size
+    fitted = max(min_size, int(size * (safe_w / max_px)))
+    while fitted > min_size:
+        check = max(_line_px(line, info, fitted, font_key=font_key,
+                             outline=outline, spacing=spacing)
+                    for line in lines)
+        if check <= safe_w:
+            break
+        fitted -= 1
+    return fitted
 
 
 def font_exists(key: str) -> bool:
@@ -207,11 +329,13 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _chars_per_line(font: Dict[str, Any], size: int, cjk: bool = False) -> int:
+def _chars_per_line(font: Dict[str, Any], size: int, cjk: bool = False,
+                    *, play_w: int = PLAY_W) -> int:
     advance = max(0.3, float(font["avg"])) * max(20, size) * _WIDTH_FACTOR
     if cjk:
         advance *= 1.6
-    return max(6, min(24, int(_SAFE_WIDTH / advance)))
+    safe_w = max(320.0, float(play_w or PLAY_W) - 140.0)
+    return max(6, min(36, int(safe_w / advance)))
 
 
 def _wrap(text: str, max_chars: int, max_lines: int = 2) -> List[str]:
@@ -254,7 +378,8 @@ def _cues(words: List[Dict[str, Any]], max_chars: int = 32, max_words: int = 6,
 
 
 def _pos_parts(position: str, offset: int, platform: str = "",
-               reserve: int = 0) -> Tuple[int, int, int]:
+               reserve: int = 0, *, play_w: int = PLAY_W,
+               play_h: int = PLAY_H) -> Tuple[int, int, int]:
     """(выравнивание, x, y) с учётом интерфейса площадки.
 
     Сдвиг применяется после безопасной зоны и ограничивается только рамкой
@@ -262,20 +387,24 @@ def _pos_parts(position: str, offset: int, platform: str = "",
     """
     from . import platforms
 
+    pw = max(320, int(play_w or PLAY_W))
+    ph = max(320, int(play_h or PLAY_H))
+    y_scale = ph / float(PLAY_H)
+
     def frame_y(value: float) -> int:
-        return int(max(40, min(PLAY_H - 40, float(value))))
+        return int(max(40, min(ph - 40, float(value))))
 
     if position == "top":
         base = max(60, platforms.top_text_y(platform) + 120)
         base = platforms.clamp_y(base, platform, anchor="top")
-        return 8, PLAY_W // 2, frame_y(base - offset)
+        return 8, pw // 2, frame_y(base * y_scale - offset * y_scale)
     if position == "middle":
         _x0, y0, _x1, y1 = platforms.safe_rect(platform)
         base = max(y0 + 120, min(y1 - 120, 960))
-        return 5, PLAY_W // 2, frame_y(base - offset)
+        return 5, pw // 2, frame_y(base * y_scale - offset * y_scale)
     base = platforms.bottom_text_y(platform, reserve=reserve)
     base = platforms.clamp_y(base, platform, anchor="bottom")
-    return 2, PLAY_W // 2, frame_y(base - offset)
+    return 2, pw // 2, frame_y(base * y_scale - offset * y_scale)
 
 
 def _pos_tag(position: str, offset: int, platform: str = "", reserve: int = 0) -> str:
@@ -418,26 +547,42 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
               position: str = "bottom", offset: int = 0,
               speed: str = "calm", platform: str = "", bottom_reserve: int = 0,
               line_gap: int = 0, top_reserve: int = 0,
-              blackouts: Optional[List[Tuple[float, float]]] = None) -> str:
+              blackouts: Optional[List[Tuple[float, float]]] = None,
+              play_w: int = PLAY_W, play_h: int = PLAY_H) -> str:
     """Собирает ASS-файл для фрагмента. Тайминги слов абсолютные (от начала видео)."""
+    pw = max(320, int(play_w or PLAY_W))
+    ph = max(320, int(play_h or PLAY_H))
+    y_scale = ph / float(PLAY_H)
+    res_scale = 1.0 if (pw == PLAY_W and ph == PLAY_H) else max(0.66, min(pw / float(PLAY_W), ph / float(PLAY_H)))
+
     accent_color = ACCENTS.get(accent, ACCENTS["yellow"])
     info = font_info(font)
     scale = 0.700 / float(info["cap"])
-    size = max(40, min(240, int(round(sub_size * scale))))
-    hook_size_eff = max(30, int(round(hook_size * scale)))
+    size = max(36, min(240, int(round(sub_size * scale * res_scale))))
+    hook_size_eff = max(28, int(round(hook_size * scale * res_scale)))
     cjk = any(_CJK_RE.search(str(w.get("word") or "")) for w in words)
-    chars = _chars_per_line(info, size, cjk)
+    chars = _chars_per_line(info, size, cjk, play_w=pw)
     if position not in POSITIONS:
         position = "bottom"
 
+    margin_sub = max(40, int(round(70 * pw / float(PLAY_W))))
+    margin_hook = max(48, int(round(80 * pw / float(PLAY_W))))
+    sub_safe_w = max(220.0, (pw - 2 * margin_sub) / 1.04)
+    hook_safe_w = max(220.0, (pw - 2 * margin_hook) / 1.04)
+
     preset = SPEED_PRESETS.get(str(speed), SPEED_PRESETS["calm"])
     header = ASS_HEADER.format(
+        play_w=pw, play_h=ph,
+        margin_sub=margin_sub, margin_hook=margin_hook,
         font_family=info["family"], sub_size=size, hook_size=hook_size_eff,
         outline=7, sub_primary=accent_color, sub_secondary="&H00FFFFFF&",
     )
     events: List[str] = []
     clip_len = max(0.1, clip_end - clip_start)
-    anchor, pos_x, pos_y = _pos_parts(position, int(offset), platform, int(bottom_reserve))
+    anchor, pos_x, pos_y = _pos_parts(
+        position, int(offset), platform, int(bottom_reserve),
+        play_w=pw, play_h=ph,
+    )
     gap = max(0, min(120, int(line_gap or 0)))
 
     local = []
@@ -466,22 +611,30 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
         hook_text = _clean(hook).upper() if uppercase else _clean(hook)
         if len(hook_text) > 50:
             hook_text = hook_text[:49].rsplit(" ", 1)[0].rstrip(" ,.-—") + "…"
-        hook_lines = _wrap(hook_text, max(10, int(chars * 1.15)), 3)
+        hook_tokens = hook_text.split()
+        hook_groups = _split_cue_lines(hook_tokens, info, hook_size_eff,
+                                       hook_safe_w, font_key=font)
+        hook_lines = [" ".join(hook_tokens[i] for i in g) for g in hook_groups[:3]]
+        eff_hook = _fit_fontsize(hook_lines, info, hook_size_eff, hook_safe_w,
+                                 font_key=font, outline=8.0, spacing=0.5)
+        hook_fs = f"\\fs{eff_hook}" if eff_hook < hook_size_eff else ""
         start, end = 0.15, min(clip_len - 0.1, max(1.8, min(4.2, clip_len * 0.3)))
         # Хук ставим с противоположной стороны от субтитров, тоже внутри
         # безопасной области площадки.
         from . import platforms
 
         if position == "top":
-            hook_y = platforms.bottom_text_y(platform) - 20
+            hook_y = int(round((platforms.bottom_text_y(platform) - 20) * y_scale))
+            hook_y = max(40, min(ph - 40, hook_y))
             hook_anchor = 2
         else:
-            hook_y = platforms.top_text_y(platform) + int(top_reserve or 0)
+            hook_y = int(round((platforms.top_text_y(platform) + int(top_reserve or 0)) * y_scale))
+            hook_y = max(40, min(ph - 40, hook_y))
             hook_anchor = 8
         events.extend(_line_events(
-            hook_lines, 1, "Hook", start, end, hook_anchor, PLAY_W // 2, int(hook_y),
-            float(hook_size_eff) * 1.2, float(gap),
-            "\\fad(180,220)\\fscx104\\fscy104",
+            hook_lines, 1, "Hook", start, end, hook_anchor, pw // 2, hook_y,
+            float(eff_hook) * 1.2, float(gap),
+            f"\\fad(180,220){hook_fs}\\fscx104\\fscy104",
         ))
 
     # Короткие реплики + караоке-подсветка: текст не «мигает» на каждом слове,
@@ -527,21 +680,12 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
         if cue_end - cue_start < 0.35:
             continue
         tokens = [w["word"] for w in cue]
-        # перенос строк: 1–2 строки, сбалансированные по ширине
-        line_groups = [[i for i in range(len(tokens))]]
-        total_len = sum(len(t) + 1 for t in tokens) - 1
-        if total_len > chars and len(tokens) > 1:
-            best, best_diff = None, 1e9
-            for split in range(1, len(tokens)):
-                left = " ".join(tokens[:split])
-                right = " ".join(tokens[split:])
-                if len(left) > chars + 2 or len(right) > chars + 2:
-                    continue
-                diff = abs(len(left) - len(right))
-                if diff < best_diff:
-                    best, best_diff = split, diff
-            if best:
-                line_groups = [list(range(best)), list(range(best, len(tokens)))]
+        # Перенос по словам в пределах безопасной ширины; слишком длинное слово
+        # пропорционально сжимается через \fs, чтобы никогда не уходить за экран.
+        line_groups = _split_cue_lines(tokens, info, size, sub_safe_w, font_key=font)
+        line_texts = [" ".join(tokens[ti] for ti in g) for g in line_groups]
+        eff_size = _fit_fontsize(line_texts, info, size, sub_safe_w, font_key=font)
+        fs_tag = f"\\fs{eff_size}" if eff_size < size else ""
 
         # длительности \k: каждое слово подсвечивается ровно в свой момент
         karaoke: List[int] = []
@@ -555,11 +699,11 @@ def build_ass(words: List[Dict[str, Any]], clip_start: float, clip_end: float,
             rendered.append(" ".join(
                 f"{{\\k{karaoke[ti]}}}{tokens[ti]}" for ti in group
             ))
-        tags = (f"\\fad({int(fade_in)},{int(fade_out)})"
+        tags = (f"\\fad({int(fade_in)},{int(fade_out)}){fs_tag}"
                 f"\\fscx104\\fscy104\\t(0,170,\\fscx100\\fscy100)")
         events.extend(_line_events(
             rendered, 0, "Sub", cue_start, cue_end, anchor, pos_x, pos_y,
-            float(size) * 1.2, float(gap), tags,
+            float(eff_size) * 1.2, float(gap), tags,
         ))
 
     return header + "\n".join(events) + "\n"

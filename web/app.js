@@ -1804,7 +1804,8 @@ function clipsGridHTML() {
     const url = `/media/${p}/clips/clip_${String(c.idx + 1).padStart(2, "0")}.mp4?v=${Math.round(c.updated_at || 0)}`;
     const preview = c.has_preview ? `/media/${p}/previews/${c.id}.mp4?v=${Math.round(c.updated_at || 0)}` : url;
     const thumb = c.thumb ? `/media/${p}/thumbs/${c.id}.jpg` : "";
-    const wide = (c.settings?.aspect || "9:16") === "16:9" ? " wide" : (c.settings?.aspect || "") === "1:1" ? " square" : "";
+    const asp = c.settings?.aspect || "9:16";
+    const wide = asp === "16:9" ? " wide" : asp === "1:1" ? " square" : asp === "4:5" ? " portrait45" : "";
     const sp = c.settings?.score_parts || null;
     const partsLine = sp ? [
       ["хук", sp.hook], ["подача", sp.retention], ["эмоции", sp.emotion],
@@ -2988,336 +2989,367 @@ function openEditor(clipId) {
   let adSelected = "";
   let adEvents = JSON.parse(JSON.stringify(s.ad_events || []));
   let adLayout = null;
+  let promoSelected = String(s.promo_footage || "");
   const adhdSplitMin = Math.min(adhdLimits().min, Math.round(editorSplit * 100));
   const adhdSplitMax = adhdLimits().max;
 
   $("#modal").innerHTML = `
     <div class="modal-backdrop" data-close></div>
-    <div class="modal-panel">
+    <div class="modal-panel editor-modal">
       <div class="modal-head">
         <h3>Редактировать клип</h3>
         <button class="icon-btn" data-close>${ICONS.close}</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body editor-body">
         <div class="editor-preview">
-          <div class="ed-stage" id="edStage">
-            <canvas id="edCanvas"></canvas>
-            <div class="ed-hook" id="edHookView"></div>
-            <div class="ed-sub" id="edSubView"></div>
-            <div class="ed-stage-hint" id="edStageHint">Беру кадр из видео…</div>
+          <div class="ed-pv-head">
+            <div class="ed-pv-tabs" id="edPvTabs">
+              <button type="button" data-pv="live" class="active">Живой макет</button>
+              <button type="button" data-pv="video">Готовый клип</button>
+            </div>
+            <span class="ed-aspect-tag" id="edAspectBadge">${esc(s.aspect || "9:16")}</span>
           </div>
-          <video id="edVideo" class="ed-video-small" src="${clipUrl(clip)}" controls playsinline></video>
+          <div class="ed-stage-wrap" id="edStageWrap">
+            <div class="ed-stage" id="edStage">
+              <canvas id="edCanvas"></canvas>
+              <div class="ed-promo-ov hidden" id="edPromoOv"></div>
+              <div class="ed-hook" id="edHookView"></div>
+              <div class="ed-sub" id="edSubView"></div>
+              <div class="ed-stage-hint" id="edStageHint">Беру кадр из видео…</div>
+            </div>
+          </div>
+          <div class="ed-seek-row" id="edSeekRow">
+            <span>Кадр: <b id="edSeekVal">0.3</b> с</span>
+            <input type="range" id="edPreviewSeek" min="0" max="10" step="0.1" value="0.3" />
+          </div>
+          <div class="ed-video-wrap hidden" id="edVideoWrap">
+            <video id="edVideo" class="ed-video-small" src="${clipUrl(clip)}" controls playsinline></video>
+          </div>
           <video id="edSrc" class="hidden" muted playsinline preload="auto" src="${project.source_url || ""}"></video>
         </div>
-        <div class="editor-fields">
-          <div class="field">
-            <label>Заголовок на видео (хук)</label>
-            <input type="text" id="edHook" maxlength="90" value="${esc(clip.hook || clip.title || "")}" />
+
+        <div class="editor-right">
+          <div class="ed-tabs" id="edTabs">
+            <button type="button" class="ed-tab active" data-edtab="frame">Кадр</button>
+            <button type="button" class="ed-tab" data-edtab="subs">Субтитры</button>
+            <button type="button" class="ed-tab" data-edtab="ads">Реклама</button>
+            <button type="button" class="ed-tab" data-edtab="trim">Обрезка и звук</button>
           </div>
-          <div class="field">
-            <label>Текст субтитров <span style="color:var(--muted-2);font-weight:400">— правьте имена и термины, тайминги сохранятся</span></label>
-            <textarea id="edText" rows="3" style="width:100%;resize:vertical">${esc((clip.words || []).map((w) => w.word).join(" "))}</textarea>
-          </div>
-          <div class="row2">
-            <div class="field">
-              <label>Начало</label>
-              <div class="range-row">
-                <input type="range" id="edStart" min="0" max="${maxT}" step="0.1" value="${clip.start}" />
-                <input type="number" id="edStartNum" min="0" max="${maxT}" step="0.1" value="${clip.start.toFixed(1)}" />
+
+          <div class="ed-tab-panels">
+            <div class="ed-pane" data-edpane="frame">
+              <div class="row2">
+                <div class="field">
+                  <label>Формат кадра</label>
+                  <select id="edAspect">
+                    ${Object.entries(ASPECT_META).map(([a, m]) => `<option value="${a}" ${(s.aspect || "9:16") === a ? "selected" : ""}>${a} — ${m.short}</option>`).join("")}
+                  </select>
+                  <span class="opt-hint hidden" id="edAspectHint">При раскладке СДВГ/стрима или нижней врезке баннера формат фиксируется 9:16.</span>
+                </div>
+                <div class="field">
+                  <label>Кадрирование</label>
+                  <select id="edMode">
+                    <option value="auto" ${s.mode === "auto" ? "selected" : ""}>Умный кроп (по лицу)</option>
+                    <option value="blur" ${s.mode === "blur" || !s.mode ? "selected" : ""}>Размытый фон</option>
+                    <option value="crop" ${s.mode === "crop" ? "selected" : ""}>По центру (обрезка)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Площадка (безопасная зона)</label>
+                  <select id="edPlatform">
+                    ${PLATFORM_OPTIONS.map(([k, v]) => `<option value="${k}" ${(s.platform || "universal") === k ? "selected" : ""}>${v}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Раскладка экрана</label>
+                  <select id="edLayout">
+                    <option value="" ${!s.layout ? "selected" : ""}>Обычная</option>
+                    <option value="band" ${s.layout === "band" ? "selected" : ""}>Лицо крупно снизу</option>
+                    <option value="band_top" ${s.layout === "band_top" ? "selected" : ""}>Лицо крупно сверху</option>
+                    <option value="adhd" ${s.layout === "adhd" ? "selected" : ""}>Сплит-скрин (СДВГ)</option>
+                  </select>
+                </div>
               </div>
-              <div class="nudge-row">
-                <button type="button" class="mini-btn" data-nudge="start:-1">−1 с</button>
-                <button type="button" class="mini-btn" data-nudge="start:-0.2">−0.2</button>
-                <button type="button" class="mini-btn" data-nudge="start:0.2">+0.2</button>
-                <button type="button" class="mini-btn" data-nudge="start:1">+1 с</button>
-                <button type="button" class="mini-btn" data-nudge="start:word">к слову</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Конец</label>
-              <div class="range-row">
-                <input type="range" id="edEnd" min="0" max="${maxT}" step="0.1" value="${clip.end}" />
-                <input type="number" id="edEndNum" min="0" max="${maxT}" step="0.1" value="${clip.end.toFixed(1)}" />
-              </div>
-              <div class="nudge-row">
-                <button type="button" class="mini-btn" data-nudge="end:-1">−1 с</button>
-                <button type="button" class="mini-btn" data-nudge="end:-0.2">−0.2</button>
-                <button type="button" class="mini-btn" data-nudge="end:0.2">+0.2</button>
-                <button type="button" class="mini-btn" data-nudge="end:1">+1 с</button>
-                <button type="button" class="mini-btn" data-nudge="end:word">к слову</button>
-              </div>
-              <div class="ed-dur" id="edDur"></div>
-            </div>
-          </div>
-          <div class="row2">
-            <div class="field">
-              <label>Площадка</label>
-              <select id="edPlatform">
-                ${PLATFORM_OPTIONS.map(([k, v]) => `<option value="${k}" ${(s.platform || "universal") === k ? "selected" : ""}>${v}</option>`).join("")}
-              </select>
-            </div>
-            <div class="field">
-              <label>Пресет стрима</label>
-              <select id="edLayout">
-                <option value="" ${!s.layout ? "selected" : ""}>Выключен</option>
-                <option value="band" ${s.layout === "band" ? "selected" : ""}>Лицо крупно снизу</option>
-                <option value="band_top" ${s.layout === "band_top" ? "selected" : ""}>Лицо крупно сверху</option>
-                <option value="adhd" ${s.layout === "adhd" ? "selected" : ""}>Сплит-скрин (СДВГ)</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Формат</label>
-              <select id="edAspect">
-                ${Object.entries(ASPECT_META).map(([a, m]) => `<option value="${a}" ${(s.aspect || "9:16") === a ? "selected" : ""}>${a} — ${m.short}</option>`).join("")}
-              </select>
-            </div>
-            <div class="field">
-              <label>Кадрирование</label>
-              <select id="edMode">
-                <option value="auto" ${s.mode === "auto" ? "selected" : ""}>Умный кроп (по лицу)</option>
-                <option value="blur" ${s.mode === "blur" || !s.mode ? "selected" : ""}>Размытый фон</option>
-                <option value="crop" ${s.mode === "crop" ? "selected" : ""}>По центру</option>
-              </select>
-            </div>
-          </div>
-          <div class="row2 ed-adhd ${s.layout === "adhd" ? "" : "hidden"}" id="edAdhd">
-            <div class="field">
-              <label>Основное видео <b id="edSplitVal">${Math.round(editorSplit * 100)}</b>%</label>
-              <input type="range" id="edSplit" min="${adhdSplitMin}" max="${adhdSplitMax}" step="1" value="${Math.round(editorSplit * 100)}" />
-              <span class="opt-hint">Границу можно тянуть прямо в превью. Рекомендуется 40–85%.</span>
-            </div>
-            <div class="field">
-              <label>Нижний ролик</label>
-              <select id="edAdhdBg"><option value="">Случайный</option></select>
-              <button type="button" class="link-btn" id="edAdhdUploadBtn">загрузить своё видео</button>
-              <input type="file" id="edAdhdInput" class="hidden" accept="video/*" />
-            </div>
-            <div class="field"><label>Верх: заполнение</label>
-              <select id="edTopFill"><option value="cover" ${s.adhd_top_fill !== "contain" ? "selected" : ""}>Заполнить</option><option value="contain" ${s.adhd_top_fill === "contain" ? "selected" : ""}>Вписать целиком</option></select>
-            </div>
-            <div class="field"><label>Низ: заполнение</label>
-              <select id="edBottomFill"><option value="cover" ${s.adhd_bottom_fill !== "contain" ? "selected" : ""}>Заполнить</option><option value="contain" ${s.adhd_bottom_fill === "contain" ? "selected" : ""}>Вписать целиком</option></select>
-            </div>
-            <div class="field"><label>Верх: масштаб <b id="edTopScaleVal">${Math.round(Number(s.adhd_top_scale || 1) * 100)}</b>%</label>
-              <input type="range" id="edTopScale" data-schema="adhd_top_scale" data-schema-scale="100" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_top_scale || 1) * 100)}" />
-            </div>
-            <div class="field"><label>Низ: масштаб <b id="edBottomScaleVal">${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}</b>%</label>
-              <input type="range" id="edBottomScale" data-schema="adhd_bottom_scale" data-schema-scale="100" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}" />
-            </div>
-            <div class="field"><label>Низ: скорость <b id="edBottomSpeedVal">${Number(s.adhd_bottom_speed || 1).toFixed(2)}</b>×</label>
-              <input type="range" id="edBottomSpeed" data-schema="adhd_bottom_speed" data-schema-scale="100" min="25" max="400" step="5" value="${Math.round(Number(s.adhd_bottom_speed || 1) * 100)}" />
-            </div>
-            <div class="field"><label>Низ: звук <b id="edBottomVolumeVal">${Math.round(Number(s.adhd_bottom_volume || 0))}</b>%</label>
-              <input type="range" id="edBottomVolume" data-schema="adhd_bottom_volume" min="0" max="50" step="1" value="${Math.round(Number(s.adhd_bottom_volume || 0))}" />
-            </div>
-          </div>
-          <div class="opt wide" id="edAdsBlock">
-            <span class="opt-head">${optIcon("style", "ico-purple")}<span class="opt-label">Реклама и плашки</span></span>
-            <label class="toggle"><input type="checkbox" id="edAdsEnabled" ${s.ads_enabled !== false ? "checked" : ""}/><span class="track"></span><span>Показывать рекламу в клипе</span></label>
-            <div class="ad-assets" id="edAdAssets">Загрузка библиотеки…</div>
-            <div class="ad-add-row">
-              <button type="button" class="link-btn" id="edAdUpload">+ файл</button>
-              <input type="file" id="edAdInput" class="hidden" accept="image/*,.gif,video/mp4,video/webm,video/quicktime"/>
-              <div class="layers-row" id="edLayers" title="Порядок слоёв снизу вверх"></div>
-              <input type="text" id="edAdText" maxlength="300" placeholder="Текст плашки или промокод" />
-              <button type="button" class="link-btn" id="edAdTextAdd">добавить текст</button>
-            </div>
-            <div class="ad-actions">
-              <button type="button" class="mini-btn" id="edAdOverlayBtn">Наложение в текущий момент</button>
-              <button type="button" class="mini-btn" id="edAdReplaceBtn">Вставка ролика</button>
-              <span class="opt-hint">Вставка ставит видео на паузу и удлиняет клип; наложение идёт поверх видео.</span>
-            </div>
-            <div class="ad-timeline" id="edAdTimeline"></div>
-            <div class="ad-list" id="edAdList"></div>
-            <div class="promo-box" id="edPromoBox">
-              <div class="promo-head">
-                <span class="opt-label">Рекламный футаж / Баннер</span>
-                <button type="button" class="link-btn" id="edPromoUpload">+ загрузить футаж (.mp4/.mov/.webm/.gif/.png)</button>
+              <div class="row2 ed-adhd ${s.layout === "adhd" ? "" : "hidden"}" id="edAdhd">
+                <div class="field">
+                  <label>Основное видео <b id="edSplitVal">${Math.round(editorSplit * 100)}</b>%</label>
+                  <input type="range" id="edSplit" min="${adhdSplitMin}" max="${adhdSplitMax}" step="1" value="${Math.round(editorSplit * 100)}" />
+                  <span class="opt-hint">Границу можно тянуть прямо в превью.</span>
+                </div>
+                <div class="field">
+                  <label>Нижний ролик</label>
+                  <select id="edAdhdBg"><option value="">Случайный</option></select>
+                  <button type="button" class="link-btn" id="edAdhdUploadBtn">загрузить своё видео</button>
+                  <input type="file" id="edAdhdInput" class="hidden" accept="video/*" />
+                </div>
+                <div class="field"><label>Верх: заполнение</label>
+                  <select id="edTopFill"><option value="cover" ${s.adhd_top_fill !== "contain" ? "selected" : ""}>Заполнить</option><option value="contain" ${s.adhd_top_fill === "contain" ? "selected" : ""}>Вписать целиком</option></select>
+                </div>
+                <div class="field"><label>Низ: заполнение</label>
+                  <select id="edBottomFill"><option value="cover" ${s.adhd_bottom_fill !== "contain" ? "selected" : ""}>Заполнить</option><option value="contain" ${s.adhd_bottom_fill === "contain" ? "selected" : ""}>Вписать целиком</option></select>
+                </div>
+                <div class="field"><label>Верх: масштаб <b id="edTopScaleVal">${Math.round(Number(s.adhd_top_scale || 1) * 100)}</b>%</label>
+                  <input type="range" id="edTopScale" data-schema="adhd_top_scale" data-schema-scale="100" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_top_scale || 1) * 100)}" />
+                </div>
+                <div class="field"><label>Низ: масштаб <b id="edBottomScaleVal">${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}</b>%</label>
+                  <input type="range" id="edBottomScale" data-schema="adhd_bottom_scale" data-schema-scale="100" min="50" max="200" step="5" value="${Math.round(Number(s.adhd_bottom_scale || 1) * 100)}" />
+                </div>
+                <div class="field"><label>Низ: скорость <b id="edBottomSpeedVal">${Number(s.adhd_bottom_speed || 1).toFixed(2)}</b>×</label>
+                  <input type="range" id="edBottomSpeed" data-schema="adhd_bottom_speed" data-schema-scale="100" min="25" max="400" step="5" value="${Math.round(Number(s.adhd_bottom_speed || 1) * 100)}" />
+                </div>
+                <div class="field"><label>Низ: звук <b id="edBottomVolumeVal">${Math.round(Number(s.adhd_bottom_volume || 0))}</b>%</label>
+                  <input type="range" id="edBottomVolume" data-schema="adhd_bottom_volume" min="0" max="50" step="1" value="${Math.round(Number(s.adhd_bottom_volume || 0))}" />
+                </div>
               </div>
               <div class="row2">
                 <div class="field">
-                  <label>Футаж из библиотеки</label>
-                  <div class="promo-pick">
-                    <select id="edPromoSelect" data-schema="promo_footage">
-                      <option value="">Не выбран</option>
-                      <option value="random">Случайный (видео / GIF)</option>
-                    </select>
-                    <button type="button" class="icon-btn hidden" id="edPromoDel" title="Удалить футаж из библиотеки">×</button>
+                  <label>Уникализация кадра</label>
+                  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                    <label class="toggle"><input type="checkbox" id="edHflip" ${s.hflip ? "checked" : ""}/><span class="track"></span><span>Зеркало</span></label>
+                    <label class="toggle"><input type="checkbox" id="edCutZoom" ${s.cut_zoom ? "checked" : ""}/><span class="track"></span><span>Зум на склейках</span></label>
                   </div>
                 </div>
                 <div class="field">
-                  <label>Режим наложения</label>
-                  <select id="edPromoMode" data-schema="promo_mode">
-                    <option value="overlay" ${s.promo_mode !== "split_bottom" ? "selected" : ""}>Поверх видео (наложение)</option>
-                    <option value="split_bottom" ${s.promo_mode === "split_bottom" ? "selected" : ""}>Снизу под видео (врезка)</option>
+                  <label>Наклон <b id="edTiltVal">${Number(s.tilt || 0)}</b>°</label>
+                  <input type="range" id="edTilt" data-schema="tilt" min="0" max="3" step="0.5" value="${Number(s.tilt || 0)}" />
+                </div>
+              </div>
+            </div>
+
+            <div class="ed-pane hidden" data-edpane="subs">
+              <div class="field">
+                <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+                  <label class="toggle"><input type="checkbox" id="edSubs" ${s.subtitles !== false ? "checked" : ""}/><span class="track"></span><span>Показывать субтитры</span></label>
+                  <label class="toggle"><input type="checkbox" id="edUpper" ${s.uppercase !== false ? "checked" : ""}/><span class="track"></span><span>КАПСОМ</span></label>
+                  <label class="toggle"><input type="checkbox" id="edShowHook" ${s.show_hook !== false ? "checked" : ""}/><span class="track"></span><span>Хук сверху</span></label>
+                </div>
+              </div>
+              <div class="field">
+                <label>Заголовок на видео (хук)</label>
+                <input type="text" id="edHook" maxlength="90" value="${esc(clip.hook || clip.title || "")}" />
+              </div>
+              <div class="field">
+                <label>Текст субтитров <span style="color:var(--muted-2);font-weight:400">— правьте слова, длинные фразы сами влезут в экран</span></label>
+                <textarea id="edText" rows="3" style="width:100%;resize:vertical">${esc((clip.words || []).map((w) => w.word).join(" "))}</textarea>
+              </div>
+              <div class="row2">
+                <div class="field">
+                  <label>Шрифт субтитров</label>
+                  <div class="font-pick">
+                    <select id="edFont">${fontOptionsHTML(fontKey)}</select>
+                    <button type="button" class="font-add" id="edFontAdd" title="Загрузить свой шрифт">＋</button>
+                  </div>
+                  <div class="font-sample ed-sample" id="edFontSample" style="font-family:${FONT_CSS[fontKey] || "VCMontserrat"}">ПРИМЕР СУБТИТРОВ</div>
+                </div>
+                <div class="field">
+                  <label>Базовое положение</label>
+                  <select id="edPos">
+                    ${SUB_POSITIONS.map(([k, label]) => `<option value="${k}" ${fontPos === k ? "selected" : ""}>${label}</option>`).join("")}
                   </select>
                 </div>
+              </div>
+              <div class="row2">
                 <div class="field">
-                  <label>Удаление фона (хромакей)</label>
-                  <select id="edPromoKey" data-schema="promo_key_color">
-                    <option value="none" ${(s.promo_key_color || "none") === "none" ? "selected" : ""}>Нет (есть прозрачность)</option>
-                    <option value="green" ${s.promo_key_color === "green" ? "selected" : ""}>Зелёный экран</option>
-                    <option value="black" ${s.promo_key_color === "black" ? "selected" : ""}>Чёрный фон</option>
-                  </select>
+                  <label>Размер <b id="edSizeVal">${fontSize}</b></label>
+                  <input type="range" id="edSize" data-schema="sub_size" min="70" max="180" step="2" value="${fontSize}" />
                 </div>
                 <div class="field">
-                  <label>Громкость звука футажа <b id="edPromoAudioVolVal">${Math.round(Number(s.promo_audio_vol || 0))}</b>%</label>
-                  <input type="range" id="edPromoAudioVol" data-schema="promo_audio_vol" min="0" max="100" step="1" value="${Math.round(Number(s.promo_audio_vol || 0))}" />
+                  <label title="Двигает субтитры по всей высоте кадра: от низа до верха">Сдвиг по вертикали <b id="edOffVal">${fontOffset}</b></label>
+                  <input type="range" id="edOffset" data-schema="sub_offset" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${fontOffset}" />
+                </div>
+                <div class="field">
+                  <label>Межстрочный интервал <b id="edLineGapVal">${Number(s.line_gap || 0)}</b></label>
+                  <input type="range" id="edLineGap" data-schema="line_gap" min="0" max="80" step="2" value="${Number(s.line_gap || 0)}" />
+                </div>
+                <div class="field">
+                  <label>Темп субтитров</label>
+                  <div class="seg" id="edSpeed">
+                    ${SUB_SPEEDS.map(([k, label]) => `<button data-val="${k}" class="${subSpeed === k ? "active" : ""}">${label}</button>`).join("")}
+                  </div>
                 </div>
               </div>
-              <div class="row2 ${s.promo_mode === "split_bottom" ? "hidden" : ""}" id="edPromoOverlayOpts">
-                <div class="field">
-                  <label>Масштаб ширины <b id="edPromoScaleVal">${Math.round(Number(s.promo_scale || 60))}</b>%</label>
-                  <input type="range" id="edPromoScale" data-schema="promo_scale" min="30" max="100" step="1" value="${Math.round(Number(s.promo_scale || 60))}" />
-                </div>
-                <div class="field">
-                  <label>Позиция</label>
-                  <select id="edPromoPos" data-schema="promo_pos">
-                    <option value="bottom" ${(s.promo_pos || "bottom") === "bottom" ? "selected" : ""}>Снизу над интерфейсом</option>
-                    <option value="top" ${s.promo_pos === "top" ? "selected" : ""}>Сверху</option>
-                    <option value="center" ${s.promo_pos === "center" ? "selected" : ""}>По центру</option>
-                    <option value="custom" ${s.promo_pos === "custom" ? "selected" : ""}>Точная X/Y</option>
-                  </select>
-                </div>
-              </div>
-              <div class="row2 ${s.promo_mode !== "split_bottom" && s.promo_pos === "custom" ? "" : "hidden"}" id="edPromoCustomPos">
-                <div class="field">
-                  <label>Координата X <b id="edPromoXVal">${Number(s.promo_x ?? 0.5).toFixed(2)}</b></label>
-                  <input type="range" id="edPromoX" data-schema="promo_x" min="0" max="1" step="0.01" value="${Number(s.promo_x ?? 0.5)}" />
-                </div>
-                <div class="field">
-                  <label>Координата Y <b id="edPromoYVal">${Number(s.promo_y ?? 0.5).toFixed(2)}</b></label>
-                  <input type="range" id="edPromoY" data-schema="promo_y" min="0" max="1" step="0.01" value="${Number(s.promo_y ?? 0.5)}" />
-                </div>
-              </div>
-              <div class="row2 ${s.promo_mode === "split_bottom" ? "" : "hidden"}" id="edPromoSplitOpts">
-                <div class="field">
-                  <label>Доля основного видео <b id="edPromoSplitVal">${Math.round(Number(s.promo_split_ratio || 0.7) * 100)}</b>%</label>
-                  <input type="range" id="edPromoSplitRatio" data-schema="promo_split_ratio" data-schema-scale="100" min="40" max="85" step="1" value="${Math.round(Number(s.promo_split_ratio || 0.7) * 100)}" />
-                </div>
-                <div class="field">
-                  <label>Заполнение нижней плашки</label>
-                  <select id="edPromoFill" data-schema="promo_fill">
-                    <option value="cover" ${s.promo_fill !== "contain" ? "selected" : ""}>Заполнить (с обрезкой)</option>
-                    <option value="contain" ${s.promo_fill === "contain" ? "selected" : ""}>Вписать целиком</option>
-                  </select>
-                </div>
-                <span class="opt-hint ${s.layout === "adhd" ? "" : "hidden"}" id="edPromoAdhdHint">В режиме «Снизу под видео» футаж занимает нижнюю область вместо ролика СДВГ.</span>
-              </div>
-              <div class="row2" id="edPromoTimingOpts">
-                <div class="field">
-                  <label>Расписание показа</label>
-                  <select id="edPromoTiming" data-schema="promo_timing" ${s.promo_mode === "split_bottom" ? 'disabled title="В режиме снизу футаж всегда играет весь клип"' : ""}>
-                    <option value="loop" ${(s.promo_timing || "loop") === "loop" ? "selected" : ""}>Весь клип (цикл)</option>
-                    <option value="start" ${s.promo_timing === "start" ? "selected" : ""}>Один раз со старта</option>
-                    <option value="periodic" ${s.promo_timing === "periodic" ? "selected" : ""}>Каждые N секунд</option>
-                    <option value="end" ${s.promo_timing === "end" ? "selected" : ""}>В конце клипа</option>
-                  </select>
-                  <span class="opt-hint ${s.promo_mode === "split_bottom" ? "" : "hidden"}" id="edPromoTimingNote">В режиме «Снизу под видео» футаж всегда идёт весь клип.</span>
-                </div>
-                <div class="field" id="edPromoStartWrap">
-                  <label>Старт, с</label>
-                  <input type="number" id="edPromoStartSec" data-schema="promo_start_sec" min="0" max="7200" step="0.5" value="${Number(s.promo_start_sec ?? 2)}" />
-                </div>
-                <div class="field" id="edPromoDurWrap">
-                  <label>Длительность, с</label>
-                  <input type="number" id="edPromoDurSec" data-schema="promo_duration_sec" min="0.5" max="300" step="0.5" value="${Number(s.promo_duration_sec ?? 4)}" />
-                </div>
-                <div class="field" id="edPromoPeriodWrap">
-                  <label>Период, с</label>
-                  <input type="number" id="edPromoPeriodSec" data-schema="promo_period_sec" min="2" max="600" step="1" value="${Number(s.promo_period_sec ?? 20)}" />
-                </div>
+              <div class="field">
+                <label>Цвет подсветки</label>
+                <div class="swatches" id="edAccents">${swatchesHTML(accent)}</div>
               </div>
             </div>
-          </div>
-          <div class="field">
-            <label>Субтитры</label>
-            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-              <label class="toggle"><input type="checkbox" id="edSubs" ${s.subtitles !== false ? "checked" : ""}/><span class="track"></span><span>Показывать</span></label>
-              <label class="toggle"><input type="checkbox" id="edUpper" ${s.uppercase !== false ? "checked" : ""}/><span class="track"></span><span>КАПСОМ</span></label>
-              <label class="toggle"><input type="checkbox" id="edShowHook" ${s.show_hook !== false ? "checked" : ""}/><span class="track"></span><span>Хук сверху</span></label>
-            </div>
-          </div>
-          <div class="row2">
-            <div class="field">
-              <label>Звук</label>
-              <label class="toggle"><input type="checkbox" id="edDub" ${s.external_audio ? "checked" : ""} ${project.dub ? "" : "disabled"}/><span class="track"></span><span>Дубляж вместо оригинала</span></label>
-              ${project.dub ? "" : `<span class="opt-hint">Дубляж не подключён — добавьте его в окне настройки проекта.</span>`}
-            </div>
-            <div class="field">
-              <label>Сдвиг дубляжа, с</label>
-              <input type="number" id="edDubOffset" min="-300" max="300" step="0.1" value="${Number(s.audio_offset || 0)}" ${project.dub ? "" : "disabled"} />
-            </div>
-          </div>
-          <div class="row2">
-            <div class="field">
-              <label>Шрифт субтитров</label>
-              <div class="font-pick">
-                <select id="edFont">
-                  ${fontOptionsHTML(fontKey)}
-                </select>
-                <button type="button" class="font-add" id="edFontAdd" title="Загрузить свой шрифт">＋</button>
+
+            <div class="ed-pane hidden" data-edpane="ads" id="edAdsBlock">
+              <div class="promo-head">
+                <label class="toggle"><input type="checkbox" id="edAdsEnabled" ${s.ads_enabled !== false ? "checked" : ""}/><span class="track"></span><span>Показывать рекламный баннер</span></label>
+                <button type="button" class="link-btn" id="edPromoUpload">+ загрузить баннер (.mp4, .mov, .webm, .gif, .png)</button>
+                <input type="file" id="edAdInput" class="hidden" accept="image/*,.gif,video/mp4,video/webm,video/quicktime"/>
               </div>
-              <div class="font-sample ed-sample" id="edFontSample" style="font-family:${FONT_CSS[fontKey] || "VCMontserrat"}">ПРИМЕР СУБТИТРОВ</div>
+              <div class="layers-row" id="edLayers" title="Порядок слоёв снизу вверх"></div>
+              <div class="ad-assets" id="edAdAssets">Загрузка библиотеки баннеров…</div>
+              <div class="promo-box" id="edPromoBox">
+                <div class="row2">
+                  <div class="field">
+                    <label>Баннер клипа</label>
+                    <div class="promo-pick">
+                      <select id="edPromoSelect" data-schema="promo_footage">
+                        <option value="">Не выбран</option>
+                        <option value="random">Случайный (видео / GIF)</option>
+                      </select>
+                      <button type="button" class="icon-btn hidden" id="edPromoDel" title="Удалить баннер из библиотеки">×</button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label>Как вклеить баннер</label>
+                    <select id="edPromoMode" data-schema="promo_mode">
+                      <option value="overlay" ${s.promo_mode !== "split_bottom" ? "selected" : ""}>Поверх видео (наложение)</option>
+                      <option value="split_bottom" ${s.promo_mode === "split_bottom" ? "selected" : ""}>Нижняя врезка под видео</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Удаление фона (хромакей)</label>
+                    <select id="edPromoKey" data-schema="promo_key_color">
+                      <option value="none" ${(s.promo_key_color || "none") === "none" ? "selected" : ""}>Нет (как есть / альфа)</option>
+                      <option value="green" ${s.promo_key_color === "green" ? "selected" : ""}>Убрать зелёный экран</option>
+                      <option value="black" ${s.promo_key_color === "black" ? "selected" : ""}>Убрать чёрный фон</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Звук баннера <b id="edPromoAudioVolVal">${Math.round(Number(s.promo_audio_vol || 0))}</b>%</label>
+                    <input type="range" id="edPromoAudioVol" data-schema="promo_audio_vol" min="0" max="100" step="1" value="${Math.round(Number(s.promo_audio_vol || 0))}" />
+                  </div>
+                </div>
+                <div class="row2 ${s.promo_mode === "split_bottom" ? "hidden" : ""}" id="edPromoOverlayOpts">
+                  <div class="field">
+                    <label>Ширина баннера <b id="edPromoScaleVal">${Math.round(Number(s.promo_scale || 60))}</b>%</label>
+                    <input type="range" id="edPromoScale" data-schema="promo_scale" min="30" max="100" step="1" value="${Math.round(Number(s.promo_scale || 60))}" />
+                  </div>
+                  <div class="field">
+                    <label>Позиция на экране</label>
+                    <select id="edPromoPos" data-schema="promo_pos">
+                      <option value="bottom" ${(s.promo_pos || "bottom") === "bottom" ? "selected" : ""}>Снизу над интерфейсом</option>
+                      <option value="top" ${s.promo_pos === "top" ? "selected" : ""}>Сверху</option>
+                      <option value="center" ${s.promo_pos === "center" ? "selected" : ""}>По центру</option>
+                      <option value="custom" ${s.promo_pos === "custom" ? "selected" : ""}>Точная X/Y</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="row2 ${s.promo_mode !== "split_bottom" && s.promo_pos === "custom" ? "" : "hidden"}" id="edPromoCustomPos">
+                  <div class="field">
+                    <label>Координата X <b id="edPromoXVal">${Number(s.promo_x ?? 0.5).toFixed(2)}</b></label>
+                    <input type="range" id="edPromoX" data-schema="promo_x" min="0" max="1" step="0.01" value="${Number(s.promo_x ?? 0.5)}" />
+                  </div>
+                  <div class="field">
+                    <label>Координата Y <b id="edPromoYVal">${Number(s.promo_y ?? 0.5).toFixed(2)}</b></label>
+                    <input type="range" id="edPromoY" data-schema="promo_y" min="0" max="1" step="0.01" value="${Number(s.promo_y ?? 0.5)}" />
+                  </div>
+                </div>
+                <div class="row2 ${s.promo_mode === "split_bottom" ? "" : "hidden"}" id="edPromoSplitOpts">
+                  <div class="field">
+                    <label>Доля основного видео <b id="edPromoSplitVal">${Math.round(Number(s.promo_split_ratio || 0.7) * 100)}</b>%</label>
+                    <input type="range" id="edPromoSplitRatio" data-schema="promo_split_ratio" data-schema-scale="100" min="40" max="85" step="1" value="${Math.round(Number(s.promo_split_ratio || 0.7) * 100)}" />
+                  </div>
+                  <div class="field">
+                    <label>Заполнение нижней области</label>
+                    <select id="edPromoFill" data-schema="promo_fill">
+                      <option value="cover" ${s.promo_fill !== "contain" ? "selected" : ""}>Заполнить (с обрезкой)</option>
+                      <option value="contain" ${s.promo_fill === "contain" ? "selected" : ""}>Вписать целиком</option>
+                    </select>
+                  </div>
+                  <span class="opt-hint ${s.layout === "adhd" ? "" : "hidden"}" id="edPromoAdhdHint">Нижняя врезка баннера заменит ролик СДВГ в этом клипе.</span>
+                </div>
+                <div class="row2" id="edPromoTimingOpts">
+                  <div class="field">
+                    <label>Когда показывать</label>
+                    <select id="edPromoTiming" data-schema="promo_timing" ${s.promo_mode === "split_bottom" ? 'disabled title="В режиме снизу баннер всегда играет весь клип"' : ""}>
+                      <option value="loop" ${(s.promo_timing || "loop") === "loop" ? "selected" : ""}>Весь клип (цикл)</option>
+                      <option value="start" ${s.promo_timing === "start" ? "selected" : ""}>Один раз со старта</option>
+                      <option value="periodic" ${s.promo_timing === "periodic" ? "selected" : ""}>Каждые N секунд</option>
+                      <option value="end" ${s.promo_timing === "end" ? "selected" : ""}>В конце клипа</option>
+                    </select>
+                    <span class="opt-hint ${s.promo_mode === "split_bottom" ? "" : "hidden"}" id="edPromoTimingNote">В режиме «Нижняя врезка» баннер всегда идёт весь клип.</span>
+                  </div>
+                  <div class="field" id="edPromoStartWrap">
+                    <label>Старт, с</label>
+                    <input type="number" id="edPromoStartSec" data-schema="promo_start_sec" min="0" max="7200" step="0.5" value="${Number(s.promo_start_sec ?? 2)}" />
+                  </div>
+                  <div class="field" id="edPromoDurWrap">
+                    <label>Длительность, с</label>
+                    <input type="number" id="edPromoDurSec" data-schema="promo_duration_sec" min="0.5" max="300" step="0.5" value="${Number(s.promo_duration_sec ?? 4)}" />
+                  </div>
+                  <div class="field" id="edPromoPeriodWrap">
+                    <label>Период, с</label>
+                    <input type="number" id="edPromoPeriodSec" data-schema="promo_period_sec" min="2" max="600" step="1" value="${Number(s.promo_period_sec ?? 20)}" />
+                  </div>
+                </div>
+              </div>
+              <div class="ad-timeline" id="edAdTimeline"></div>
+              <details ${adEvents.length ? "open" : ""}>
+                <summary class="opt-hint" style="cursor:pointer">Точечные вставки с паузой клипа на таймлайне (${adEvents.length})</summary>
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                  <div class="ad-actions">
+                    <button type="button" class="mini-btn" id="edAdReplaceBtn">Вклеить с паузой (в текущий момент)</button>
+                    <button type="button" class="mini-btn" id="edAdOverlayBtn">Наложить по времени</button>
+                  </div>
+                  <div class="ad-list" id="edAdList"></div>
+                </div>
+              </details>
             </div>
-            <div class="field">
-              <label>Положение</label>
-              <select id="edPos">
-                ${SUB_POSITIONS.map(([k, label]) => `<option value="${k}" ${fontPos === k ? "selected" : ""}>${label}</option>`).join("")}
-              </select>
+
+            <div class="ed-pane hidden" data-edpane="trim">
+              <div class="row2">
+                <div class="field">
+                  <label>Начало клипа, с</label>
+                  <div class="range-row">
+                    <input type="range" id="edStart" min="0" max="${maxT}" step="0.1" value="${clip.start}" />
+                    <input type="number" id="edStartNum" min="0" max="${maxT}" step="0.1" value="${clip.start.toFixed(1)}" />
+                  </div>
+                  <div class="nudge-row">
+                    <button type="button" class="mini-btn" data-nudge="start:-1">−1 с</button>
+                    <button type="button" class="mini-btn" data-nudge="start:-0.2">−0.2</button>
+                    <button type="button" class="mini-btn" data-nudge="start:0.2">+0.2</button>
+                    <button type="button" class="mini-btn" data-nudge="start:1">+1 с</button>
+                    <button type="button" class="mini-btn" data-nudge="start:word">к слову</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Конец клипа, с</label>
+                  <div class="range-row">
+                    <input type="range" id="edEnd" min="0" max="${maxT}" step="0.1" value="${clip.end}" />
+                    <input type="number" id="edEndNum" min="0" max="${maxT}" step="0.1" value="${clip.end.toFixed(1)}" />
+                  </div>
+                  <div class="nudge-row">
+                    <button type="button" class="mini-btn" data-nudge="end:-1">−1 с</button>
+                    <button type="button" class="mini-btn" data-nudge="end:-0.2">−0.2</button>
+                    <button type="button" class="mini-btn" data-nudge="end:0.2">+0.2</button>
+                    <button type="button" class="mini-btn" data-nudge="end:1">+1 с</button>
+                    <button type="button" class="mini-btn" data-nudge="end:word">к слову</button>
+                  </div>
+                  <div class="ed-dur" id="edDur"></div>
+                </div>
+              </div>
+              <div class="row2">
+                <div class="field">
+                  <label>Монтаж и ритм</label>
+                  <label class="toggle"><input type="checkbox" id="edJumpCuts" ${s.jump_cuts ? "checked" : ""}/><span class="track"></span><span>Вырезать паузы</span></label>
+                </div>
+                <div class="field">
+                  <label>Скорость <b id="edSpeedRVal">${Number(s.speed || 1).toFixed(2)}</b>×</label>
+                  <input type="range" id="edSpeedR" data-schema="speed" min="1" max="1.1" step="0.01" value="${Number(s.speed || 1)}" />
+                </div>
+                <div class="field">
+                  <label>Питч звука <b id="edPitchVal">${Number(s.pitch || 1).toFixed(2)}</b>×</label>
+                  <input type="range" id="edPitch" data-schema="pitch" min="0.95" max="1.05" step="0.01" value="${Number(s.pitch || 1)}" />
+                </div>
+                <div class="field">
+                  <label>Сдвиг дубляжа, с</label>
+                  <input type="number" id="edDubOffset" min="-300" max="300" step="0.1" value="${Number(s.audio_offset || 0)}" ${project.dub ? "" : "disabled"} />
+                </div>
+              </div>
+              <div class="field">
+                <label class="toggle"><input type="checkbox" id="edDub" ${s.external_audio ? "checked" : ""} ${project.dub ? "" : "disabled"}/><span class="track"></span><span>Дубляж вместо оригинала</span></label>
+                ${project.dub ? "" : `<span class="opt-hint">Дубляж не подключён — добавьте файл в настройке проекта.</span>`}
+              </div>
+              <div class="field">
+                <label>Подпись для публикации</label>
+                <textarea id="edCaption">${esc(clip.caption || "")}</textarea>
+              </div>
             </div>
-          </div>
-          <div class="row2">
-            <div class="field">
-              <label>Размер <b id="edSizeVal">${fontSize}</b></label>
-              <input type="range" id="edSize" data-schema="sub_size" min="70" max="180" step="2" value="${fontSize}" />
-            </div>
-            <div class="field">
-              <label title="Двигает субтитры по всей высоте кадра: от низа до верха">Сдвиг по вертикали <b id="edOffVal">${fontOffset}</b></label>
-              <input type="range" id="edOffset" data-schema="sub_offset" min="${SUB_OFFSET_MIN}" max="${SUB_OFFSET_MAX}" step="10" value="${fontOffset}" />
-            </div>
-            <div class="field">
-              <label>Межстрочный интервал <b id="edLineGapVal">${Number(s.line_gap || 0)}</b></label>
-              <input type="range" id="edLineGap" data-schema="line_gap" min="0" max="80" step="2" value="${Number(s.line_gap || 0)}" />
-            </div>
-          </div>
-          <div class="field">
-            <label>Темп субтитров</label>
-            <div class="seg" id="edSpeed">
-              ${SUB_SPEEDS.map(([k, label]) => `<button data-val="${k}" class="${subSpeed === k ? "active" : ""}">${label}</button>`).join("")}
-            </div>
-          </div>
-          <div class="field">
-            <label>Цвет подсветки</label>
-            <div class="swatches" id="edAccents">
-              ${swatchesHTML(accent)}
-            </div>
-          </div>
-          <div class="field">
-            <label>Уникализация</label>
-            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-              <label class="toggle"><input type="checkbox" id="edHflip" ${s.hflip ? "checked" : ""}/><span class="track"></span><span>Зеркало</span></label>
-              <label class="toggle"><input type="checkbox" id="edJumpCuts" ${s.jump_cuts ? "checked" : ""}/><span class="track"></span><span>Склейки пауз</span></label>
-              <label class="toggle"><input type="checkbox" id="edCutZoom" ${s.cut_zoom ? "checked" : ""}/><span class="track"></span><span>Зум на склейках</span></label>
-            </div>
-          </div>
-          <div class="row2">
-            <div class="field">
-              <label>Наклон <b id="edTiltVal">${Number(s.tilt || 0)}</b>°</label>
-              <input type="range" id="edTilt" data-schema="tilt" min="0" max="3" step="0.5" value="${Number(s.tilt || 0)}" />
-            </div>
-            <div class="field">
-              <label>Скорость <b id="edSpeedRVal">${Number(s.speed || 1).toFixed(2)}</b>×</label>
-              <input type="range" id="edSpeedR" data-schema="speed" min="1" max="1.1" step="0.01" value="${Number(s.speed || 1)}" />
-            </div>
-            <div class="field">
-              <label>Питч <b id="edPitchVal">${Number(s.pitch || 1).toFixed(2)}</b>×</label>
-              <input type="range" id="edPitch" data-schema="pitch" min="0.95" max="1.05" step="0.01" value="${Number(s.pitch || 1)}" />
-            </div>
-          </div>
-          <div class="field">
-            <label>Подпись для публикации</label>
-            <textarea id="edCaption">${esc(clip.caption || "")}</textarea>
           </div>
         </div>
       </div>
@@ -3329,6 +3361,22 @@ function openEditor(clipId) {
 
   $("#modal").classList.remove("hidden");
 
+  /* --- Переключение вкладок редактора и режима превью --- */
+  $$("#edTabs .ed-tab").forEach((tab) => tab.addEventListener("click", () => {
+    const key = tab.dataset.edtab;
+    $$("#edTabs .ed-tab").forEach((t) => t.classList.toggle("active", t === tab));
+    $$(".ed-pane").forEach((p) => p.classList.toggle("hidden", p.dataset.edpane !== key));
+  }));
+  $$("#edPvTabs button").forEach((btn) => btn.addEventListener("click", () => {
+    const modePv = btn.dataset.pv;
+    $$("#edPvTabs button").forEach((b) => b.classList.toggle("active", b === btn));
+    const showVideo = modePv === "video";
+    $("#edStageWrap").classList.toggle("hidden", showVideo);
+    $("#edSeekRow").classList.toggle("hidden", showVideo);
+    $("#edVideoWrap").classList.toggle("hidden", !showVideo);
+    if (!showVideo) requestAnimationFrame(() => { drawFrame(); updateEditorPreview(); });
+  }));
+
   let chosenAccent = accent;
   $("#edAccents").addEventListener("click", (e) => {
     const b = e.target.closest(".swatch");
@@ -3338,13 +3386,38 @@ function openEditor(clipId) {
     updateEditorPreview();
   });
 
-  /* --- Живой предпросмотр: кадр из источника + текст субтитров --- */
+  /* --- Живой предпросмотр: формат, кадрирование, субтитры, баннер --- */
   const stage = $("#edStage");
   const canvas = $("#edCanvas");
   const srcVideo = $("#edSrc");
   const subView = $("#edSubView");
   const hookView = $("#edHookView");
   const stageHint = $("#edStageHint");
+  const promoOv = $("#edPromoOv");
+
+  const effectiveAspect = () => {
+    const layout = $("#edLayout") ? $("#edLayout").value : "";
+    const promoOn = !$("#edAdsEnabled") || $("#edAdsEnabled").checked;
+    const promoVal = $("#edPromoSelect") ? $("#edPromoSelect").value : promoSelected;
+    const promoSplit = promoOn && Boolean(promoVal) && $("#edPromoMode") && $("#edPromoMode").value === "split_bottom";
+    const forced = promoSplit || layout === "adhd" || layout === "band" || layout === "band_top";
+    return { aspect: forced ? "9:16" : ($("#edAspect") ? $("#edAspect").value : "9:16"), forced };
+  };
+
+  const syncStageGeometry = () => {
+    if (!stage) return { w: 1080, h: 1920, aspect: "9:16" };
+    const { aspect, forced } = effectiveAspect();
+    const meta = ASPECT_META[aspect] || { w: 1080, h: 1920 };
+    const [aw, ah] = aspect.split(":").map(Number);
+    stage.style.aspectRatio = `${aw} / ${ah}`;
+    stage.classList.toggle("is-wide", aw >= ah);
+    stage.classList.toggle("is-tall", aw < ah);
+    const badge = $("#edAspectBadge");
+    if (badge) badge.textContent = forced ? `${aspect} (раскладка)` : aspect;
+    const ahint = $("#edAspectHint");
+    if (ahint) ahint.classList.toggle("hidden", !forced);
+    return { w: meta.w, h: meta.h, aspect };
+  };
 
   const drawCover = (ctx, video, dx, dy, dw, dh) => {
     const vw = video.videoWidth, vh = video.videoHeight;
@@ -3353,6 +3426,14 @@ function openEditor(clipId) {
     const sw = dw / scale, sh = dh / scale;
     const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
     ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+  };
+
+  const drawContain = (ctx, video, dx, dy, dw, dh) => {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    const scale = Math.min(dw / vw, dh / vh);
+    const tw = vw * scale, th = vh * scale;
+    ctx.drawImage(video, 0, 0, vw, vh, dx + (dw - tw) / 2, dy + (dh - th) / 2, tw, th);
   };
 
   const drawFacecam = (ctx, fc, dx, dy, dw, dh, rounded) => {
@@ -3379,6 +3460,7 @@ function openEditor(clipId) {
   };
 
   const drawFrame = () => {
+    const geom = syncStageGeometry();
     if (!stage || !canvas || !srcVideo || !srcVideo.videoWidth) return;
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(stage.clientWidth * dpr));
@@ -3392,12 +3474,14 @@ function openEditor(clipId) {
     canvas.style.transform = parts.join(" ");
     const ctx = canvas.getContext("2d");
     const layout = $("#edLayout") ? $("#edLayout").value : "";
+    const cropMode = $("#edMode") ? $("#edMode").value : "auto";
     const fc = (s && s.facecam) || null;
-    const k = w / 1080;
+    const k = w / geom.w;
     const promoOn = !$("#edAdsEnabled") || $("#edAdsEnabled").checked;
-    const promoVal = $("#edPromoSelect") ? $("#edPromoSelect").value : "";
+    const promoVal = $("#edPromoSelect") ? $("#edPromoSelect").value : promoSelected;
     const promoSplit = promoOn && Boolean(promoVal) && $("#edPromoMode") && $("#edPromoMode").value === "split_bottom";
 
+    ctx.clearRect(0, 0, w, h);
     if (promoSplit) {
       const pRatio = $("#edPromoSplitRatio") ? Number($("#edPromoSplitRatio").value) / 100 : 0.7;
       const geometry = window.VCGeometry
@@ -3407,18 +3491,15 @@ function openEditor(clipId) {
       drawCover(ctx, srcVideo, 0, 0, w, topH);
       ctx.fillStyle = "#101116";
       ctx.fillRect(0, topH, w, h - topH);
-      ctx.fillStyle = "rgba(250,204,21,0.55)";
+      ctx.fillStyle = "rgba(250,204,21,0.72)";
       ctx.textAlign = "center";
       ctx.font = `${Math.max(9, Math.round(22 * k))}px VCMontserrat, sans-serif`;
-      ctx.fillText("рекламный футаж", w / 2, topH + (h - topH) / 2);
+      ctx.fillText("рекламный баннер", w / 2, topH + (h - topH) / 2);
       ctx.textAlign = "start";
       stage.style.cursor = "";
-      ctx.strokeStyle = "rgba(250,204,21,0.35)";
+      ctx.strokeStyle = "rgba(250,204,21,0.4)";
       ctx.lineWidth = Math.max(1, Math.round(2 * k));
-      ctx.beginPath();
-      ctx.moveTo(0, topH);
-      ctx.lineTo(w, topH);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, topH); ctx.lineTo(w, topH); ctx.stroke();
     } else if (layout === "band" && fc) {
       const topH = Math.round(h * 1280 / 1920);
       drawCover(ctx, srcVideo, 0, 0, w, topH);
@@ -3445,24 +3526,105 @@ function openEditor(clipId) {
       stage.style.cursor = "ns-resize";
       ctx.strokeStyle = "rgba(255,255,255,0.18)";
       ctx.lineWidth = Math.max(1, Math.round(2 * k));
-      ctx.beginPath();
-      ctx.moveTo(0, topH);
-      ctx.lineTo(w, topH);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, topH); ctx.lineTo(w, topH); ctx.stroke();
+    } else if (cropMode === "blur") {
+      ctx.save();
+      ctx.filter = "blur(16px) brightness(0.72)";
+      drawCover(ctx, srcVideo, -w * 0.06, -h * 0.06, w * 1.12, h * 1.12);
+      ctx.restore();
+      drawContain(ctx, srcVideo, 0, 0, w, h);
     } else {
       drawCover(ctx, srcVideo, 0, 0, w, h);
     }
     if (stageHint) stageHint.classList.add("hidden");
   };
 
+  const updatePromoOverlayPreview = (geom) => {
+    if (!promoOv || !stage) return;
+    const adsOn = !$("#edAdsEnabled") || $("#edAdsEnabled").checked;
+    const val = $("#edPromoSelect") ? $("#edPromoSelect").value : promoSelected;
+    const mode = ($("#edPromoMode") || {}).value || "overlay";
+    if (!adsOn || !val || mode !== "overlay") {
+      promoOv.classList.add("hidden");
+      promoOv.innerHTML = "";
+      return;
+    }
+    const scalePct = Math.max(30, Math.min(100, Number(($("#edPromoScale") || {}).value || 60)));
+    const pos = ($("#edPromoPos") || {}).value || "bottom";
+    const px = Math.max(0, Math.min(1, Number(($("#edPromoX") || {}).value ?? 0.5)));
+    const py = Math.max(0, Math.min(1, Number(($("#edPromoY") || {}).value ?? 0.5)));
+    const zone = PLATFORM_ZONES[$("#edPlatform") ? $("#edPlatform").value : "universal"] || PLATFORM_ZONES.universal;
+    const topPct = Math.max(24, Math.round(zone.top * geom.h / 1920)) / geom.h * 100;
+    const botPct = Math.max(24, Math.round(zone.bottom * geom.h / 1920)) / geom.h * 100;
+    const assetObj = adAssets.find((a) => a.id === val);
+    const ratio = (assetObj && assetObj.width && assetObj.height)
+      ? (assetObj.height / assetObj.width) : 0.42;
+    const stageW = Math.max(1, stage.clientWidth);
+    const stageH = Math.max(1, stage.clientHeight);
+    const boxW = stageW * (scalePct / 100);
+    const boxH = Math.min(stageH * 0.45, Math.max(22, boxW * ratio));
+
+    promoOv.classList.remove("hidden");
+    promoOv.style.width = `${scalePct}%`;
+    promoOv.style.height = `${Math.round(boxH)}px`;
+    promoOv.style.transform = "";
+    promoOv.style.top = "";
+    promoOv.style.bottom = "";
+    promoOv.style.left = "";
+
+    if (pos === "center") {
+      promoOv.style.left = "50%";
+      promoOv.style.top = "50%";
+      promoOv.style.transform = "translate(-50%, -50%)";
+    } else if (pos === "top") {
+      promoOv.style.left = "50%";
+      promoOv.style.top = `${topPct}%`;
+      promoOv.style.transform = "translateX(-50%)";
+    } else if (pos === "custom") {
+      const leftPx = Math.max(0, Math.min(stageW - boxW, stageW * px - boxW / 2));
+      const topPx = Math.max(0, Math.min(stageH - boxH, stageH * py - boxH / 2));
+      promoOv.style.left = `${Math.round(leftPx)}px`;
+      promoOv.style.top = `${Math.round(topPx)}px`;
+    } else {
+      promoOv.style.left = "50%";
+      promoOv.style.bottom = `${botPct}%`;
+      promoOv.style.transform = "translateX(-50%)";
+    }
+    if (assetObj && assetObj.kind !== "video" && assetObj.url) {
+      promoOv.innerHTML = `<img src="${assetObj.url}" alt="">`;
+    } else {
+      const label = val === "random" ? "Случайный баннер" : (assetObj ? assetObj.name : "Баннер");
+      promoOv.innerHTML = `<span>${esc(label)}</span>`;
+    }
+  };
+
+  const previewSeek = $("#edPreviewSeek");
+  const updatePreviewSeekRange = () => {
+    if (!previewSeek) return;
+    const a = Number($("#edStart") ? $("#edStart").value : clip.start);
+    const b = Number($("#edEnd") ? $("#edEnd").value : clip.end);
+    previewSeek.min = String(a);
+    previewSeek.max = String(Math.max(a + 0.5, b));
+    const cur = Number(previewSeek.value);
+    if (cur < a || cur > b) previewSeek.value = String(Math.min(b, a + 0.3).toFixed(1));
+    const lbl = $("#edSeekVal");
+    if (lbl) lbl.textContent = (Number(previewSeek.value) - a).toFixed(1);
+  };
   const seekSource = () => {
     if (!srcVideo || !srcVideo.src) return;
-    const target = Math.max(0, Number(start.value) + 0.3);
+    updatePreviewSeekRange();
+    const target = Math.max(0, Number(previewSeek ? previewSeek.value : (Number(start.value) + 0.3)));
     try {
-      if (Math.abs(srcVideo.currentTime - target) > 0.4) srcVideo.currentTime = target;
+      if (Math.abs(srcVideo.currentTime - target) > 0.25) srcVideo.currentTime = target;
       else drawFrame();
     } catch (_) {}
   };
+  if (previewSeek) previewSeek.addEventListener("input", () => {
+    const a = Number($("#edStart") ? $("#edStart").value : clip.start);
+    const lbl = $("#edSeekVal");
+    if (lbl) lbl.textContent = Math.max(0, Number(previewSeek.value) - a).toFixed(1);
+    seekSource();
+  });
 
   if (srcVideo) {
     srcVideo.addEventListener("loadeddata", seekSource);
@@ -3471,41 +3633,67 @@ function openEditor(clipId) {
   }
 
   const updateEditorPreview = () => {
+    const geom = syncStageGeometry();
     if (!stage || !subView) return;
     const W = stage.clientWidth || 1;
-    const k = W / 1080;
+    const stageH = Math.max(1, stage.clientHeight);
+    const k = W / geom.w;
+    const yScale = geom.h / 1920;
+    const resScale = (geom.w === 1080 && geom.h === 1920)
+      ? 1.0 : Math.max(0.66, Math.min(geom.w / 1080, geom.h / 1920));
     const zone = PLATFORM_ZONES[$("#edPlatform") ? $("#edPlatform").value : "universal"] || PLATFORM_ZONES.universal;
-    const size = Number($("#edSize") ? $("#edSize").value : 118) * 0.45 * k;
+    let size = Number($("#edSize") ? $("#edSize").value : 118) * 0.45 * k * resScale;
     const position = $("#edPos") ? $("#edPos").value : "bottom";
     const offset = Number($("#edOffset") ? $("#edOffset").value : 0);
-  const lineGap = Number($("#edLineGap") ? $("#edLineGap").value : 0);
+    const lineGap = Number($("#edLineGap") ? $("#edLineGap").value : 0);
     const upper = $("#edUpper") ? $("#edUpper").checked : true;
     const showSubs = $("#edSubs") ? $("#edSubs").checked : true;
     const showHook = $("#edShowHook") ? $("#edShowHook").checked : true;
     const fontKey = $("#edFont") ? $("#edFont").value : "montserrat";
 
-    const words = (($("#edText") ? $("#edText").value : "") || "").trim().split(/\s+/).filter(Boolean).slice(0, 8);
-    const line = words.map((w, i) => `<span class="w ${i === 0 ? "hl" : ""}">${esc(upper ? w.toUpperCase() : w)}</span>`).join(" ");
+    const rawText = (($("#edText") ? $("#edText").value : "") || "").trim() || "Пример субтитров";
+    const words = rawText.split(/\s+/).filter(Boolean).slice(0, 6);
+    const displayWords = words.map((w) => (upper ? w.toUpperCase() : w));
+    const lineHtml = displayWords.map((w, i) => `<span class="w ${i === 0 ? "hl" : ""}">${esc(w)}</span>`).join(" ");
 
     subView.style.fontFamily = FONT_CSS[fontKey] || "VCMontserrat";
     subView.style.fontSize = size + "px";
-    subView.innerHTML = line;
+    subView.innerHTML = lineHtml;
     subView.style.display = showSubs && words.length ? "block" : "none";
     subView.style.lineHeight = (1.15 + lineGap / 90).toFixed(2);
+    // Подгоняем размер в превью, если одиночное длинное слово шире сцены.
+    const maxSafePx = W * 0.86;
+    if (showSubs && words.length) {
+      let longestPx = 0;
+      $$(".w", subView).forEach((el) => {
+        longestPx = Math.max(longestPx, el.getBoundingClientRect().width);
+      });
+      if (longestPx > maxSafePx && longestPx > 0) {
+        size = Math.max(8, size * (maxSafePx / longestPx));
+        subView.style.fontSize = size + "px";
+      }
+    }
+
     subView.style.top = "";
     subView.style.bottom = "";
     subView.style.transform = "";
-    const stageH = Math.max(1, stage.clientHeight);
     if (position === "top") {
-      const y = (zone.top + 120) * k - offset * k;
+      const y = ((zone.top + 120) * yScale - offset * yScale) * (stageH / geom.h);
       subView.style.top = pxClamp(y, 8, stageH - 8) + "px";
     } else if (position === "middle") {
-      const y = stageH / 2 - offset * k;
+      const y = stageH / 2 - (offset * yScale) * (stageH / geom.h);
       subView.style.top = pxClamp(y, 8, stageH - 8) + "px";
       subView.style.transform = "translateY(-50%)";
     } else {
-      const bandLift = (($("#edLayout") ? $("#edLayout").value : "") === "band") ? 640 * k : 0;
-      const fromBottom = Math.max(320, zone.bottom + 60) * k + offset * k + bandLift;
+      const layoutNow = $("#edLayout") ? $("#edLayout").value : "";
+      const bandLift = (layoutNow === "band") ? 640 * yScale : 0;
+      const promoOn = !$("#edAdsEnabled") || $("#edAdsEnabled").checked;
+      const promoVal = $("#edPromoSelect") ? $("#edPromoSelect").value : promoSelected;
+      const promoSplit = promoOn && Boolean(promoVal) && $("#edPromoMode") && $("#edPromoMode").value === "split_bottom";
+      const splitRatio = $("#edPromoSplitRatio") ? Number($("#edPromoSplitRatio").value) / 100 : 0.7;
+      const splitReserve = promoSplit ? Math.round(1920 * (1 - splitRatio)) : 0;
+      const baseBottom = Math.max(320, zone.bottom + 60, splitReserve + 60) * yScale;
+      const fromBottom = (baseBottom + offset * yScale + bandLift) * (stageH / geom.h);
       subView.style.bottom = pxClamp(fromBottom, 8, stageH - 8) + "px";
     }
     subView.style.setProperty("--hl", ACCENT_HEX[chosenAccent] || ACCENT_HEX.yellow);
@@ -3516,20 +3704,27 @@ function openEditor(clipId) {
       hookView.style.fontFamily = FONT_CSS[fontKey] || "VCMontserrat";
       hookView.style.fontSize = Math.max(9, size * 0.8) + "px";
       const layoutNow = $("#edLayout") ? $("#edLayout").value : "";
-      const hookLift = layoutNow === "band_top" ? 640 * k : 0;
-      hookView.style.top = Math.max(6, (zone.top + 40) * k + hookLift) + "px";
+      const hookLift = layoutNow === "band_top" ? 640 * yScale * (stageH / geom.h) : 0;
+      hookView.style.top = Math.max(6, (zone.top + 40) * yScale * (stageH / geom.h) + hookLift) + "px";
       hookView.style.display = showHook && showSubs && hookText ? "block" : "none";
       hookView.style.lineHeight = (1.1 + lineGap / 110).toFixed(2);
     }
+    updatePromoOverlayPreview(geom);
   };
 
-  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edLineGap", "edUpper", "edSubs", "edShowHook", "edPlatform", "edLayout", "edHflip", "edTilt"]
+  ["edText", "edHook", "edFont", "edSize", "edPos", "edOffset", "edLineGap",
+   "edUpper", "edSubs", "edShowHook", "edPlatform", "edLayout", "edAspect", "edMode",
+   "edHflip", "edTilt"]
     .forEach((id) => {
       const el = $("#" + id);
       if (!el) return;
-      el.addEventListener("input", updateEditorPreview);
-      el.addEventListener("change", () => { updateEditorPreview(); drawFrame(); });
+      el.addEventListener("input", () => { drawFrame(); updateEditorPreview(); });
+      el.addEventListener("change", () => {
+        drawFrame();
+        requestAnimationFrame(() => { drawFrame(); updateEditorPreview(); });
+      });
     });
+
   const edSplit = $("#edSplit");
   const setEditorSplit = (value) => {
     const min = edSplit ? Number(edSplit.min) / 100 : 0.25;
@@ -3566,6 +3761,7 @@ function openEditor(clipId) {
     if (block) block.classList.toggle("hidden", edLayoutNow.value !== "adhd");
     stage.style.cursor = edLayoutNow.value === "adhd" ? "ns-resize" : "";
     drawFrame();
+    updateEditorPreview();
   });
   ["edTopScale", "edBottomScale", "edBottomSpeed", "edBottomVolume"].forEach((id) => {
     const el = $("#" + id);
@@ -3610,33 +3806,59 @@ function openEditor(clipId) {
       toast("Нижнее видео загружено");
     } catch (err) { toast(err.message, "err"); }
   });
+
+  /* --- Рекламные баннеры партнёрок --- */
   const renderAdAssets = () => {
     const box = $("#edAdAssets");
     if (!box) return;
-    if (!adAssets.length) { box.innerHTML = `<div class="opt-hint">Библиотека пуста: добавьте PNG, видео или текст.</div>`; return; }
-    box.innerHTML = adAssets.map((a) => `<button type="button" class="ad-asset ${a.id === adSelected ? "active" : ""}" data-ad="${a.id}" title="${esc(a.name)}">
+    if (!adAssets.length) {
+      box.innerHTML = `<div class="opt-hint">Библиотека пуста: загрузите баннер (.mp4, .mov, .webm, .gif, .png).</div>`;
+      return;
+    }
+    box.innerHTML = adAssets.map((a) => `<div class="ad-asset ${a.id === promoSelected || a.id === adSelected ? "active" : ""}" data-ad="${a.id}" title="Выбрать: ${esc(a.name)}">
       ${a.kind === "video" ? `<span class="ad-kind">▶</span>` : `<img src="${a.url}" alt="">`}
-      <span>${esc(a.name)}</span></button>`).join("");
-    $$("button[data-ad]", box).forEach((b) => b.addEventListener("click", () => {
-      adSelected = b.dataset.ad;
+      <span>${esc(a.name)}</span>
+      <button type="button" class="ad-asset-del" data-addel-asset="${a.id}" title="Удалить из библиотеки">×</button>
+    </div>`).join("");
+    $$("[data-ad]", box).forEach((card) => card.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-addel-asset]")) return;
+      const id = card.dataset.ad;
+      adSelected = id;
+      promoSelected = id;
+      renderPromoSelect();
       renderAdAssets();
+      syncPromoUi();
+    }));
+    $$("[data-addel-asset]", box).forEach((btn) => btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.addelAsset;
+      try {
+        await api(`/api/ads/${encodeURIComponent(id)}`, { method: "DELETE" });
+        adAssets = adAssets.filter((a) => a.id !== id);
+        if (adSelected === id) adSelected = adAssets[0] ? adAssets[0].id : "";
+        if (promoSelected === id) promoSelected = "";
+        renderPromoSelect();
+        renderAdAssets();
+        syncPromoUi();
+        toast("Баннер удалён из библиотеки");
+      } catch (err) { toast(err.message, "err"); }
     }));
   };
   const adAssetName = (id) => (adAssets.find((a) => a.id === id) || {}).name || id;
   const renderAdList = () => {
     const box = $("#edAdList");
     if (!box) return;
-    if (!adEvents.length) { box.innerHTML = `<div class="opt-hint">Событий пока нет.</div>`; return; }
+    if (!adEvents.length) { box.innerHTML = `<div class="opt-hint">Точечных вставок нет.</div>`; return; }
     const byId = {};
     ((adLayout && adLayout.events) || []).forEach((e) => { byId[e.id] = e; });
     box.innerHTML = adEvents.map((e, i) => {
       const mapped = byId[e.id] || {};
-      const start = mapped.start_final == null ? "?" : Number(mapped.start_final).toFixed(2);
-      const end = mapped.end_final == null ? "?" : Number(mapped.end_final).toFixed(2);
+      const startT = mapped.start_final == null ? "?" : Number(mapped.start_final).toFixed(2);
+      const endT = mapped.end_final == null ? "?" : Number(mapped.end_final).toFixed(2);
       return `<div class="ad-row" data-adrow="${i}">
-        <b>${e.kind === "replace" ? "вставка" : "наложение"}</b>
+        <b>${e.kind === "replace" ? "врезка" : "наложение"}</b>
         <span>${esc(adAssetName(e.asset))}</span>
-        <span class="muted">${start}–${end} с</span>
+        <span class="muted">${startT}–${endT} с</span>
         <button type="button" class="icon-btn" data-addel="${i}" title="Удалить">×</button></div>`;
     }).join("");
     $$("button[data-addel]", box).forEach((b) => b.addEventListener("click", () => {
@@ -3645,7 +3867,7 @@ function openEditor(clipId) {
     }));
   };
   const promoWindowsPreview = (dur) => {
-    const asset = $("#edPromoSelect") ? $("#edPromoSelect").value : "";
+    const asset = $("#edPromoSelect") ? $("#edPromoSelect").value : promoSelected;
     const adsOn = $("#edAdsEnabled") ? $("#edAdsEnabled").checked : true;
     if (!adsOn || !asset || dur < 0.2) return [];
     const mode = $("#edPromoMode") ? $("#edPromoMode").value : "overlay";
@@ -3683,12 +3905,12 @@ function openEditor(clipId) {
     const promoHtml = promoWins.map(([ws, we]) => {
       const left = Math.max(0, Math.min(100, ws / total * 100));
       const width = Math.max(2, Math.min(100 - left, (we - ws) / total * 100));
-      return `<span class="ad-block promo" style="left:${left}%;width:${width}%" title="Футаж: ${ws.toFixed(2)}–${we.toFixed(2)} с">футаж</span>`;
+      return `<span class="ad-block promo" style="left:${left}%;width:${width}%" title="Баннер: ${ws.toFixed(2)}–${we.toFixed(2)} с">баннер</span>`;
     }).join("");
     bar.innerHTML = promoHtml + items.map((e) => {
       const left = Math.max(0, Math.min(100, Number(e.start_final || 0) / total * 100));
       const width = Math.max(2, Math.min(100 - left, (Number(e.end_final || 0) - Number(e.start_final || 0)) / total * 100));
-      return `<button type="button" class="ad-block ${e.kind === "replace" ? "replace" : "overlay"}" data-adblock="${esc(e.id)}" style="left:${left}%;width:${width}%" title="${esc(adAssetName(e.asset))}: ${Number(e.start_final).toFixed(2)}–${Number(e.end_final).toFixed(2)} с">${e.kind === "replace" ? "вставка" : "наложение"}</button>`;
+      return `<button type="button" class="ad-block ${e.kind === "replace" ? "replace" : "overlay"}" data-adblock="${esc(e.id)}" style="left:${left}%;width:${width}%" title="${esc(adAssetName(e.asset))}: ${Number(e.start_final).toFixed(2)}–${Number(e.end_final).toFixed(2)} с">${e.kind === "replace" ? "врезка" : "наложение"}</button>`;
     }).join("");
     $$("button[data-adblock]", bar).forEach((block) => {
       let dragging = false;
@@ -3717,8 +3939,6 @@ function openEditor(clipId) {
     renderAdTimeline();
     renderAdList();
   };
-  let promoSelected = String(s.promo_footage || "");
-  let promoAutoSelect = false;
   const renderPromoSelect = () => {
     const sel = $("#edPromoSelect");
     if (!sel) return;
@@ -3757,7 +3977,7 @@ function openEditor(clipId) {
     const tm = $("#edPromoTiming");
     if (tm) {
       tm.disabled = isSplit;
-      tm.title = isSplit ? "В режиме снизу футаж всегда играет весь клип" : "";
+      tm.title = isSplit ? "В режиме нижней врезки баннер всегда играет весь клип" : "";
     }
     const tn = $("#edPromoTimingNote");
     if (tn) tn.classList.toggle("hidden", !isSplit);
@@ -3784,6 +4004,7 @@ function openEditor(clipId) {
     }
     renderAdTimeline();
     drawFrame();
+    updateEditorPreview();
   };
   api("/api/ads").then((data) => {
     adAssets = (data && data.assets) || [];
@@ -3793,9 +4014,9 @@ function openEditor(clipId) {
     syncPromoUi();
   }).catch(() => {});
   const addAdEvent = async (kind) => {
-    if (!adSelected) { toast("Выберите ассет из библиотеки", "err"); return; }
-    const video = $("#edVideo");
-    const at = video ? video.currentTime : 0;
+    if (!adSelected) { toast("Выберите баннер из библиотеки", "err"); return; }
+    const videoEl = $("#edVideo");
+    const at = videoEl ? videoEl.currentTime : 0;
     let sourceTime = at;
     try {
       const res = await api(`/api/clips/${clip.id}/ad-map`, { method: "POST", body: JSON.stringify({ time: at, direction: "to_source", events: adEvents }) });
@@ -3816,16 +4037,8 @@ function openEditor(clipId) {
   if (overlayBtn) overlayBtn.addEventListener("click", () => addAdEvent("overlay"));
   const replaceBtn = $("#edAdReplaceBtn");
   if (replaceBtn) replaceBtn.addEventListener("click", () => addAdEvent("replace"));
-  const adUploadBtn = $("#edAdUpload");
-  if (adUploadBtn) adUploadBtn.addEventListener("click", () => {
-    promoAutoSelect = false;
-    $("#edAdInput").click();
-  });
   const promoUploadBtn = $("#edPromoUpload");
-  if (promoUploadBtn) promoUploadBtn.addEventListener("click", () => {
-    promoAutoSelect = true;
-    $("#edAdInput").click();
-  });
+  if (promoUploadBtn) promoUploadBtn.addEventListener("click", () => $("#edAdInput").click());
   const promoDelBtn = $("#edPromoDel");
   if (promoDelBtn) promoDelBtn.addEventListener("click", async () => {
     const id = ($("#edPromoSelect") || {}).value || "";
@@ -3838,7 +4051,7 @@ function openEditor(clipId) {
       renderAdAssets();
       renderPromoSelect();
       syncPromoUi();
-      toast("Футаж удалён из библиотеки");
+      toast("Баннер удалён из библиотеки");
     } catch (err) { toast(err.message, "err"); }
   });
   const adInput = $("#edAdInput");
@@ -3852,44 +4065,33 @@ function openEditor(clipId) {
       const res = await api("/api/ads", { method: "POST", body: form });
       adAssets = [res.asset, ...adAssets];
       adSelected = res.asset.id;
-      if (promoAutoSelect) promoSelected = res.asset.id;
-      promoAutoSelect = false;
+      promoSelected = res.asset.id;
       renderAdAssets();
       renderPromoSelect();
       syncPromoUi();
-      toast("Ассет добавлен");
-    } catch (err) { promoAutoSelect = false; toast(err.message, "err"); }
+      toast("Баннер добавлен и выбран");
+    } catch (err) { toast(err.message, "err"); }
   });
   ["edPromoSelect", "edPromoMode", "edPromoKey", "edPromoAudioVol", "edPromoScale",
    "edPromoPos", "edPromoX", "edPromoY", "edPromoFill", "edPromoSplitRatio",
    "edPromoTiming", "edPromoStartSec", "edPromoDurSec", "edPromoPeriodSec",
-   "edAdsEnabled", "edLayout"]
+   "edAdsEnabled"]
     .forEach((id) => {
       const el = $("#" + id);
       if (!el) return;
       el.addEventListener("input", () => {
         if (id === "edPromoSelect") promoSelected = el.value;
+        renderAdAssets();
         syncPromoUi();
       });
       el.addEventListener("change", () => {
         if (id === "edPromoSelect") promoSelected = el.value;
+        renderAdAssets();
         syncPromoUi();
       });
     });
   syncPromoUi();
-  const adTextAdd = $("#edAdTextAdd");
-  if (adTextAdd) adTextAdd.addEventListener("click", async () => {
-    const text = ($("#edAdText") || {}).value || "";
-    if (!text.trim()) { toast("Введите текст", "err"); return; }
-    try {
-      const res = await api("/api/ads/text", { method: "POST", body: JSON.stringify({ text: text.trim(), name: text.trim().slice(0, 40) }) });
-      adAssets = [res.asset, ...adAssets];
-      adSelected = res.asset.id;
-      $("#edAdText").value = "";
-      renderAdAssets();
-      toast("Плашка добавлена");
-    } catch (err) { toast(err.message, "err"); }
-  });
+
   const renderLayerChips = (items) => {
     const box = $("#edLayers");
     if (!box) return;
@@ -3943,7 +4145,9 @@ function openEditor(clipId) {
       const dur = Math.max(0, Number(end.value) - Number(start.value));
       durLabel.textContent = `Длительность: ${dur.toFixed(1)} с`;
     }
+    updatePreviewSeekRange();
   };
+  syncNumbers();
 
   const words = clip.words || [];
   const snapToWord = (value, edge) => {
