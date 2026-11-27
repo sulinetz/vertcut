@@ -3115,7 +3115,7 @@ function openEditor(clipId) {
             <div class="ad-assets" id="edAdAssets">Загрузка библиотеки…</div>
             <div class="ad-add-row">
               <button type="button" class="link-btn" id="edAdUpload">+ файл</button>
-              <input type="file" id="edAdInput" class="hidden" accept="image/*,video/mp4,video/webm,video/quicktime"/>
+              <input type="file" id="edAdInput" class="hidden" accept="image/*,.gif,video/mp4,video/webm,video/quicktime"/>
               <div class="layers-row" id="edLayers" title="Порядок слоёв снизу вверх"></div>
               <input type="text" id="edAdText" maxlength="300" placeholder="Текст плашки или промокод" />
               <button type="button" class="link-btn" id="edAdTextAdd">добавить текст</button>
@@ -3127,6 +3127,106 @@ function openEditor(clipId) {
             </div>
             <div class="ad-timeline" id="edAdTimeline"></div>
             <div class="ad-list" id="edAdList"></div>
+            <div class="promo-box" id="edPromoBox">
+              <div class="promo-head">
+                <span class="opt-label">Рекламный футаж / Баннер</span>
+                <button type="button" class="link-btn" id="edPromoUpload">+ загрузить футаж (.mp4/.mov/.webm/.gif/.png)</button>
+              </div>
+              <div class="row2">
+                <div class="field">
+                  <label>Футаж из библиотеки</label>
+                  <div class="promo-pick">
+                    <select id="edPromoSelect" data-schema="promo_footage">
+                      <option value="">Не выбран</option>
+                      <option value="random">Случайный (видео / GIF)</option>
+                    </select>
+                    <button type="button" class="icon-btn hidden" id="edPromoDel" title="Удалить футаж из библиотеки">×</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Режим наложения</label>
+                  <select id="edPromoMode" data-schema="promo_mode">
+                    <option value="overlay" ${s.promo_mode !== "split_bottom" ? "selected" : ""}>Поверх видео (наложение)</option>
+                    <option value="split_bottom" ${s.promo_mode === "split_bottom" ? "selected" : ""}>Снизу под видео (врезка)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Удаление фона (хромакей)</label>
+                  <select id="edPromoKey" data-schema="promo_key_color">
+                    <option value="none" ${(s.promo_key_color || "none") === "none" ? "selected" : ""}>Нет (есть прозрачность)</option>
+                    <option value="green" ${s.promo_key_color === "green" ? "selected" : ""}>Зелёный экран</option>
+                    <option value="black" ${s.promo_key_color === "black" ? "selected" : ""}>Чёрный фон</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Громкость звука футажа <b id="edPromoAudioVolVal">${Math.round(Number(s.promo_audio_vol || 0))}</b>%</label>
+                  <input type="range" id="edPromoAudioVol" data-schema="promo_audio_vol" min="0" max="100" step="1" value="${Math.round(Number(s.promo_audio_vol || 0))}" />
+                </div>
+              </div>
+              <div class="row2 ${s.promo_mode === "split_bottom" ? "hidden" : ""}" id="edPromoOverlayOpts">
+                <div class="field">
+                  <label>Масштаб ширины <b id="edPromoScaleVal">${Math.round(Number(s.promo_scale || 60))}</b>%</label>
+                  <input type="range" id="edPromoScale" data-schema="promo_scale" min="30" max="100" step="1" value="${Math.round(Number(s.promo_scale || 60))}" />
+                </div>
+                <div class="field">
+                  <label>Позиция</label>
+                  <select id="edPromoPos" data-schema="promo_pos">
+                    <option value="bottom" ${(s.promo_pos || "bottom") === "bottom" ? "selected" : ""}>Снизу над интерфейсом</option>
+                    <option value="top" ${s.promo_pos === "top" ? "selected" : ""}>Сверху</option>
+                    <option value="center" ${s.promo_pos === "center" ? "selected" : ""}>По центру</option>
+                    <option value="custom" ${s.promo_pos === "custom" ? "selected" : ""}>Точная X/Y</option>
+                  </select>
+                </div>
+              </div>
+              <div class="row2 ${s.promo_mode !== "split_bottom" && s.promo_pos === "custom" ? "" : "hidden"}" id="edPromoCustomPos">
+                <div class="field">
+                  <label>Координата X <b id="edPromoXVal">${Number(s.promo_x ?? 0.5).toFixed(2)}</b></label>
+                  <input type="range" id="edPromoX" data-schema="promo_x" min="0" max="1" step="0.01" value="${Number(s.promo_x ?? 0.5)}" />
+                </div>
+                <div class="field">
+                  <label>Координата Y <b id="edPromoYVal">${Number(s.promo_y ?? 0.5).toFixed(2)}</b></label>
+                  <input type="range" id="edPromoY" data-schema="promo_y" min="0" max="1" step="0.01" value="${Number(s.promo_y ?? 0.5)}" />
+                </div>
+              </div>
+              <div class="row2 ${s.promo_mode === "split_bottom" ? "" : "hidden"}" id="edPromoSplitOpts">
+                <div class="field">
+                  <label>Доля основного видео <b id="edPromoSplitVal">${Math.round(Number(s.promo_split_ratio || 0.7) * 100)}</b>%</label>
+                  <input type="range" id="edPromoSplitRatio" data-schema="promo_split_ratio" data-schema-scale="100" min="40" max="85" step="1" value="${Math.round(Number(s.promo_split_ratio || 0.7) * 100)}" />
+                </div>
+                <div class="field">
+                  <label>Заполнение нижней плашки</label>
+                  <select id="edPromoFill" data-schema="promo_fill">
+                    <option value="cover" ${s.promo_fill !== "contain" ? "selected" : ""}>Заполнить (с обрезкой)</option>
+                    <option value="contain" ${s.promo_fill === "contain" ? "selected" : ""}>Вписать целиком</option>
+                  </select>
+                </div>
+                <span class="opt-hint ${s.layout === "adhd" ? "" : "hidden"}" id="edPromoAdhdHint">В режиме «Снизу под видео» футаж занимает нижнюю область вместо ролика СДВГ.</span>
+              </div>
+              <div class="row2" id="edPromoTimingOpts">
+                <div class="field">
+                  <label>Расписание показа</label>
+                  <select id="edPromoTiming" data-schema="promo_timing" ${s.promo_mode === "split_bottom" ? 'disabled title="В режиме снизу футаж всегда играет весь клип"' : ""}>
+                    <option value="loop" ${(s.promo_timing || "loop") === "loop" ? "selected" : ""}>Весь клип (цикл)</option>
+                    <option value="start" ${s.promo_timing === "start" ? "selected" : ""}>Один раз со старта</option>
+                    <option value="periodic" ${s.promo_timing === "periodic" ? "selected" : ""}>Каждые N секунд</option>
+                    <option value="end" ${s.promo_timing === "end" ? "selected" : ""}>В конце клипа</option>
+                  </select>
+                  <span class="opt-hint ${s.promo_mode === "split_bottom" ? "" : "hidden"}" id="edPromoTimingNote">В режиме «Снизу под видео» футаж всегда идёт весь клип.</span>
+                </div>
+                <div class="field" id="edPromoStartWrap">
+                  <label>Старт, с</label>
+                  <input type="number" id="edPromoStartSec" data-schema="promo_start_sec" min="0" max="7200" step="0.5" value="${Number(s.promo_start_sec ?? 2)}" />
+                </div>
+                <div class="field" id="edPromoDurWrap">
+                  <label>Длительность, с</label>
+                  <input type="number" id="edPromoDurSec" data-schema="promo_duration_sec" min="0.5" max="300" step="0.5" value="${Number(s.promo_duration_sec ?? 4)}" />
+                </div>
+                <div class="field" id="edPromoPeriodWrap">
+                  <label>Период, с</label>
+                  <input type="number" id="edPromoPeriodSec" data-schema="promo_period_sec" min="2" max="600" step="1" value="${Number(s.promo_period_sec ?? 20)}" />
+                </div>
+              </div>
+            </div>
           </div>
           <div class="field">
             <label>Субтитры</label>
@@ -3292,8 +3392,32 @@ function openEditor(clipId) {
     const layout = $("#edLayout") ? $("#edLayout").value : "";
     const fc = (s && s.facecam) || null;
     const k = w / 1080;
+    const promoOn = !$("#edAdsEnabled") || $("#edAdsEnabled").checked;
+    const promoVal = $("#edPromoSelect") ? $("#edPromoSelect").value : "";
+    const promoSplit = promoOn && Boolean(promoVal) && $("#edPromoMode") && $("#edPromoMode").value === "split_bottom";
 
-    if (layout === "band" && fc) {
+    if (promoSplit) {
+      const pRatio = $("#edPromoSplitRatio") ? Number($("#edPromoSplitRatio").value) / 100 : 0.7;
+      const geometry = window.VCGeometry
+        ? VCGeometry.splitGeometry(w, h, pRatio)
+        : { top_h: Math.round(h * pRatio), bottom_h: h - Math.round(h * pRatio) };
+      const topH = geometry.top_h;
+      drawCover(ctx, srcVideo, 0, 0, w, topH);
+      ctx.fillStyle = "#101116";
+      ctx.fillRect(0, topH, w, h - topH);
+      ctx.fillStyle = "rgba(250,204,21,0.55)";
+      ctx.textAlign = "center";
+      ctx.font = `${Math.max(9, Math.round(22 * k))}px VCMontserrat, sans-serif`;
+      ctx.fillText("рекламный футаж", w / 2, topH + (h - topH) / 2);
+      ctx.textAlign = "start";
+      stage.style.cursor = "";
+      ctx.strokeStyle = "rgba(250,204,21,0.35)";
+      ctx.lineWidth = Math.max(1, Math.round(2 * k));
+      ctx.beginPath();
+      ctx.moveTo(0, topH);
+      ctx.lineTo(w, topH);
+      ctx.stroke();
+    } else if (layout === "band" && fc) {
       const topH = Math.round(h * 1280 / 1920);
       drawCover(ctx, srcVideo, 0, 0, w, topH);
       ctx.fillStyle = "#000";
@@ -3518,12 +3642,48 @@ function openEditor(clipId) {
       refreshAdTimeline();
     }));
   };
+  const promoWindowsPreview = (dur) => {
+    const asset = $("#edPromoSelect") ? $("#edPromoSelect").value : "";
+    const adsOn = $("#edAdsEnabled") ? $("#edAdsEnabled").checked : true;
+    if (!adsOn || !asset || dur < 0.2) return [];
+    const mode = $("#edPromoMode") ? $("#edPromoMode").value : "overlay";
+    if (mode === "split_bottom") return [[0, dur]];
+    const timing = $("#edPromoTiming") ? $("#edPromoTiming").value : "loop";
+    if (timing === "loop") return [[0, dur]];
+    const len = Math.max(0.2, Number(($("#edPromoDurSec") || {}).value || 4));
+    const st = Math.max(0, Number(($("#edPromoStartSec") || {}).value || 2));
+    if (timing === "start") {
+      const e = Math.min(dur, st + len);
+      return e - st >= 0.2 ? [[st, e]] : [];
+    }
+    if (timing === "end") {
+      const s0 = Math.max(0, dur - len);
+      return dur - s0 >= 0.2 ? [[s0, dur]] : [];
+    }
+    if (timing === "periodic") {
+      const period = Math.max(0.5, Number(($("#edPromoPeriodSec") || {}).value || 20));
+      const eff = Math.min(len, period);
+      const out = [];
+      for (let c = st; c < dur - 0.05 && out.length < 200; c += period) {
+        const e = Math.min(dur, c + eff);
+        if (e - c >= 0.2) out.push([c, e]);
+      }
+      return out;
+    }
+    return [[0, dur]];
+  };
   const renderAdTimeline = () => {
     const bar = $("#edAdTimeline");
     if (!bar) return;
     const total = Math.max(0.5, Number(adLayout && adLayout.duration) || (clip.end - clip.start));
     const items = (adLayout && adLayout.events) || [];
-    bar.innerHTML = items.map((e) => {
+    const promoWins = promoWindowsPreview(total);
+    const promoHtml = promoWins.map(([ws, we]) => {
+      const left = Math.max(0, Math.min(100, ws / total * 100));
+      const width = Math.max(2, Math.min(100 - left, (we - ws) / total * 100));
+      return `<span class="ad-block promo" style="left:${left}%;width:${width}%" title="Футаж: ${ws.toFixed(2)}–${we.toFixed(2)} с">футаж</span>`;
+    }).join("");
+    bar.innerHTML = promoHtml + items.map((e) => {
       const left = Math.max(0, Math.min(100, Number(e.start_final || 0) / total * 100));
       const width = Math.max(2, Math.min(100 - left, (Number(e.end_final || 0) - Number(e.start_final || 0)) / total * 100));
       return `<button type="button" class="ad-block ${e.kind === "replace" ? "replace" : "overlay"}" data-adblock="${esc(e.id)}" style="left:${left}%;width:${width}%" title="${esc(adAssetName(e.asset))}: ${Number(e.start_final).toFixed(2)}–${Number(e.end_final).toFixed(2)} с">${e.kind === "replace" ? "вставка" : "наложение"}</button>`;
@@ -3555,10 +3715,80 @@ function openEditor(clipId) {
     renderAdTimeline();
     renderAdList();
   };
+  let promoSelected = String(s.promo_footage || "");
+  let promoAutoSelect = false;
+  const renderPromoSelect = () => {
+    const sel = $("#edPromoSelect");
+    if (!sel) return;
+    const prev = promoSelected || sel.value || "";
+    const opts = [
+      `<option value="">Не выбран</option>`,
+      `<option value="random">Случайный (видео / GIF)</option>`,
+    ];
+    adAssets.forEach((a) => {
+      const kind = a.kind === "video" ? "видео" : a.animated ? "GIF" : "картинка";
+      opts.push(`<option value="${esc(a.id)}">${esc(a.name)} (${kind})</option>`);
+    });
+    sel.innerHTML = opts.join("");
+    if (prev && (prev === "random" || adAssets.some((a) => a.id === prev))) {
+      sel.value = prev;
+    } else {
+      sel.value = "";
+      promoSelected = "";
+    }
+    const delBtn = $("#edPromoDel");
+    if (delBtn) delBtn.classList.toggle("hidden", !sel.value || sel.value === "random");
+  };
+  const syncPromoUi = () => {
+    const mode = ($("#edPromoMode") || {}).value || "overlay";
+    const pos = ($("#edPromoPos") || {}).value || "bottom";
+    const timing = ($("#edPromoTiming") || {}).value || "loop";
+    const isSplit = mode === "split_bottom";
+    const ov = $("#edPromoOverlayOpts");
+    if (ov) ov.classList.toggle("hidden", isSplit);
+    const sp = $("#edPromoSplitOpts");
+    if (sp) sp.classList.toggle("hidden", !isSplit);
+    const cp = $("#edPromoCustomPos");
+    if (cp) cp.classList.toggle("hidden", isSplit || pos !== "custom");
+    const ah = $("#edPromoAdhdHint");
+    if (ah) ah.classList.toggle("hidden", !isSplit || ($("#edLayout") || {}).value !== "adhd");
+    const tm = $("#edPromoTiming");
+    if (tm) {
+      tm.disabled = isSplit;
+      tm.title = isSplit ? "В режиме снизу футаж всегда играет весь клип" : "";
+    }
+    const tn = $("#edPromoTimingNote");
+    if (tn) tn.classList.toggle("hidden", !isSplit);
+    const sw = $("#edPromoStartWrap");
+    if (sw) sw.classList.toggle("hidden", isSplit || (timing !== "start" && timing !== "periodic"));
+    const dw = $("#edPromoDurWrap");
+    if (dw) dw.classList.toggle("hidden", isSplit || timing === "loop");
+    const pw = $("#edPromoPeriodWrap");
+    if (pw) pw.classList.toggle("hidden", isSplit || timing !== "periodic");
+    const sv = $("#edPromoScaleVal");
+    if (sv && $("#edPromoScale")) sv.textContent = $("#edPromoScale").value;
+    const vv = $("#edPromoAudioVolVal");
+    if (vv && $("#edPromoAudioVol")) vv.textContent = $("#edPromoAudioVol").value;
+    const srv = $("#edPromoSplitVal");
+    if (srv && $("#edPromoSplitRatio")) srv.textContent = $("#edPromoSplitRatio").value;
+    const xv = $("#edPromoXVal");
+    if (xv && $("#edPromoX")) xv.textContent = Number($("#edPromoX").value).toFixed(2);
+    const yv = $("#edPromoYVal");
+    if (yv && $("#edPromoY")) yv.textContent = Number($("#edPromoY").value).toFixed(2);
+    const delBtn = $("#edPromoDel");
+    if (delBtn && $("#edPromoSelect")) {
+      const v = $("#edPromoSelect").value;
+      delBtn.classList.toggle("hidden", !v || v === "random");
+    }
+    renderAdTimeline();
+    drawFrame();
+  };
   api("/api/ads").then((data) => {
     adAssets = (data && data.assets) || [];
     if (!adSelected && adAssets.length) adSelected = adAssets[0].id;
     renderAdAssets();
+    renderPromoSelect();
+    syncPromoUi();
   }).catch(() => {});
   const addAdEvent = async (kind) => {
     if (!adSelected) { toast("Выберите ассет из библиотеки", "err"); return; }
@@ -3585,7 +3815,30 @@ function openEditor(clipId) {
   const replaceBtn = $("#edAdReplaceBtn");
   if (replaceBtn) replaceBtn.addEventListener("click", () => addAdEvent("replace"));
   const adUploadBtn = $("#edAdUpload");
-  if (adUploadBtn) adUploadBtn.addEventListener("click", () => $("#edAdInput").click());
+  if (adUploadBtn) adUploadBtn.addEventListener("click", () => {
+    promoAutoSelect = false;
+    $("#edAdInput").click();
+  });
+  const promoUploadBtn = $("#edPromoUpload");
+  if (promoUploadBtn) promoUploadBtn.addEventListener("click", () => {
+    promoAutoSelect = true;
+    $("#edAdInput").click();
+  });
+  const promoDelBtn = $("#edPromoDel");
+  if (promoDelBtn) promoDelBtn.addEventListener("click", async () => {
+    const id = ($("#edPromoSelect") || {}).value || "";
+    if (!id || id === "random") return;
+    try {
+      await api(`/api/ads/${encodeURIComponent(id)}`, { method: "DELETE" });
+      adAssets = adAssets.filter((a) => a.id !== id);
+      if (adSelected === id) adSelected = adAssets[0] ? adAssets[0].id : "";
+      promoSelected = "";
+      renderAdAssets();
+      renderPromoSelect();
+      syncPromoUi();
+      toast("Футаж удалён из библиотеки");
+    } catch (err) { toast(err.message, "err"); }
+  });
   const adInput = $("#edAdInput");
   if (adInput) adInput.addEventListener("change", async (ev) => {
     const file = ev.target.files && ev.target.files[0];
@@ -3597,10 +3850,31 @@ function openEditor(clipId) {
       const res = await api("/api/ads", { method: "POST", body: form });
       adAssets = [res.asset, ...adAssets];
       adSelected = res.asset.id;
+      if (promoAutoSelect) promoSelected = res.asset.id;
+      promoAutoSelect = false;
       renderAdAssets();
+      renderPromoSelect();
+      syncPromoUi();
       toast("Ассет добавлен");
-    } catch (err) { toast(err.message, "err"); }
+    } catch (err) { promoAutoSelect = false; toast(err.message, "err"); }
   });
+  ["edPromoSelect", "edPromoMode", "edPromoKey", "edPromoAudioVol", "edPromoScale",
+   "edPromoPos", "edPromoX", "edPromoY", "edPromoFill", "edPromoSplitRatio",
+   "edPromoTiming", "edPromoStartSec", "edPromoDurSec", "edPromoPeriodSec",
+   "edAdsEnabled", "edLayout"]
+    .forEach((id) => {
+      const el = $("#" + id);
+      if (!el) return;
+      el.addEventListener("input", () => {
+        if (id === "edPromoSelect") promoSelected = el.value;
+        syncPromoUi();
+      });
+      el.addEventListener("change", () => {
+        if (id === "edPromoSelect") promoSelected = el.value;
+        syncPromoUi();
+      });
+    });
+  syncPromoUi();
   const adTextAdd = $("#edAdTextAdd");
   if (adTextAdd) adTextAdd.addEventListener("click", async () => {
     const text = ($("#edAdText") || {}).value || "";
@@ -3729,6 +4003,20 @@ function openEditor(clipId) {
       adhd_bottom_volume: Number($("#edBottomVolume").value),
       ads_enabled: $("#edAdsEnabled").checked,
       ad_events: adEvents,
+      promo_footage: $("#edPromoSelect") ? $("#edPromoSelect").value : "",
+      promo_mode: $("#edPromoMode") ? $("#edPromoMode").value : "overlay",
+      promo_scale: $("#edPromoScale") ? Number($("#edPromoScale").value) : 60,
+      promo_pos: $("#edPromoPos") ? $("#edPromoPos").value : "bottom",
+      promo_x: $("#edPromoX") ? Number($("#edPromoX").value) : 0.5,
+      promo_y: $("#edPromoY") ? Number($("#edPromoY").value) : 0.5,
+      promo_fill: $("#edPromoFill") ? $("#edPromoFill").value : "cover",
+      promo_key_color: $("#edPromoKey") ? $("#edPromoKey").value : "none",
+      promo_timing: $("#edPromoTiming") ? $("#edPromoTiming").value : "loop",
+      promo_start_sec: $("#edPromoStartSec") ? Number($("#edPromoStartSec").value) : 2.0,
+      promo_duration_sec: $("#edPromoDurSec") ? Number($("#edPromoDurSec").value) : 4.0,
+      promo_period_sec: $("#edPromoPeriodSec") ? Number($("#edPromoPeriodSec").value) : 20.0,
+      promo_audio_vol: $("#edPromoAudioVol") ? Number($("#edPromoAudioVol").value) : 0,
+      promo_split_ratio: $("#edPromoSplitRatio") ? Number($("#edPromoSplitRatio").value) / 100 : 0.7,
       subtitles: $("#edSubs").checked,
       uppercase: $("#edUpper").checked,
       show_hook: $("#edShowHook").checked,

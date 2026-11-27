@@ -108,3 +108,16 @@ def test_layers_and_promo_plan_activation():
     })}
     assert disabled["ads"]["active"] is False
     assert disabled["ads"]["promo"] is None
+
+
+def test_promo_controls_exist_only_in_clip_editor_ui():
+    from pathlib import Path
+
+    web = Path(__file__).resolve().parents[1] / "web"
+    app_js = (web / "app.js").read_text(encoding="utf-8")
+    wizard_js = (web / "wizard.js").read_text(encoding="utf-8")
+    for token in ("edPromoSelect", "edPromoMode", "edPromoKey", "edPromoTiming",
+                  "promo_footage", "promo_split_ratio", "promo_audio_vol"):
+        assert token in app_js
+        assert token not in wizard_js
+

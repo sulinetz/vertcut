@@ -2276,6 +2276,12 @@ input[type="range"]::-webkit-slider-thumb {
 .ad-block { position: absolute; top: 6px; bottom: 6px; border-radius: 6px; border: 1px solid rgba(255,255,255,.25); font-size: 9px; color: #fff; cursor: grab; overflow: hidden; white-space: nowrap; }
 .ad-block.overlay { background: rgba(34, 211, 238, .55); }
 .ad-block.replace { background: rgba(244, 114, 182, .65); }
+.ad-block.promo { background: rgba(234, 179, 8, .55); border-color: rgba(202, 138, 4, .75); color: #1f1b2e; pointer-events: none; }
+.promo-box { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--separator); display: flex; flex-direction: column; gap: 10px; }
+.promo-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.promo-head .opt-label { margin-right: auto; }
+.promo-pick { display: flex; align-items: center; gap: 8px; }
+.promo-pick select { flex: 1; min-width: 0; }
 .ad-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
 .ad-row { display: flex; gap: 8px; align-items: center; font-size: 11px; padding: 4px 6px; border-radius: 8px; background: var(--grouped-2); }
 .ad-row b { text-transform: uppercase; font-size: 9px; letter-spacing: .04em; color: var(--muted-2); }
