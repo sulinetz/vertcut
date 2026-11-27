@@ -87,3 +87,15 @@ def test_aspect_playres_and_pipeline_passes_dimensions(tmp_path: Path):
     assert captured["ass"]["play_h"] == 1080
     assert captured["render"]["aspect"] == "16:9"
     assert captured["render"]["mode"] == "blur"
+
+
+def test_editor_preview_uses_pixel_dimensions_not_aspect_ratios():
+    """Живой макет должен считать масштаб шрифта в пикселях (1080×1920), а не 9×16."""
+    app_js = (Path(__file__).resolve().parent.parent / "web" / "app.js").read_text(encoding="utf-8")
+    assert "const ASPECT_PX =" in app_js
+    assert '"9:16": { w: 1080, h: 1920 }' in app_js
+    block = re.search(r"const syncStageGeometry = \(\) => \{.*?\n  \};", app_js, re.S)
+    assert block is not None
+    assert "ASPECT_PX[aspect]" in block.group(0)
+    assert "ASPECT_META[aspect]" not in block.group(0)
+

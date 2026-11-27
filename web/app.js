@@ -310,6 +310,12 @@ const ASPECT_META = {
   "16:9": { short: "Горизонтально", hint: "обычное видео, YouTube", w: 16, h: 9 }
 };
 
+const ASPECT_PX = {
+  "9:16": { w: 1080, h: 1920 },
+  "1:1": { w: 1080, h: 1080 },
+  "16:9": { w: 1920, h: 1080 }
+};
+
 const aspectIcon = (a) => {
   const m = ASPECT_META[a];
   if (!m) return "";
@@ -3424,7 +3430,7 @@ function openEditor(clipId) {
   const syncStageGeometry = () => {
     if (!stage) return { w: 1080, h: 1920, aspect: "9:16" };
     const { aspect, forced } = effectiveAspect();
-    const meta = ASPECT_META[aspect] || { w: 1080, h: 1920 };
+    const px = ASPECT_PX[aspect] || ASPECT_PX["9:16"];
     const [aw, ah] = aspect.split(":").map(Number);
     stage.style.aspectRatio = `${aw} / ${ah}`;
     stage.classList.toggle("is-wide", aw >= ah);
@@ -3433,7 +3439,7 @@ function openEditor(clipId) {
     if (badge) badge.textContent = forced ? `${aspect} (раскладка)` : aspect;
     const ahint = $("#edAspectHint");
     if (ahint) ahint.classList.toggle("hidden", !forced);
-    return { w: meta.w, h: meta.h, aspect };
+    return { w: px.w, h: px.h, aspect };
   };
 
   const drawCover = (ctx, video, dx, dy, dw, dh) => {
