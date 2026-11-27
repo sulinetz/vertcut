@@ -7,8 +7,61 @@ from vertcut import app_settings
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(app_settings, "FILE", tmp_path / "app_settings.json")
     for name in ("DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-                 "OPENROUTER_API_KEY", "GEMINI_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+                 "OPENROUTER_API_KEY", "POLZA_API_KEY", "POLZA_AI_API_KEY",
+                 "GEMINI_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
         monkeypatch.delenv(name, raising=False)
+
+
+def test_polza_key_model_env_and_provider(tmp_path, monkeypatch):
+    from vertcut import semantic
+
+    _isolate(tmp_path, monkeypatch)
+    app_settings.save({"polza_key": "pza_secret_987654",
+                       "polza_model": "google/gemini-2.5-flash"})
+    public = app_settings.public()
+    assert public["polza_key_set"] is True
+    assert public["polza_key_hint"].endswith("7654")
+    assert "987654" not in str(public)
+    assert public["polza_model"] == "google/gemini-2.5-flash"
+    assert app_settings.api_key("polza") == "pza_secret_987654"
+    assert "google/gemini-2.5-flash" in public["model_choices"]["polza"]
+
+    app_settings.save({"polza_key": "", "polza_model": "deepseek/deepseek-chat"})
+    assert app_settings.api_key("polza") == "pza_secret_987654"
+    app_settings.save({"clear_polza_key": True})
+    assert app_settings.api_key("polza") == ""
+
+    monkeypatch.setenv("POLZA_API_KEY", "env-polza")
+    assert app_settings.api_key("polza") == "env-polza"
+    monkeypatch.delenv("POLZA_API_KEY")
+    monkeypatch.setenv("POLZA_AI_API_KEY", "env-polza-ai")
+    assert app_settings.api_key("polza") == "env-polza-ai"
+
+    assert "polza" in semantic.PROVIDERS
+    assert semantic.PROVIDERS["polza"]["url"] == "https://polza.ai/api/v1/chat/completions"
+    assert semantic.PROVIDERS["polza"]["models_url"] == "https://polza.ai/api/v1/models"
+    assert "polza" in semantic.PICKERS
+
+    parsed = semantic._parse_models("polza", {"data": [
+        {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash", "context_length": 1000000},
+        {"id": "deepseek/deepseek-chat", "name": "DeepSeek Chat", "context_length": None},
+    ]})
+    assert [m["id"] for m in parsed] == ["deepseek/deepseek-chat", "google/gemini-2.5-flash"]
+    assert parsed[0]["context"] == 0
+    assert parsed[1]["context"] == 1000000
+
+    semantic._MODELS_CACHE.pop("polza", None)
+    monkeypatch.setattr(semantic.app_settings, "api_key", lambda _p: "")
+    monkeypatch.setattr(semantic, "_get_json", lambda url, key="", proxy=None: {
+        "data": [{"id": "deepseek/deepseek-chat", "name": "DeepSeek Chat"}]
+    })
+    assert len(semantic.models_for("polza")) == 1
+    semantic._MODELS_CACHE.pop("polza", None)
+
+    monkeypatch.setattr(semantic.app_settings, "api_key", lambda _p: "pza-test")
+    monkeypatch.setattr(semantic, "models_for", lambda _p: [{"id": "m1"}])
+    res = semantic.check_key("polza")
+    assert res["ok"] is True and res["models"] == 1
 
 
 def test_openrouter_key_and_model(tmp_path, monkeypatch):

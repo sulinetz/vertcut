@@ -14,6 +14,8 @@ def test_defaults_keep_local_picker():
 def test_picker_validation():
     assert pipeline.normalize_options({"picker": "deepseek"})["picker"] == "deepseek"
     assert pipeline.normalize_options({"picker": "gemini"})["picker"] == "gemini"
+    assert pipeline.normalize_options({"picker": "openrouter"})["picker"] == "openrouter"
+    assert pipeline.normalize_options({"picker": "polza"})["picker"] == "polza"
     assert pipeline.normalize_options({"picker": "auto"})["picker"] == "auto"
     assert pipeline.normalize_options({"picker": "gpt"})["picker"] == "local"
 

@@ -156,6 +156,28 @@ def test_auto_picker_skips_provider_without_key(segments, tmp_path, monkeypatch)
     assert used["key"] == "key"
 
 
+def test_polza_picker_calls_polza_endpoint(segments, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_settings, "api_key",
+                        lambda provider: "polza-key" if provider == "polza" else "")
+    called = {}
+
+    def fake(url, payload, key, proxy="", timeout=0):
+        called["url"] = url
+        called["key"] = key
+        return _reply([{"from": 1, "to": 3, "score": 0.85, "mood": "insight"}])
+
+    monkeypatch.setattr(semantic, "_post_json", fake)
+    for picker_mode in ("polza", "auto"):
+        called.clear()
+        opts = {"picker": picker_mode, "count": 2, "min_dur": 5, "max_dur": 60,
+                "target_dur": 20, "mood_filter": [], "min_score": 0.0}
+        found = semantic.find_segments(segments, tmp_path / f"v_{picker_mode}.mp4", 30.0,
+                                       opts=opts, workdir=tmp_path / picker_mode)
+        assert found and found[0]["source"] == "polza"
+        assert called["url"] == "https://polza.ai/api/v1/chat/completions"
+        assert called["key"] == "polza-key"
+
+
 def test_mood_aliases_and_bad_json(segments):
     assert semantic._clean_mood("весёлое") == "funny"
     assert semantic._clean_mood("unknown") == ""

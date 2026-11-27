@@ -25,6 +25,7 @@ DEFAULT_MODELS = {
     "deepseek": "deepseek-chat",
     "gemini": "gemini-flash-latest",
     "openrouter": "deepseek/deepseek-chat",
+    "polza": "deepseek/deepseek-chat",
 }
 
 WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
@@ -45,13 +46,18 @@ MODEL_CHOICES = {
     "gemini": ["gemini-flash-latest", "gemini-pro-latest"],
     "openrouter": ["deepseek/deepseek-chat", "deepseek/deepseek-r1",
                    "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"],
+    "polza": ["deepseek/deepseek-chat", "google/gemini-2.5-flash",
+              "openai/gpt-4o-mini", "deepseek/deepseek-v3.2"],
 }
 
 _ENV_KEYS = {
     "deepseek": ("DEEPSEEK_API_KEY",),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     "openrouter": ("OPENROUTER_API_KEY",),
+    "polza": ("POLZA_API_KEY", "POLZA_AI_API_KEY"),
 }
+
+_PROVIDERS = tuple(DEFAULT_MODELS)
 
 DEFAULTS: Dict[str, Any] = {
     "deepseek_key": "",
@@ -60,6 +66,8 @@ DEFAULTS: Dict[str, Any] = {
     "gemini_model": DEFAULT_MODELS["gemini"],
     "openrouter_key": "",
     "openrouter_model": DEFAULT_MODELS["openrouter"],
+    "polza_key": "",
+    "polza_model": DEFAULT_MODELS["polza"],
     "whisper_model": "small",
     "asr_terms": "",
     "proxy": "",
@@ -106,29 +114,21 @@ def save(patch: Dict[str, Any]) -> Dict[str, Any]:
     """Сохраняет только известные поля. Пустая строка ключа не затирает его."""
     with _LOCK:
         data = _read()
-        for key in ("deepseek_model", "gemini_model", "openrouter_model", "whisper_model",
-                    "asr_terms", "proxy"):
+        model_keys = tuple(f"{p}_model" for p in _PROVIDERS)
+        for key in (*model_keys, "whisper_model", "asr_terms", "proxy"):
             value = patch.get(key)
             if isinstance(value, str):
                 data[key] = value.strip()[:2000 if key == "asr_terms" else 300]
-        for key in ("deepseek_key", "gemini_key", "openrouter_key"):
-            value = patch.get(key)
+        for prov in _PROVIDERS:
+            value = patch.get(f"{prov}_key")
             if isinstance(value, str):
                 value = value.strip()
                 if value:
-                    data[key] = value[:400]
-        if patch.get("clear_deepseek_key"):
-            data["deepseek_key"] = ""
-        if patch.get("clear_gemini_key"):
-            data["gemini_key"] = ""
-        if patch.get("clear_openrouter_key"):
-            data["openrouter_key"] = ""
-        if not data.get("deepseek_model"):
-            data["deepseek_model"] = DEFAULT_MODELS["deepseek"]
-        if not data.get("gemini_model"):
-            data["gemini_model"] = DEFAULT_MODELS["gemini"]
-        if not data.get("openrouter_model"):
-            data["openrouter_model"] = DEFAULT_MODELS["openrouter"]
+                    data[f"{prov}_key"] = value[:400]
+            if patch.get(f"clear_{prov}_key"):
+                data[f"{prov}_key"] = ""
+            if not data.get(f"{prov}_model"):
+                data[f"{prov}_model"] = DEFAULT_MODELS[prov]
         data["whisper_model"] = normalize_whisper_model(data.get("whisper_model")) or "small"
         _write(data)
         return data
@@ -145,22 +145,19 @@ def public() -> Dict[str, Any]:
     """Безопасный ответ для интерфейса: ключи замаскированы."""
     with _LOCK:
         data = _read()
-    return {
-        "deepseek_model": data["deepseek_model"],
-        "gemini_model": data["gemini_model"],
-        "openrouter_model": data["openrouter_model"],
+    out: Dict[str, Any] = {
         "proxy": data["proxy"],
-        "deepseek_key_set": bool(data["deepseek_key"]),
-        "gemini_key_set": bool(data["gemini_key"]),
-        "deepseek_key_hint": _mask(data["deepseek_key"]),
-        "gemini_key_hint": _mask(data["gemini_key"]),
-        "openrouter_key_set": bool(data["openrouter_key"]),
-        "openrouter_key_hint": _mask(data["openrouter_key"]),
         "model_choices": MODEL_CHOICES,
         "whisper_model": data["whisper_model"],
         "whisper_models": WHISPER_MODELS,
         "asr_terms": data["asr_terms"],
     }
+    for prov in _PROVIDERS:
+        key_val = data.get(f"{prov}_key") or ""
+        out[f"{prov}_model"] = data.get(f"{prov}_model") or DEFAULT_MODELS[prov]
+        out[f"{prov}_key_set"] = bool(key_val)
+        out[f"{prov}_key_hint"] = _mask(key_val)
+    return out
 
 
 def api_key(provider: str) -> str:

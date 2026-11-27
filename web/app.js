@@ -686,7 +686,9 @@ function heroHTML() {
         <div class="opt-control">
           <select id="aiPicker">
             <option value="local" ${o.picker === "local" ? "selected" : ""}>Локально</option>
-            <option value="auto" ${o.picker === "auto" ? "selected" : ""}>Авто: DeepSeek → Gemini</option>
+            <option value="auto" ${o.picker === "auto" ? "selected" : ""}>Авто: все подключённые</option>
+            <option value="openrouter" ${o.picker === "openrouter" ? "selected" : ""}>OpenRouter</option>
+            <option value="polza" ${o.picker === "polza" ? "selected" : ""}>Polza.ai</option>
             <option value="deepseek" ${o.picker === "deepseek" ? "selected" : ""}>DeepSeek</option>
             <option value="gemini" ${o.picker === "gemini" ? "selected" : ""}>Gemini</option>
           </select>

@@ -22,8 +22,9 @@
   ];
   const PICKER_OPTIONS = [
     ["local", "Локально — быстро и бесплатно"],
-    ["auto", "Авто: OpenRouter → DeepSeek → Gemini"],
+    ["auto", "Авто: OpenRouter → Polza.ai → DeepSeek → Gemini"],
     ["openrouter", "OpenRouter (DeepSeek)"],
+    ["polza", "Polza.ai"],
     ["deepseek", "DeepSeek"],
     ["gemini", "Gemini"]
   ];
@@ -723,7 +724,7 @@
             ${MOODS.map(([k, label]) => `<button type="button" data-mood="${k}" class="${(wizard.opts.mood_filter || []).includes(k) ? "active" : ""}">${label}</button>`).join("")}
           </div>
         </div>
-        <div class="opt-hint" id="wzPickerHint">Локально — эвристики по речи, офлайн и бесплатно. DeepSeek и Gemini читают весь текст выпуска и выбирают моменты по смыслу и настроению. Ключи — в «Настройки → Нейросеть».</div>
+        <div class="opt-hint" id="wzPickerHint">Локально — эвристики по речи, офлайн и бесплатно. Нейросети (OpenRouter, Polza.ai, DeepSeek, Gemini) читают весь текст выпуска и выбирают моменты по смыслу и настроению. Ключи — в «Настройки → Нейросеть».</div>
         <div class="opt-hint">Склейки пауз и скорость пересчитают субтитры автоматически. Хук и текст можно поправить после рендера в редакторе клипа.</div>
       </div>`;
   }
@@ -872,6 +873,16 @@
                   <input type="text" id="setOpenrouterModel" list="setOpenrouterModelList" placeholder="ID модели — можно ввести вручную" spellcheck="false" />\n                  <datalist id="setOpenrouterModelList"></datalist>
                 </div>
               </div>
+              <div class="row2">
+                <div class="field"><label>Ключ Polza.ai</label>
+                  <input type="password" id="setPolzaKey" autocomplete="off" spellcheck="false" placeholder="pza_…" />
+                  <div class="opt-hint" id="polzaState"></div>
+                </div>
+                <div class="field"><label>Модель Polza.ai</label>
+                  <input type="text" id="setPolzaModel" list="setPolzaModelList" placeholder="ID модели — можно ввести вручную" spellcheck="false" />
+                  <datalist id="setPolzaModelList"></datalist>
+                </div>
+              </div>
               <div class="field"><label>Прокси для нейросетей</label>
                 <input type="text" id="setProxy" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7901 — если нужен" />
               </div>
@@ -894,6 +905,7 @@
                 <button class="btn-ghost" id="checkDeepseek" type="button">Проверить DeepSeek</button>
                 <button class="btn-ghost" id="checkGemini" type="button">Проверить Gemini</button>
                 <button class="btn-ghost" id="checkOpenrouter" type="button">Проверить OpenRouter</button>
+                <button class="btn-ghost" id="checkPolza" type="button">Проверить Polza.ai</button>
                 <button class="btn-ghost" id="refreshModels" type="button">Обновить модели</button>
                 <span class="opt-hint" id="modelState"></span>
                 <button class="btn-ghost" id="clearAiKeys" type="button">Удалить ключи</button>
@@ -1023,7 +1035,7 @@
       try {
         const res = await api("/api/app-settings/models");
         const catalogs = res.catalogs || {};
-        const names = {deepseek: "DeepSeek", gemini: "Gemini", openrouter: "OpenRouter"};
+        const names = {deepseek: "DeepSeek", gemini: "Gemini", openrouter: "OpenRouter", polza: "Polza.ai"};
         const notes = [];
         for (const [key, data] of Object.entries(catalogs)) {
           if (data.ok) {
@@ -1040,30 +1052,31 @@
         if (!silent) toast(err.message || "Не удалось обновить списки", "err");
       }
     };
+    const aiProviders = [
+      { id: "deepseek", cap: "Deepseek", hintEmpty: "не задан" },
+      { id: "gemini", cap: "Gemini", hintEmpty: "не задан" },
+      { id: "openrouter", cap: "Openrouter", hintEmpty: "sk-or-v1-…" },
+      { id: "polza", cap: "Polza", hintEmpty: "pza_…" }
+    ];
     const applyState = (s) => {
       if (!s) return;
-      $("#deepseekState").textContent = s.deepseek_key_set
-        ? `Ключ сохранён: ${s.deepseek_key_hint}` : "Ключ не задан";
-      $("#geminiState").textContent = s.gemini_key_set
-        ? `Ключ сохранён: ${s.gemini_key_hint}` : "Ключ не задан";
-      fillModels("#setDeepseekModel", (s.model_choices || {}).deepseek, s.deepseek_model);
-      const orState = $("#openrouterState");
-      if (orState) orState.textContent = s.openrouter_key_set
-        ? `Сохранён ключ: ${s.openrouter_key_hint}` : "Ключ не задан";
-      fillModels("#setOpenrouterModel", (s.model_choices || {}).openrouter, s.openrouter_model);
-      fillModels("#setGeminiModel", (s.model_choices || {}).gemini, s.gemini_model);
+      aiProviders.forEach(({ id, cap, hintEmpty }) => {
+        const st = $(`#${id}State`);
+        const isSet = Boolean(s[`${id}_key_set`]);
+        if (st) st.textContent = isSet ? `Ключ сохранён: ${s[`${id}_key_hint`]}` : "Ключ не задан";
+        fillModels(`#set${cap}Model`, (s.model_choices || {})[id], s[`${id}_model`]);
+        const inp = $(`#set${cap}Key`);
+        if (inp) {
+          inp.value = "";
+          inp.placeholder = isSet ? "ключ сохранён — введите новый, чтобы заменить" : hintEmpty;
+        }
+      });
       const proxy = $("#setProxy");
       if (proxy && document.activeElement !== proxy) proxy.value = s.proxy || "";
       const whisper = $("#setWhisperModel");
       if (whisper) whisper.value = s.whisper_model || "small";
       const terms = $("#setAsrTerms");
       if (terms && document.activeElement !== terms) terms.value = s.asr_terms || "";
-      $("#setDeepseekKey").value = "";
-      $("#setGeminiKey").value = "";
-      const orKey = $("#setOpenrouterKey");
-      if (orKey) orKey.value = "";
-      $("#setDeepseekKey").placeholder = s.deepseek_key_set ? "ключ сохранён — введите новый, чтобы заменить" : "не задан";
-      $("#setGeminiKey").placeholder = s.gemini_key_set ? "ключ сохранён — введите новый, чтобы заменить" : "не задан";
     };
     const save = () => api("/api/app-settings", {
       method: "POST",
@@ -1074,12 +1087,16 @@
         gemini_model: $("#setGeminiModel").value,
         openrouter_key: ($("#setOpenrouterKey") || {}).value ? $("#setOpenrouterKey").value.trim() : "",
         openrouter_model: $("#setOpenrouterModel") ? $("#setOpenrouterModel").value : "",
+        polza_key: ($("#setPolzaKey") || {}).value ? $("#setPolzaKey").value.trim() : "",
+        polza_model: $("#setPolzaModel") ? $("#setPolzaModel").value : "",
         proxy: $("#setProxy").value.trim(),
         whisper_model: ($("#setWhisperModel") || {}).value || "small",
         asr_terms: ($("#setAsrTerms") || {}).value || ""
       })
     }).then(applyState).catch((err) => toast(err.message || "Не удалось сохранить", "err"));
-    ["#setDeepseekKey", "#setGeminiKey", "#setOpenrouterKey", "#setDeepseekModel", "#setGeminiModel", "#setOpenrouterModel", "#setWhisperModel", "#setProxy", "#setAsrTerms"]
+    ["#setDeepseekKey", "#setGeminiKey", "#setOpenrouterKey", "#setPolzaKey",
+     "#setDeepseekModel", "#setGeminiModel", "#setOpenrouterModel", "#setPolzaModel",
+     "#setWhisperModel", "#setProxy", "#setAsrTerms"]
       .forEach((selector) => {
         const el = $(selector);
         if (el) el.addEventListener("change", save);
@@ -1101,11 +1118,13 @@
     if (refreshBtn) refreshBtn.addEventListener("click", () => refreshModels(false));
     const orCheck = $("#checkOpenrouter");
     if (orCheck) orCheck.addEventListener("click", () => check("openrouter", "#checkOpenrouter"));
+    const pzCheck = $("#checkPolza");
+    if (pzCheck) pzCheck.addEventListener("click", () => check("polza", "#checkPolza"));
     $("#clearAiKeys").addEventListener("click", () => {
-      if (!confirm("Удалить сохранённые ключи DeepSeek и Gemini?")) return;
+      if (!confirm("Удалить сохранённые ключи нейросетей?")) return;
       api("/api/app-settings", {
         method: "POST",
-        body: JSON.stringify({ clear_deepseek_key: true, clear_gemini_key: true, clear_openrouter_key: true })
+        body: JSON.stringify({ clear_deepseek_key: true, clear_gemini_key: true, clear_openrouter_key: true, clear_polza_key: true })
       }).then((s) => { applyState(s); toast("Ключи удалены"); })
         .catch((err) => toast(err.message || "Не удалось удалить", "err"));
     });

@@ -39,12 +39,15 @@ class AppSettingsIn(BaseModel):
     gemini_model: Optional[str] = None
     openrouter_key: Optional[str] = None
     openrouter_model: Optional[str] = None
+    polza_key: Optional[str] = None
+    polza_model: Optional[str] = None
     whisper_model: Optional[str] = None
     asr_terms: Optional[str] = None
     proxy: Optional[str] = None
     clear_deepseek_key: bool = False
     clear_gemini_key: bool = False
     clear_openrouter_key: bool = False
+    clear_polza_key: bool = False
 
 
 class AdTextIn(BaseModel):

@@ -80,9 +80,15 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "budget_chars": 120_000,
         "models_url": "https://openrouter.ai/api/v1/models",
     },
+    "polza": {
+        "url": "https://polza.ai/api/v1/chat/completions",
+        "label": "Polza.ai",
+        "budget_chars": 120_000,
+        "models_url": "https://polza.ai/api/v1/models",
+    },
 }
 
-PICKERS = ("local", "auto", "openrouter", "deepseek", "gemini")
+PICKERS = ("local", "auto", "openrouter", "polza", "deepseek", "gemini")
 
 SYSTEM_PROMPT = """Ты — редактор вирусных вертикальных видео (Shorts, TikTok, Reels).
 Тебе дают расшифровку речи с номерами предложений и таймкодами.
@@ -235,7 +241,7 @@ def _get_json(url: str, key: str = "", proxy: Optional[str] = None,
 
 def _parse_models(provider: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
-    if provider == "openrouter":
+    if provider in ("openrouter", "polza"):
         for item in payload.get("data") or []:
             mid = str(item.get("id") or "").strip()
             if mid:
@@ -262,7 +268,7 @@ def _parse_models(provider: str, payload: Dict[str, Any]) -> List[Dict[str, Any]
 
 
 def models_for(provider: str) -> List[Dict[str, Any]]:
-    """Каталог моделей с кешем; OpenRouter — без ключа."""
+    """Каталог моделей с кешем; OpenRouter и Polza.ai — без ключа."""
     spec = PROVIDERS.get(provider)
     if not spec:
         raise LLMError("Неизвестный провайдер")
@@ -270,7 +276,7 @@ def models_for(provider: str) -> List[Dict[str, Any]]:
     if cached and time.time() - cached[0] < MODELS_CACHE_SECONDS:
         return list(cached[1])
     key = app_settings.api_key(provider)
-    if provider != "openrouter" and not key:
+    if provider not in ("openrouter", "polza") and not key:
         raise LLMError("Сначала задайте ключ")
     if provider == "gemini":
         url = f"{spec['models_url']}?key={urllib.parse.quote(key)}"
@@ -780,7 +786,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
     picker = str(opts.get("picker") or "local")
     if picker == "local":
         return None
-    chain = ["openrouter", "deepseek", "gemini"] if picker == "auto" else [picker]
+    chain = ["openrouter", "polza", "deepseek", "gemini"] if picker == "auto" else [picker]
     sents = analyze.build_sentences(segments)
     if len(sents) < 4 or duration < 5:
         return None
