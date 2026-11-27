@@ -102,6 +102,54 @@ MOODS: Dict[str, str] = {
     "intense": "жёсткое",
 }
 
+MOOD_ALIASES: Dict[str, str] = {
+    "веселое": "funny", "весёлое": "funny", "смешное": "funny", "fun": "funny",
+    "humor": "funny", "comedy": "funny",
+    "грустное": "sad", "печальное": "sad", "sadness": "sad", "emotional": "sad",
+    "драма": "drama", "dramatic": "drama", "conflict": "drama",
+    "шок": "shock", "shocking": "shock", "surprise": "shock", "wow": "shock",
+    "мысль": "insight", "insightful": "insight", "wise": "insight",
+    "полезное": "insight", "educational": "insight",
+    "теплое": "wholesome", "тёплое": "wholesome", "kind": "wholesome",
+    "жёсткое": "intense", "жесткое": "intense", "brutal": "intense",
+    "aggressive": "intense",
+}
+_MOOD_STOP = {"none", "null", "n/a", "na", "unknown", "undefined", "any", "-", "—", "нет"}
+
+
+def normalize_mood(value: Any) -> str:
+    """Нормализует настроение без ограничения закрытым списком."""
+    text = re.sub(r"[\"'`()\[\]{}<>]+", "", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:!?-_").lower()
+    if not text or text in _MOOD_STOP:
+        return ""
+    if text in MOODS:
+        return text
+    if text in MOOD_ALIASES:
+        return MOOD_ALIASES[text]
+    yo = text.replace("ё", "е")
+    if yo in MOOD_ALIASES:
+        return MOOD_ALIASES[yo]
+    return text[:32]
+
+
+def mood_matches(clip_mood: Any, wanted: Sequence[str]) -> bool:
+    """Проверяет совпадение настроения клипа с фильтром (с учётом свободных тегов)."""
+    targets = [normalize_mood(m) for m in (wanted or ()) if normalize_mood(m)]
+    if not targets:
+        return True
+    actual = normalize_mood(clip_mood)
+    if not actual:
+        return False
+    actual_ru = MOODS.get(actual, actual)
+    for target in targets:
+        target_ru = MOODS.get(target, target)
+        if actual == target or actual_ru == target_ru:
+            return True
+        if target in actual or actual in target:
+            return True
+    return False
+
 # Тип контента отвечает на вопрос «что это за фрагмент», настроение — «какая
 # у него эмоция». Меток типа может быть несколько, настроение одно.
 CONTENT_TYPES: Dict[str, str] = {

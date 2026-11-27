@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import analyze, app_settings
 
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 REQUEST_TIMEOUT = float(os.environ.get("VERTCUT_LLM_TIMEOUT", "90"))
 DEBUG = bool(os.environ.get("VERTCUT_LLM_DEBUG"))
 
@@ -32,18 +32,7 @@ DEBUG = bool(os.environ.get("VERTCUT_LLM_DEBUG"))
 MOODS: Dict[str, str] = analyze.MOODS
 CONTENT_TYPES: Dict[str, str] = analyze.CONTENT_TYPES
 
-_MOOD_ALIASES = {
-    "веселое": "funny", "весёлое": "funny", "смешное": "funny", "fun": "funny",
-    "humor": "funny", "comedy": "funny",
-    "грустное": "sad", "печальное": "sad", "sadness": "sad", "emotional": "sad",
-    "драма": "drama", "dramatic": "drama", "conflict": "drama",
-    "шок": "shock", "shocking": "shock", "surprise": "shock", "wow": "shock",
-    "мысль": "insight", "insightful": "insight", "wise": "insight",
-    "полезное": "insight", "educational": "insight",
-    "теплое": "wholesome", "тёплое": "wholesome", "kind": "wholesome",
-    "жёсткое": "intense", "жесткое": "intense", "brutal": "intense",
-    "aggressive": "intense",
-}
+_MOOD_ALIASES = analyze.MOOD_ALIASES
 
 _TYPE_ALIASES = {
     "история": "story", "story": "story", "storytelling": "story",
@@ -101,7 +90,9 @@ SYSTEM_PROMPT = """Ты — редактор вирусных вертикаль
 - Не бери рекламу, приветствия, прощания, воду и служебные фразы.
 - Длительность держи в указанном диапазоне.
 - Моменты не должны пересекаться.
-- mood — ровно одно слово строго из списка: funny, sad, drama, shock, insight, wholesome, intense.
+- mood — точное настроение момента своими словами (1–2 слова в нижнем регистре на языке видео:
+  например весёлое, грустное, драма, шок, мысль, хорни, флирт, кринж, сарказм, азарт, саспенс,
+  уютное, жёсткое — передавай реальную эмоцию момента после расшифровки, не ограничивайся шаблонами).
 - types — от одного до трёх типов содержания строго из списка: story, humor, conflict, insight,
   education, reaction, motivation, provocation, emotion, fact. Тип отвечает на вопрос «что это»,
   настроение — «какая эмоция».
@@ -367,10 +358,7 @@ def _maybe_float(value: Any) -> float:
 
 
 def _clean_mood(value: Any) -> str:
-    mood = str(value or "").strip().lower()
-    if mood in MOODS:
-        return mood
-    return _MOOD_ALIASES.get(mood, "")
+    return analyze.normalize_mood(value)
 
 
 def _clean_types(value: Any, limit: int = 3) -> List[str]:
@@ -462,7 +450,7 @@ def _prompt(sents: List[Dict[str, Any]], indexes: List[int], duration: float,
     for i in indexes:
         sent = sents[i]
         lines.append(f"[{i}] {_stamp(sent['start'])} {sent['text']}")
-    moods = [m for m in (opts.get("mood_filter") or []) if m in MOODS]
+    moods = [analyze.normalize_mood(m) for m in (opts.get("mood_filter") or []) if analyze.normalize_mood(m)]
     mood_hint = ""
     if moods:
         mood_hint = "\nНужны только эти настроения: " + ", ".join(moods) + "."
@@ -676,14 +664,14 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
     max_dur = float(opts.get("max_dur") or 60)
     min_dur = float(opts.get("min_dur") or 15)
     min_score = float(opts.get("min_score") or 0.0)
-    moods = [m for m in (opts.get("mood_filter") or []) if m in MOODS]
+    moods = [analyze.normalize_mood(m) for m in (opts.get("mood_filter") or []) if analyze.normalize_mood(m)]
     types_wanted = [t for t in (opts.get("type_filter") or []) if t in CONTENT_TYPES]
 
     candidates: List[Dict[str, Any]] = []
     for item in items:
         if item.get("score", 0.0) < min_score:
             continue
-        if moods and item.get("mood") not in moods:
+        if moods and not analyze.mood_matches(item.get("mood"), moods):
             continue
         if types_wanted and not set(types_wanted) & set(item.get("types") or []):
             continue

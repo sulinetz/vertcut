@@ -719,10 +719,11 @@
             <select id="wzMinScore">${[[0, "Любая"], [0.5, "≥ 50"], [0.6, "≥ 60"], [0.7, "≥ 70"], [0.8, "≥ 80"]].map(([v, label]) => `<option value="${v}" ${Number(wizard.opts.min_score || 0) === v ? "selected" : ""}>${label}</option>`).join("")}</select>
           </div>
         </div>
-        <div class="field" id="wzMoodField"><label>Настроения <span class="muted">(пусто — любые)</span></label>
+        <div class="field" id="wzMoodField"><label>Настроения <span class="muted">(пусто — любые; можно выбрать или вписать свои)</span></label>
           <div class="seg" id="wzMoods">
             ${MOODS.map(([k, label]) => `<button type="button" data-mood="${k}" class="${(wizard.opts.mood_filter || []).includes(k) ? "active" : ""}">${label}</button>`).join("")}
           </div>
+          <input type="text" id="wzCustomMoods" style="margin-top:6px" placeholder="Свои настроения через запятую: хорни, флирт, кринж, сарказм…" value="${esc((wizard.opts.mood_filter || []).filter((m) => !MOODS.some(([k]) => k === m)).join(", "))}" />
         </div>
         <div class="opt-hint" id="wzPickerHint">Локально — эвристики по речи, офлайн и бесплатно. Нейросети (OpenRouter, Polza.ai, DeepSeek, Gemini) читают весь текст выпуска и выбирают моменты по смыслу и настроению. Ключи — в «Настройки → Нейросеть».</div>
         <div class="opt-hint">Склейки пауз и скорость пересчитают субтитры автоматически. Хук и текст можно поправить после рендера в редакторе клипа.</div>
@@ -765,14 +766,22 @@
     $("#wzOrder").addEventListener("change", (e) => { wizard.opts.export_order = e.target.value; });
     $("#wzPicker").addEventListener("change", (e) => { wizard.opts.picker = e.target.value; });
     $("#wzMinScore").addEventListener("change", (e) => { wizard.opts.min_score = Number(e.target.value); });
+    const syncMoods = () => {
+      const selected = $$("#wzMoods button.active").map((b) => b.dataset.mood);
+      const customBox = $("#wzCustomMoods");
+      const custom = customBox
+        ? customBox.value.split(/[,;\n]+/).map((x) => x.trim().toLowerCase()).filter(Boolean)
+        : [];
+      wizard.opts.mood_filter = [...new Set([...selected, ...custom])];
+    };
     $("#wzMoods").addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-mood]");
       if (!btn) return;
-      const mood = btn.dataset.mood;
-      const list = Array.isArray(wizard.opts.mood_filter) ? wizard.opts.mood_filter : [];
-      wizard.opts.mood_filter = list.includes(mood) ? list.filter((m) => m !== mood) : [...list, mood];
-      btn.classList.toggle("active", wizard.opts.mood_filter.includes(mood));
+      btn.classList.toggle("active");
+      syncMoods();
     });
+    const wzCustomMoods = $("#wzCustomMoods");
+    if (wzCustomMoods) wzCustomMoods.addEventListener("input", syncMoods);
   }
 
   async function next() {

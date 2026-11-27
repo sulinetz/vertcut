@@ -180,11 +180,11 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         opts["picker"] = "local"
     raw_moods = opts.get("mood_filter")
     if isinstance(raw_moods, str):
-        raw_moods = re.split(r"[,\s]+", raw_moods)
+        raw_moods = [x for x in re.split(r"[,;\n\r]+", raw_moods) if x.strip()]
     if not isinstance(raw_moods, (list, tuple)):
         raw_moods = []
     opts["mood_filter"] = list(dict.fromkeys(
-        m for m in (str(x).strip().lower() for x in raw_moods) if m in semantic.MOODS))
+        m for m in (analyze.normalize_mood(x) for x in raw_moods) if m))[:20]
     raw_types = opts.get("type_filter")
     if isinstance(raw_types, str):
         raw_types = re.split(r"[,\s]+", raw_types)

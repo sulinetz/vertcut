@@ -25,9 +25,9 @@ def test_mood_filter_accepts_list_and_string():
         {"mood_filter": ["funny", "sad"]})["mood_filter"] == ["funny", "sad"]
     assert pipeline.normalize_options(
         {"mood_filter": "funny, shock"})["mood_filter"] == ["funny", "shock"]
-    # Неизвестные метки отбрасываются, дубликаты не ломают фильтр.
+    # Свободные настроения сохраняются, отбрасывается только пустота и стоп-слова.
     assert pipeline.normalize_options(
-        {"mood_filter": ["funny", "nonsense"]})["mood_filter"] == ["funny"]
+        {"mood_filter": ["funny", "хорни", "none", "unknown", ""]})["mood_filter"] == ["funny", "хорни"]
     assert set(semantic.MOODS) >= {"funny", "sad", "drama", "shock"}
 
 

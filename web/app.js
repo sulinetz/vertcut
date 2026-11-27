@@ -692,14 +692,17 @@ function heroHTML() {
             <option value="deepseek" ${o.picker === "deepseek" ? "selected" : ""}>DeepSeek</option>
             <option value="gemini" ${o.picker === "gemini" ? "selected" : ""}>Gemini</option>
           </select>
-          <select id="aiMoods">
-            <option value="any" ${o.moods === "any" ? "selected" : ""}>Любые настроения</option>
-            <option value="funny" ${o.moods === "funny" ? "selected" : ""}>Только весёлое</option>
-            <option value="sad" ${o.moods === "sad" ? "selected" : ""}>Только грустное</option>
-            <option value="drama" ${o.moods === "drama" ? "selected" : ""}>Только драма</option>
-            <option value="shock" ${o.moods === "shock" ? "selected" : ""}>Только шок</option>
-            <option value="insight" ${o.moods === "insight" ? "selected" : ""}>Только мысль</option>
-          </select>
+          <input type="text" id="aiMoods" list="aiMoodsList" value="${esc(o.moods === "any" ? "" : (o.moods || ""))}" placeholder="Настроение: любое (или хорни, флирт…)" />
+          <datalist id="aiMoodsList">
+            <option value="весёлое"></option>
+            <option value="грустное"></option>
+            <option value="драма"></option>
+            <option value="шок"></option>
+            <option value="мысль"></option>
+            <option value="хорни"></option>
+            <option value="флирт"></option>
+            <option value="кринж"></option>
+          </datalist>
           <select id="aiMinScore">
             <option value="0" ${Number(o.minScore) === 0 ? "selected" : ""}>Оценка любая</option>
             <option value="0.5" ${Number(o.minScore) === 0.5 ? "selected" : ""}>Оценка ≥ 50</option>
@@ -1008,7 +1011,11 @@ function bindHero() {
   const aiPicker = $("#aiPicker");
   if (aiPicker) aiPicker.addEventListener("change", () => { state.opts.picker = aiPicker.value; });
   const aiMoods = $("#aiMoods");
-  if (aiMoods) aiMoods.addEventListener("change", () => { state.opts.moods = aiMoods.value; });
+  if (aiMoods) {
+    const onMood = () => { state.opts.moods = aiMoods.value.trim() || "any"; };
+    aiMoods.addEventListener("input", onMood);
+    aiMoods.addEventListener("change", onMood);
+  }
   const aiMinScore = $("#aiMinScore");
   if (aiMinScore) aiMinScore.addEventListener("change", () => { state.opts.minScore = Number(aiMinScore.value); });
 
@@ -1277,7 +1284,8 @@ function heroOptions() {
     mode: state.opts.mode,
     select: state.opts.select,
     picker: state.opts.picker,
-    mood_filter: state.opts.moods && state.opts.moods !== "any" ? [state.opts.moods] : [],
+    mood_filter: state.opts.moods && state.opts.moods !== "any"
+      ? String(state.opts.moods).split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean) : [],
     min_score: Number(state.opts.minScore || 0),
     subtitles: state.opts.subtitles,
     accent: state.opts.accent,
@@ -1753,10 +1761,18 @@ function clipFilterHTML() {
   const all = (state.detail && state.detail.clips) || [];
   if (!all.length) return "";
   const view = state.clipView || {};
+  const foundMoods = [];
+  all.forEach((c) => {
+    const m = String(c.settings?.mood || "").trim();
+    if (m && !foundMoods.includes(m)) foundMoods.push(m);
+  });
+  const moodOptions = foundMoods.length
+    ? foundMoods.map((k) => [k, MOOD_LABELS[k] || k])
+    : Object.entries(MOOD_LABELS);
   return `<div class="clip-filters">
     <label class="mini-field"><span>Настроение</span>
-      <select id="clipMoodFilter"><option value="any">Любое</option>${Object.entries(MOOD_LABELS)
-        .map(([k, v]) => `<option value="${k}" ${view.mood === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <select id="clipMoodFilter"><option value="any">Любое</option>${moodOptions
+        .map(([k, v]) => `<option value="${esc(k)}" ${view.mood === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
     </label>
     <label class="mini-field"><span>Тип</span>
       <select id="clipTypeFilter"><option value="any">Любой</option>${Object.entries(TYPE_LABELS)
@@ -1812,9 +1828,10 @@ function clipsGridHTML() {
       ["конкретика", sp.specificity], ["завершённость", sp.completeness],
     ].filter(([, v]) => typeof v === "number")
       .map(([k, v]) => `<span>${k} ${Math.round(v * 100)}</span>`).join("") : "";
-    const moodLabel = MOOD_LABELS[c.settings?.mood] || "";
+    const rawMood = String(c.settings?.mood || "").trim();
+    const moodLabel = MOOD_LABELS[rawMood] || rawMood;
     const moodLine = moodLabel
-      ? `<span class="mood-tag" title="Настроение момента">${moodLabel}</span>` : "";
+      ? `<span class="mood-tag" title="Настроение момента">${esc(moodLabel)}</span>` : "";
     const typeTags = (c.settings?.content_types || [])
       .map((k) => TYPE_LABELS[k]).filter(Boolean)
       .map((label) => `<span class="type-tag">${label}</span>`).join("");

@@ -180,9 +180,25 @@ def test_polza_picker_calls_polza_endpoint(segments, tmp_path, monkeypatch):
 
 def test_mood_aliases_and_bad_json(segments):
     assert semantic._clean_mood("весёлое") == "funny"
+    assert semantic._clean_mood("Хорни") == "хорни"
+    assert semantic._clean_mood("лёгкий флирт") == "лёгкий флирт"
     assert semantic._clean_mood("unknown") == ""
+    assert semantic._clean_mood("none") == ""
     with pytest.raises(semantic.LLMError):
         semantic._extract_json("совсем не json")
+
+
+def test_freeform_mood_preserved_and_filtered(segments, tmp_path, monkeypatch):
+    replies = _reply([
+        {"from": 1, "to": 2, "score": 0.9, "mood": "хорни"},
+        {"from": 2, "to": 3, "score": 0.85, "mood": "кринж"},
+    ])
+    monkeypatch.setattr(semantic, "_post_json", lambda *a, **k: replies)
+    opts = {"picker": "deepseek", "count": 5, "min_dur": 4, "max_dur": 60,
+            "target_dur": 20, "mood_filter": ["хорни"], "min_score": 0.5}
+    found = semantic.find_segments(segments, tmp_path / "v.mp4", 30.0,
+                                   opts=opts, workdir=tmp_path)
+    assert found and [clip["mood"] for clip in found] == ["хорни"]
 
 
 def test_clean_items_limits():
