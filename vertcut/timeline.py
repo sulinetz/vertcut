@@ -481,3 +481,91 @@ def rebase_insert_words(words: Sequence[Dict[str, Any]], base: float,
              "start": round(float(word["start"]) + base, 3),
              "end": round(float(word["end"]) + base, 3)}
             for word in shifted]
+
+
+def promo_windows(timing: str, *, duration: float,
+                  start: float = 0.0, length: float = 4.0,
+                  period: float = 20.0) -> List[Span]:
+    """Окна показа промо-футажа в финальной шкале клипа.
+
+    Возвращает непересекающиеся пары ``(start, end)`` в секундах от 0 до
+    ``duration``. Короткие обрезки (< 0.2 с) отбрасываются.
+    """
+    dur = max(0.0, float(duration or 0.0))
+    if dur < 0.2:
+        return []
+    kind = str(timing or "loop").strip().lower()
+    if kind == "loop":
+        return [(0.0, round(dur, 3))]
+
+    win_len = max(0.2, float(length or 4.0))
+    if kind == "start":
+        s = max(0.0, float(start or 0.0))
+        e = min(dur, s + win_len)
+        return [(round(s, 3), round(e, 3))] if e - s >= 0.2 else []
+
+    if kind == "end":
+        s = max(0.0, dur - win_len)
+        return [(round(s, 3), round(dur, 3))] if dur - s >= 0.2 else []
+
+    if kind == "periodic":
+        s = max(0.0, float(start or 0.0))
+        step = max(0.5, float(period or 20.0))
+        eff_len = min(win_len, step)
+        out: List[Span] = []
+        cursor = s
+        while cursor < dur - 0.05 and len(out) < 200:
+            e = min(dur, cursor + eff_len)
+            if e - cursor >= 0.2:
+                out.append((round(cursor, 3), round(e, 3)))
+            cursor += step
+        return out
+
+    return [(0.0, round(dur, 3))]
+
+
+def map_windows_to_base(windows: Sequence[Span],
+                        inserts: Sequence[Dict[str, Any]]) -> List[Span]:
+    """Переводит окна финального таймлайна в базовую шкалу (до вставок replace).
+
+    Куски окон, попавшие внутрь вставки рекламы, вырезаются; смежные части
+    объединяются.
+    """
+    if not windows:
+        return []
+    spans: List[Span] = []
+    for raw_a, raw_b in windows:
+        a, b = float(raw_a), float(raw_b)
+        if b - a <= 0.02:
+            continue
+        pieces: List[Span] = [(a, b)]
+        for item in inserts or []:
+            ins_a = float(item.get("final_start") or 0.0)
+            ins_b = ins_a + max(0.0, float(item.get("duration") or 0.0))
+            if ins_b <= ins_a:
+                continue
+            next_pieces: List[Span] = []
+            for pa, pb in pieces:
+                if pb <= ins_a or pa >= ins_b:
+                    next_pieces.append((pa, pb))
+                else:
+                    if pa < ins_a:
+                        next_pieces.append((pa, ins_a))
+                    if pb > ins_b:
+                        next_pieces.append((ins_b, pb))
+            pieces = next_pieces
+        for pa, pb in pieces:
+            if pb - pa < 0.05:
+                continue
+            ba = unmap_inserted(pa, inserts)
+            bb = unmap_inserted(pb, inserts)
+            if bb - ba >= 0.05:
+                spans.append((round(ba, 3), round(bb, 3)))
+    spans.sort()
+    merged: List[Span] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1] + 0.02:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged

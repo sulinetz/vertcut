@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -23,9 +24,10 @@ ADS_DIR = DATA_DIR / "ads"
 INDEX_PATH = ADS_DIR / "index.json"
 LOCK = threading.RLock()
 
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
 ANIMATIONS = ("none", "fade", "slide", "scale")
+KEY_COLORS = ("none", "green", "black")
 KINDS = ("image", "video", "text")
 MAX_EVENTS = 40
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
@@ -110,17 +112,32 @@ def _kind_for_suffix(suffix: str) -> str:
     return ""
 
 
+def _gif_duration(image: Any) -> float:
+    """Суммарная длительность кадров GIF в секундах."""
+    try:
+        from PIL import ImageSequence
+
+        total_ms = 0
+        for frame in ImageSequence.Iterator(image):
+            step = int(frame.info.get("duration") or 0)
+            total_ms += step if step > 0 else 100
+        return round(total_ms / 1000.0, 2)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def add_file(filename: str, source: Path, name: Optional[str] = None) -> Dict[str, Any]:
-    """Добавляет картинку или короткое видео в библиотеку."""
+    """Добавляет картинку, GIF или короткое видео в библиотеку."""
     suffix = Path(filename or "").suffix.lower()
     kind = _kind_for_suffix(suffix)
     if not kind:
-        raise ValueError("Нужен PNG, JPG, WEBP или видео MP4/WEBM/MOV/MKV")
+        raise ValueError("Нужен PNG, JPG, WEBP, GIF или видео MP4/WEBM/MOV/MKV")
     size = source.stat().st_size
     limit = MAX_IMAGE_BYTES if kind == "image" else MAX_VIDEO_BYTES
     if size > limit:
         raise ValueError(f"Файл больше {limit // (1024 * 1024)} МБ")
-    info: Dict[str, Any] = {"width": 0, "height": 0, "duration": 0.0}
+    info: Dict[str, Any] = {"width": 0, "height": 0, "duration": 0.0,
+                           "animated": False, "frames": 1}
     if kind == "image":
         try:
             from PIL import Image
@@ -128,8 +145,17 @@ def add_file(filename: str, source: Path, name: Optional[str] = None) -> Dict[st
             with Image.open(source) as image:
                 image.verify()
             with Image.open(source) as image:
+                frames = int(getattr(image, "n_frames", 1) or 1)
+                animated = suffix == ".gif" and frames > 1
+                gif_dur = _gif_duration(image) if animated else 0.0
                 info = {"width": int(image.width), "height": int(image.height),
-                        "duration": 0.0}
+                        "duration": gif_dur, "animated": animated, "frames": frames}
+            if suffix == ".gif" and info["duration"] <= 0:
+                try:
+                    probed = utils.probe(source)
+                    info["duration"] = round(float(probed.get("duration") or 0), 2)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"Не удалось прочитать изображение: {str(exc)[:120]}") from exc
     else:
@@ -139,7 +165,8 @@ def add_file(filename: str, source: Path, name: Optional[str] = None) -> Dict[st
             raise ValueError(f"Не удалось прочитать видео: {str(exc)[:120]}") from exc
         info = {"width": int(probed.get("width") or 0),
                 "height": int(probed.get("height") or 0),
-                "duration": round(float(probed.get("duration") or 0), 2)}
+                "duration": round(float(probed.get("duration") or 0), 2),
+                "animated": False, "frames": 0}
         if info["duration"] <= 0:
             raise ValueError("В видео нет длительности")
 
@@ -157,12 +184,35 @@ def add_file(filename: str, source: Path, name: Optional[str] = None) -> Dict[st
             "width": info["width"],
             "height": info["height"],
             "duration": info["duration"],
+            "animated": bool(info.get("animated")),
+            "frames": int(info.get("frames") or 0),
             "size": target.stat().st_size,
             "created": round(time.time(), 3),
         }
         data["assets"][asset_id] = asset
         _write_index(data)
     return _public(asset)
+
+
+def is_animated_footage(asset: Dict[str, Any]) -> bool:
+    """Подходит ли ассет для «random» футажа (видео или GIF, но не статичная картинка)."""
+    if not isinstance(asset, dict):
+        return False
+    if asset.get("kind") == "video":
+        return True
+    name = str(asset.get("file") or "").lower()
+    return asset.get("kind") == "image" and (bool(asset.get("animated")) or name.endswith(".gif"))
+
+
+def pick_random_footage(seed_key: str) -> Optional[Dict[str, Any]]:
+    """Детерминированный выбор видео/GIF футажа по ключу клипа."""
+    candidates = [a for a in list_assets() if is_animated_footage(a)]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda a: str(a.get("id") or ""))
+    digest = hashlib.sha256(str(seed_key or "").encode("utf-8")).digest()
+    idx = int.from_bytes(digest[:8], "big") % len(candidates)
+    return candidates[idx]
 
 
 def add_text(text: str, color: str = "#FFFFFF", background: str = "#00000000",
@@ -306,7 +356,10 @@ def normalize_events(events: Any, known: Optional[Iterable[str]] = None) -> List
             "anim_dur": _as_float(raw.get("anim_dur"), 0.3, 0.0, 2.0),
             "z": int(_as_float(raw.get("z"), 0.0, -50.0, 100.0)),
             "volume": _as_float(raw.get("volume"), 1.0, 0.0, 1.0),
+            "key_color": str(raw.get("key_color") or "none").strip().lower(),
         }
+        if event["key_color"] not in KEY_COLORS:
+            event["key_color"] = "none"
         for key in ("anim_in", "anim_out"):
             if event[key] not in ANIMATIONS:
                 event[key] = "none"

@@ -144,6 +144,20 @@ class ClipEdit(BaseModel):
     adhd_bottom_volume: Optional[float] = None
     ads_enabled: Optional[bool] = None
     ad_events: Optional[List[Dict[str, Any]]] = None
+    promo_footage: Optional[str] = None
+    promo_mode: Optional[str] = None
+    promo_scale: Optional[int] = None
+    promo_pos: Optional[str] = None
+    promo_x: Optional[float] = None
+    promo_y: Optional[float] = None
+    promo_fill: Optional[str] = None
+    promo_key_color: Optional[str] = None
+    promo_timing: Optional[str] = None
+    promo_start_sec: Optional[float] = None
+    promo_duration_sec: Optional[float] = None
+    promo_period_sec: Optional[float] = None
+    promo_audio_vol: Optional[int] = None
+    promo_split_ratio: Optional[float] = None
     audio_track: Optional[int] = None
     external_audio: Optional[bool] = None
     external_audio_track: Optional[int] = None
@@ -241,7 +255,7 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
     data = {k: v for k, v in data.items() if k in allowed}
 
     special = {"text", "start", "end", "hook", "title", "caption", "focus_x",
-               "bg_video", "adhd_bg", "sub_font", "ad_events"}
+               "bg_video", "adhd_bg", "sub_font", "ad_events", "promo_footage"}
     for key in list(data):
         if key in special:
             continue
@@ -270,6 +284,13 @@ def _clean_clip_edit(body: ClipEdit) -> Dict[str, Any]:
     if "ad_events" in data:
         known = {asset["id"] for asset in ads.list_assets()}
         data["ad_events"] = ads.normalize_events(data["ad_events"], known)
+    if "promo_footage" in data:
+        pid = str(data["promo_footage"] or "").strip()
+        if pid and ("/" in pid or "\\" in pid or ".." in pid):
+            raise HTTPException(400, "Некорректный идентификатор футажа")
+        if pid and pid != "random" and ads.get_asset(pid) is None:
+            raise HTTPException(400, "Футаж не найден в библиотеке")
+        data["promo_footage"] = pid[:80]
     if "text" in data:
         data["text"] = str(data["text"] or "").strip()[:4000]
     for key in ("start", "end"):
@@ -909,7 +930,7 @@ def ads_list() -> Dict[str, Any]:
 async def ads_upload(file: UploadFile = File(...)) -> Dict[str, Any]:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ads.IMAGE_SUFFIXES and suffix not in ads.VIDEO_SUFFIXES:
-        raise HTTPException(400, "Нужен PNG, JPG, WEBP или видео MP4/WEBM/MOV/MKV")
+        raise HTTPException(400, "Нужен PNG, JPG, WEBP, GIF или видео MP4/WEBM/MOV/MKV")
     temp = DATA_DIR / f"ads_upload{suffix}"
     try:
         await _stream_upload(file, temp, ads.MAX_VIDEO_BYTES, "Файл больше 300 МБ")
@@ -954,6 +975,7 @@ def ads_file(asset_id: str) -> FileResponse:
     suffix = path.suffix.lower()
     media = ("video/mp4" if suffix in ads.VIDEO_SUFFIXES
              else "image/png" if suffix == ".png"
+             else "image/gif" if suffix == ".gif"
              else "image/jpeg" if suffix in (".jpg", ".jpeg")
              else "image/webp")
     return FileResponse(path, media_type=media)
@@ -1003,13 +1025,19 @@ def clip_ad_timeline(cid: str, events: Optional[str] = None) -> Dict[str, Any]:
                 local, local + length, segments=segments, speed=info["speed"],
                 inserts=info["inserts"], duration=info["duration"])
         events.append({**event, "start_final": start, "end_final": end})
+    promo = composition.promo_plan(clip, settings, {
+        "speed": info["speed"],
+        "length": info["length"],
+        "segments": info["segments"],
+    }, inserts=info["inserts"], duration=info["duration"])
     return {"base_length": info["length"], "duration": info["duration"],
             "speed": info["speed"],
             "inserts": [{**item["event"], "at": item["at"],
                          "final_start": item["final_start"],
                          "duration": item["duration"]}
                         for item in info["inserts"]],
-            "events": events}
+            "events": events,
+            "promo": promo}
 
 
 @app.post("/api/clips/{cid}/ad-map")

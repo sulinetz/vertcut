@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .config import (ADHD_SPLIT_BACKEND_MAX, ADHD_SPLIT_BACKEND_MIN,
                      ADHD_SPLIT_UI_MAX, ADHD_SPLIT_UI_MIN,
                      ffmpeg, ffmpeg_capabilities)
-from . import custom_fonts
+from . import custom_fonts, platforms
 from .errors import Cancelled
 from .reframe import crop_expressions
 from .timeline import (dub_pieces, event_window, insert_spans,
@@ -31,7 +31,104 @@ BAND_H = 640
 ADHD_FILLS = ("cover", "contain")
 ADHD_SPLIT_MIN = ADHD_SPLIT_UI_MIN
 ADHD_SPLIT_MAX = ADHD_SPLIT_BACKEND_MAX
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+STATIC_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_SUFFIXES = STATIC_IMAGE_SUFFIXES | {".gif"}
+
+
+def _loop_input_flags(path: Path) -> List[str]:
+    """Флаги зацикливания входа ffmpeg для картинок, GIF и видео."""
+    suffix = path.suffix.lower()
+    if suffix == ".gif":
+        return ["-ignore_loop", "0"]
+    if suffix in STATIC_IMAGE_SUFFIXES:
+        return ["-loop", "1", "-framerate", "30"]
+    return ["-stream_loop", "-1"]
+
+
+def _colorkey_filter(color: str) -> str:
+    """Фильтр удаления однотонного фона у MP4-футажей без альфа-канала."""
+    key = str(color or "none").strip().lower()
+    if key == "green":
+        return "colorkey=0x00FF00:0.25:0.1"
+    if key == "black":
+        return "colorkey=0x000000:0.15:0.1"
+    return ""
+
+
+def _style_filters(w: int, h: int, *, hflip: bool = False, tilt: float = 0.0,
+                   zoom: int = 100, look: str = "none",
+                   vignette: bool = False, grain: bool = False) -> List[str]:
+    """Цепочка визуального стиля для кадра размером w x h."""
+    style: List[str] = []
+    if hflip:
+        style.append("hflip")
+    if tilt > 0.05:
+        # Поворот с запасом 12%: после обрезки чёрных углов не остаётся.
+        angle = math.radians(tilt)
+        style.append(
+            f"scale=iw*1.12:ih*1.12,rotate={angle:.6f}:ow=iw:oh=ih:c=black,"
+            f"crop={w}:{h}"
+        )
+    z = max(100, min(120, int(zoom or 100)))
+    if z > 100:
+        factor = z / 100.0
+        style.append(f"scale=iw*{factor:.3f}:ih*{factor:.3f},crop={w}:{h}")
+    looks = {
+        "warm": "eq=saturation=1.10:gamma_r=1.04:gamma_b=0.96",
+        "cool": "eq=saturation=1.06:gamma_b=1.05:gamma_r=0.96",
+        "contrast": "eq=contrast=1.12:saturation=1.10",
+        "cinematic": "eq=contrast=1.08:saturation=0.92:gamma=0.98",
+        "soft": "eq=contrast=0.96:saturation=1.04:brightness=0.02",
+    }
+    if look in looks:
+        style.append(looks[look])
+    if vignette:
+        style.append("vignette=PI/5")
+    if grain:
+        style.append("noise=alls=8:allf=t+u")
+    return style
+
+
+def _promo_audio_filters(promo_idx: int, windows: List[Tuple[float, float]], *,
+                         duration: float, vol: float, timing: str,
+                         split_active: bool, amix_norm: bool) -> List[str]:
+    """Собирает звуковую дорожку [pa] промо-футажа по окнам показа."""
+    fmt = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+    if split_active or (timing == "loop" and len(windows) == 1 and windows[0][0] <= 0.05):
+        return [
+            f"[{promo_idx}:a]atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,"
+            f"volume={vol:.3f},{fmt},apad=whole_dur={duration:.3f},"
+            f"atrim=0:{duration:.3f}[pa]"
+        ]
+    if len(windows) == 1:
+        ws, we = windows[0]
+        span = max(0.05, we - ws)
+        delay_ms = max(0, int(round(ws * 1000)))
+        delay = f",adelay={delay_ms}|{delay_ms}" if delay_ms > 0 else ""
+        return [
+            f"[{promo_idx}:a]atrim=0:{span:.3f},asetpts=PTS-STARTPTS,"
+            f"volume={vol:.3f},{fmt}{delay},apad=whole_dur={duration:.3f},"
+            f"atrim=0:{duration:.3f}[pa]"
+        ]
+    filters: List[str] = []
+    n = len(windows)
+    split_labels = "".join(f"[pas{i}]" for i in range(n))
+    filters.append(f"[{promo_idx}:a]asplit={n}{split_labels}")
+    for i, (ws, we) in enumerate(windows):
+        span = max(0.05, we - ws)
+        delay_ms = max(0, int(round(ws * 1000)))
+        delay = f",adelay={delay_ms}|{delay_ms}" if delay_ms > 0 else ""
+        filters.append(
+            f"[pas{i}]atrim=0:{span:.3f},asetpts=PTS-STARTPTS,"
+            f"volume={vol:.3f},{fmt}{delay}[paw{i}]"
+        )
+    joined = "".join(f"[paw{i}]" for i in range(n))
+    norm = ":normalize=0" if amix_norm else ""
+    filters.append(
+        f"{joined}amix=inputs={n}:duration=longest:dropout_transition=0{norm},"
+        f"apad=whole_dur={duration:.3f},atrim=0:{duration:.3f},{fmt}[pa]"
+    )
+    return filters
 
 
 def split_geometry(width: int, height: int, ratio: float = 0.5) -> Dict[str, Any]:
@@ -469,6 +566,18 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                 adhd_bottom_volume: float = 0.0,
                 ad_events: Optional[List[Dict[str, Any]]] = None,
                 ad_files: Optional[Dict[str, Path]] = None,
+                promo_path: Optional[Path] = None,
+                promo_mode: str = "overlay",
+                promo_scale: int = 60,
+                promo_pos: str = "bottom",
+                promo_x: float = 0.5,
+                promo_y: float = 0.5,
+                promo_fill: str = "cover",
+                promo_key_color: str = "none",
+                promo_timing: str = "loop",
+                promo_windows: Optional[List[Tuple[float, float]]] = None,
+                promo_audio_vol: float = 0.0,
+                promo_split_ratio: float = 0.7,
                 info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if is_cancelled is not None and is_cancelled():
         raise Cancelled()
@@ -492,8 +601,34 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     bottom_speed = max(0.25, min(4.0, float(adhd_bottom_speed or 1.0)))
     bottom_level = max(0.0, min(0.5, float(adhd_bottom_volume or 0.0)))
 
+    p_path: Optional[Path] = (
+        Path(promo_path) if promo_path is not None and Path(promo_path).is_file() else None
+    )
+    p_mode = str(promo_mode or "overlay").strip().lower()
+    if p_mode not in ("overlay", "split_bottom"):
+        p_mode = "overlay"
+    p_scale = max(30, min(100, int(promo_scale or 60)))
+    p_pos = str(promo_pos or "bottom").strip().lower()
+    if p_pos not in ("top", "bottom", "center", "custom"):
+        p_pos = "bottom"
+    p_x = max(0.0, min(1.0, float(0.5 if promo_x is None else promo_x)))
+    p_y = max(0.0, min(1.0, float(0.5 if promo_y is None else promo_y)))
+    p_fill = str(promo_fill or "cover").strip().lower()
+    if p_fill not in ADHD_FILLS:
+        p_fill = "cover"
+    p_key = str(promo_key_color or "none").strip().lower()
+    if p_key not in ("none", "green", "black"):
+        p_key = "none"
+    p_timing = "loop" if p_mode == "split_bottom" else str(promo_timing or "loop").strip().lower()
+    if p_timing not in ("loop", "start", "periodic", "end"):
+        p_timing = "loop"
+    p_vol = max(0.0, min(1.0, float(promo_audio_vol or 0.0)))
+    p_split_ratio = max(0.4, min(0.85, float(promo_split_ratio or 0.7)))
+    promo_split_active = p_path is not None and p_mode == "split_bottom"
+    use_adhd = is_adhd and not promo_split_active
+
     w, h = ASPECTS.get(aspect, ASPECTS["9:16"])
-    if is_adhd or (layout in STREAM_LAYOUTS and facecam):
+    if is_adhd or promo_split_active or (layout in STREAM_LAYOUTS and facecam):
         w, h = ASPECTS["9:16"]
 
     src_dur = max(0.4, clip_end - clip_start)
@@ -524,11 +659,12 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     else:
         seq_src = "[0:v]"
 
-    top_h = split_geometry(w, h, ratio)["top_h"]
+    split_r = p_split_ratio if promo_split_active else ratio
+    top_h = split_geometry(w, h, split_r)["top_h"]
     bot_h = h - top_h
 
     # Входы: 0 — источник, затем фон ADHD, музыка и внешняя дорожка (дубляж).
-    bg_idx = 1 if (is_adhd and bg_path is not None) else None
+    bg_idx = 1 if (use_adhd and bg_path is not None) else None
     next_idx = 2 if bg_idx is not None else 1
     music_idx = None
     if music_path is not None:
@@ -562,7 +698,7 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         next_idx += 1
     use_dub = dub_idx is not None
     bg_audio_ok = False
-    if is_adhd and bg_idx is not None and bg_path is not None and bottom_level > 0:
+    if use_adhd and bg_idx is not None and bg_path is not None and bottom_level > 0:
         try:
             bg_audio_ok = bool(probe(bg_path).get("has_audio"))
         except Exception:  # noqa: BLE001
@@ -604,6 +740,44 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
     insert_audio_needed = any(
         ad_audio.get(str(item["event"].get("id") or item["event"].get("asset")))
         for item in inserts)
+
+    p_windows: List[Tuple[float, float]] = []
+    promo_active = False
+    if p_path is not None:
+        if promo_split_active:
+            p_windows = [(0.0, round(duration, 3))]
+            promo_active = True
+        else:
+            if promo_windows is None:
+                from .timeline import promo_windows as calc_promo_windows
+                raw_wins = calc_promo_windows(p_timing, duration=duration)
+            else:
+                raw_wins = promo_windows
+            for item in raw_wins:
+                try:
+                    wa = max(0.0, float(item[0]))
+                    wb = min(duration, float(item[1]))
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if wb - wa >= 0.05:
+                    p_windows.append((round(wa, 3), round(wb, 3)))
+            promo_active = bool(p_windows)
+    promo_overlay_active = promo_active and not promo_split_active
+
+    promo_idx: Optional[int] = None
+    promo_is_image = False
+    promo_has_audio = False
+    if promo_active and p_path is not None:
+        promo_idx = next_idx
+        next_idx += 1
+        promo_is_image = p_path.suffix.lower() in IMAGE_SUFFIXES
+        if not promo_is_image and p_vol > 0.001:
+            try:
+                promo_has_audio = bool(probe(p_path).get("has_audio"))
+            except Exception:  # noqa: BLE001
+                promo_has_audio = False
+    promo_audio_ok = promo_active and promo_idx is not None and promo_has_audio and p_vol > 0.001
+
     silence_idx: Optional[int] = None
     if insert_audio_needed and not (info["has_audio"] or use_dub):
         silence_idx = next_idx
@@ -613,7 +787,8 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         key=lambda e: (int(e.get("z") or 0), float(e.get("start") or 0.0)))
     ad_fps = round(float(fps), 2) if fps else round(float(info.get("fps") or 30.0), 2)
 
-    if is_adhd:
+    split_styled = False
+    if use_adhd:
         top_sharpen = info["width"] < w * 0.75
         top_label = "[top]"
         if top_fill == "contain":
@@ -689,6 +864,62 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             vg.append(f"[bottom]setpts=PTS/{bottom_speed:.6f}[bottom2]")
             bottom_label = "[bottom2]"
         vg.append(f"{top_label}{bottom_label}vstack=inputs=2[base]")
+    elif promo_split_active and promo_idx is not None:
+        top_sharpen = info["width"] < w * 0.75
+        if mode == "auto" and crop_path:
+            vg.append(_auto_chain(w, top_h, crop_path, top_sharpen, src=seq_src, out="[top]"))
+        elif mode == "blur":
+            vg.append(_bg_chain(w, top_h, focus_x, top_sharpen, src=seq_src, out="[top]"))
+        else:
+            vg.append(_crop_chain(w, top_h, focus_x, sharpen=top_sharpen, src=seq_src, out="[top]"))
+        top_label = "[top]"
+        top_style = _style_filters(
+            w, top_h, hflip=hflip, tilt=tilt, zoom=zoom,
+            look=look, vignette=vignette, grain=grain,
+        )
+        if top_style:
+            vg.append(f"[top]{','.join(top_style)}[top_styled]")
+            top_label = "[top_styled]"
+        split_styled = True
+
+        key_f = _colorkey_filter(p_key)
+        if p_fill == "contain":
+            if key_f:
+                vg.append(
+                    f"[{promo_idx}:v]scale={w}:{bot_h}:force_original_aspect_ratio=decrease,"
+                    f"setsar=1,format=rgba,{key_f}[pbot_fg]"
+                )
+                vg.append(
+                    f"color=c=black:s={w}x{bot_h}:r={ad_fps}:d={duration + 1:.3f}[pbot_bg]"
+                )
+                vg.append(
+                    f"[pbot_bg][pbot_fg]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1,"
+                    f"format=yuv420p[promo_bot]"
+                )
+            else:
+                vg.append(
+                    f"[{promo_idx}:v]scale={w}:{bot_h}:force_original_aspect_ratio=decrease,"
+                    f"setsar=1,pad={w}:{bot_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                    f"fps={ad_fps},format=yuv420p[promo_bot]"
+                )
+        else:
+            if key_f:
+                vg.append(
+                    f"[{promo_idx}:v]scale={w}:{bot_h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{bot_h},setsar=1,fps={ad_fps},format=rgba,{key_f}[pbot_fg]"
+                )
+                vg.append(
+                    f"color=c=black:s={w}x{bot_h}:r={ad_fps}:d={duration + 1:.3f}[pbot_bg]"
+                )
+                vg.append(
+                    f"[pbot_bg][pbot_fg]overlay=0:0:shortest=1,format=yuv420p[promo_bot]"
+                )
+            else:
+                vg.append(
+                    f"[{promo_idx}:v]scale={w}:{bot_h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{bot_h},setsar=1,fps={ad_fps},format=yuv420p[promo_bot]"
+                )
+        vg.append(f"{top_label}[promo_bot]vstack=inputs=2[base]")
     elif layout in STREAM_LAYOUTS and facecam:
         vg.append(_stream_chain(w, h, crop_path, facecam, layout, platform,
                                 src=seq_src, out="[base]"))
@@ -772,35 +1003,12 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             current = "[basei]"
 
 
-    style: List[str] = []
-    if hflip:
-        style.append("hflip")
-    if tilt > 0.05:
-        # Поворот с запасом 12%: после обрезки чёрных углов не остаётся.
-        angle = math.radians(tilt)
-        style.append(
-            f"scale=iw*1.12:ih*1.12,rotate={angle:.6f}:ow=iw:oh=ih:c=black,"
-            f"crop={w}:{h}"
-        )
-    z = max(100, min(120, int(zoom or 100)))
-    if z > 100:
-        factor = z / 100.0
-        style.append(f"scale=iw*{factor:.3f}:ih*{factor:.3f},crop={w}:{h}")
-    looks = {
-        "warm": "eq=saturation=1.10:gamma_r=1.04:gamma_b=0.96",
-        "cool": "eq=saturation=1.06:gamma_b=1.05:gamma_r=0.96",
-        "contrast": "eq=contrast=1.12:saturation=1.10",
-        "cinematic": "eq=contrast=1.08:saturation=0.92:gamma=0.98",
-        "soft": "eq=contrast=0.96:saturation=1.04:brightness=0.02",
-    }
-    if look in looks:
-        style.append(looks[look])
-    if vignette:
-        style.append("vignette=PI/5")
-    if grain:
-        style.append("noise=alls=8:allf=t+u")
+    style: List[str] = [] if split_styled else _style_filters(
+        w, h, hflip=hflip, tilt=tilt, zoom=zoom,
+        look=look, vignette=vignette, grain=grain,
+    )
 
-    if overlay_events:
+    if overlay_events or promo_overlay_active:
         # Стиль (наклон, зум) применяем к базовому видео, а накладки кладём
         # поверх: текст и логотип не должны зеркалиться и дрожать.
         if style:
@@ -831,13 +1039,24 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             if anim_dur <= 0.01:
                 anim_in = anim_out = "none"
 
-            chain = [
-                f"[{idx}:v]scale={bw}:{bh}:force_original_aspect_ratio=decrease",
-                f"pad={bw}:{bh}:(ow-iw)/2:(oh-ih)/2:color=black@0",
-                "format=rgba",
-                f"trim=duration={span:.3f}",
-                f"setpts=PTS-STARTPTS+{start:.3f}/TB",
-            ]
+            ev_key = _colorkey_filter(str(event.get("key_color") or "none"))
+            if ev_key:
+                chain = [
+                    f"[{idx}:v]scale={bw}:{bh}:force_original_aspect_ratio=decrease",
+                    "format=rgba",
+                    ev_key,
+                    f"pad={bw}:{bh}:(ow-iw)/2:(oh-ih)/2:color=black@0",
+                    f"trim=duration={span:.3f}",
+                    f"setpts=PTS-STARTPTS+{start:.3f}/TB",
+                ]
+            else:
+                chain = [
+                    f"[{idx}:v]scale={bw}:{bh}:force_original_aspect_ratio=decrease",
+                    f"pad={bw}:{bh}:(ow-iw)/2:(oh-ih)/2:color=black@0",
+                    "format=rgba",
+                    f"trim=duration={span:.3f}",
+                    f"setpts=PTS-STARTPTS+{start:.3f}/TB",
+                ]
             if opacity < 0.999:
                 chain.append(f"colorchannelmixer=aa={opacity:.3f}")
             if anim_in == "fade":
@@ -879,6 +1098,49 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             )
             current = label_dst
             ov_no += 1
+
+        if promo_overlay_active and promo_idx is not None:
+            pw = max(2, int(round(w * p_scale / 100.0 / 2.0)) * 2)
+            pchain = [f"[{promo_idx}:v]scale={pw}:-2", "setsar=1", "format=rgba"]
+            key_f = _colorkey_filter(p_key)
+            if key_f:
+                pchain.append(key_f)
+            z = platforms.zones(platform)
+            top_m = max(24, int(round(int(z["top"]) * h / 1920.0)))
+            bot_m = max(24, int(round(int(z["bottom"]) * h / 1920.0)))
+            if p_pos == "center":
+                px_expr, py_expr = "(W-w)/2", "(H-h)/2"
+            elif p_pos == "top":
+                px_expr, py_expr = "(W-w)/2", str(top_m)
+            elif p_pos == "custom":
+                px_expr = f"max(0,min(W-w,W*{p_x:.3f}-w/2))"
+                py_expr = f"max(0,min(H-h,H*{p_y:.3f}-h/2))"
+            else:
+                px_expr, py_expr = "(W-w)/2", f"max(0,H-h-{bot_m})"
+
+            enable_part = ""
+            if p_timing in ("start", "end") and len(p_windows) == 1:
+                ws, we = p_windows[0]
+                span = max(0.05, we - ws)
+                pchain.append(f"trim=duration={span:.3f}")
+                pchain.append(f"setpts=PTS-STARTPTS+{ws:.3f}/TB")
+                enable_part = f":enable='between(t,{ws:.3f},{we:.3f})'"
+            elif p_timing == "periodic" or (
+                len(p_windows) > 1
+                or (p_windows and (p_windows[0][0] > 0.05 or p_windows[0][1] < duration - 0.05))
+            ):
+                pchain.append("setpts=PTS-STARTPTS")
+                expr = "+".join(f"between(t,{ws:.3f},{we:.3f})" for ws, we in p_windows)
+                enable_part = f":enable='{expr}'"
+            else:
+                pchain.append("setpts=PTS-STARTPTS")
+
+            vg.append(",".join(pchain) + "[promov]")
+            vg.append(
+                f"{current}[promov]overlay=x='{px_expr}':y='{py_expr}'"
+                f"{enable_part}:eof_action=pass[promo_out]"
+            )
+            current = "[promo_out]"
         prefix = current
     else:
         prefix = current + (",".join(style) + "," if style else "")
@@ -907,10 +1169,9 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
         path = ad_files.get(str(event.get("asset") or ""))
         if path is None:
             continue
-        if ad_image.get(str(event.get("id") or event.get("asset"))):
-            cmd += ["-loop", "1", "-framerate", "30", "-i", str(path)]
-        else:
-            cmd += ["-stream_loop", "-1", "-i", str(path)]
+        cmd += _loop_input_flags(Path(path)) + ["-i", str(path)]
+    if promo_active and promo_idx is not None and p_path is not None:
+        cmd += _loop_input_flags(p_path) + ["-i", str(p_path)]
     if silence_idx is not None:
         cmd += ["-f", "lavfi", "-i",
                 f"anullsrc=r=48000:cl=stereo:d={out_dur:.3f}"]
@@ -1055,6 +1316,16 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             audio.append("".join(parts) + f"concat=n={len(parts)}:v=0:a=1[a0i]")
             base_audio = "[a0i]"
 
+        if promo_audio_ok and promo_idx is not None:
+            amix_norm = bool(ffmpeg_capabilities().get("amix_normalize", True))
+            audio += _promo_audio_filters(
+                promo_idx, p_windows, duration=duration, vol=p_vol,
+                timing=p_timing, split_active=promo_split_active,
+                amix_norm=amix_norm,
+            )
+            audio.append(base_audio + "[pa]" + _amix_filter(amix_norm) + "[a0p]")
+            base_audio = "[a0p]"
+
         if music_idx is not None:
             level = max(0.0, min(0.5, float(music_volume or 0.0)))
             end_fade = max(0.0, duration - 1.6)
@@ -1068,8 +1339,8 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
             audio_label = "[aout]"
         else:
             audio_label = base_audio
-    elif music_idx is not None or bg_audio_ok:
-        # Немое видео: музыка и/или звук нижнего ролика становятся дорожкой.
+    elif music_idx is not None or bg_audio_ok or promo_audio_ok:
+        # Немое видео: музыка, звук нижнего ролика и/или звук промо становятся дорожкой.
         mix_base = ""
         if bg_audio_ok and bg_idx is not None:
             bottom_chain = (f"[{bg_idx}:a]volume={bottom_level:.3f}"
@@ -1078,6 +1349,18 @@ def render_clip(source: Path, clip_start: float, clip_end: float, out_path: Path
                             + ",afade=t=in:st=0:d=0.3[a0]")
             audio.append(bottom_chain)
             mix_base = "[a0]"
+        if promo_audio_ok and promo_idx is not None:
+            amix_norm = bool(ffmpeg_capabilities().get("amix_normalize", True))
+            audio += _promo_audio_filters(
+                promo_idx, p_windows, duration=duration, vol=p_vol,
+                timing=p_timing, split_active=promo_split_active,
+                amix_norm=amix_norm,
+            )
+            if not mix_base:
+                mix_base = "[pa]"
+            else:
+                audio.append(mix_base + "[pa]" + _amix_filter(amix_norm) + "[a0p]")
+                mix_base = "[a0p]"
         if music_idx is not None:
             level = max(0.0, min(0.5, float(music_volume or 0.0)))
             end_fade = max(0.0, duration - 1.6)

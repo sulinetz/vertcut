@@ -67,6 +67,20 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "adhd_bottom_volume": 0.0,
     "ads_enabled": True,
     "ad_events": [],
+    "promo_footage": "",
+    "promo_mode": "overlay",
+    "promo_scale": 60,
+    "promo_pos": "bottom",
+    "promo_x": 0.5,
+    "promo_y": 0.5,
+    "promo_fill": "cover",
+    "promo_key_color": "none",
+    "promo_timing": "loop",
+    "promo_start_sec": 2.0,
+    "promo_duration_sec": 4.0,
+    "promo_period_sec": 20.0,
+    "promo_audio_vol": 0,
+    "promo_split_ratio": 0.7,
     "platform": platforms.DEFAULT_PLATFORM,
     "layout": "",
     "select": "smart",
@@ -100,6 +114,10 @@ CLIP_SETTING_KEYS = (
     "adhd_bottom_scale", "adhd_bottom_offset_x", "adhd_bottom_offset_y",
     "adhd_bottom_speed", "adhd_bottom_start", "adhd_bottom_volume",
     "ads_enabled", "ad_events",
+    "promo_footage", "promo_mode", "promo_scale", "promo_pos",
+    "promo_x", "promo_y", "promo_fill", "promo_key_color",
+    "promo_timing", "promo_start_sec", "promo_duration_sec",
+    "promo_period_sec", "promo_audio_vol", "promo_split_ratio",
     "audio_track", "external_audio", "external_audio_track", "audio_offset",
 )
 
@@ -117,7 +135,7 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     # Простые диапазоны и перечисления берём из composition, чтобы проект,
     # редактор клипа и API не расходились в границах. Сложные правила
     # (длительности, имена файлов, фильтры) остаются ниже.
-    special = {"sub_position", "bg_video", "adhd_bg", "sub_font", "ad_events"}
+    special = {"sub_position", "bg_video", "adhd_bg", "sub_font", "ad_events", "promo_footage"}
     opts.update(composition.apply({
         key: opts.get(key) for key in composition.EDITABLE
         if key in opts and key not in special
@@ -151,6 +169,10 @@ def normalize_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     opts["adhd_bg"] = adhd_bg
 
     opts["ad_events"] = ads.normalize_events(opts.get("ad_events"))
+    promo_id = str(opts.get("promo_footage") or "").strip()
+    if promo_id and ("/" in promo_id or "\\" in promo_id or ".." in promo_id):
+        promo_id = ""
+    opts["promo_footage"] = promo_id[:80]
 
     if opts.get("select") not in ("smart", "even"):
         opts["select"] = "smart"
@@ -1218,6 +1240,35 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             ass_len = plan["duration"]
             out_duration = plan["duration"]
 
+    promo_path: Optional[Path] = None
+    promo_mode = str(settings.get("promo_mode") or "overlay")
+    if promo_mode not in ("overlay", "split_bottom"):
+        promo_mode = "overlay"
+    promo_split_ratio = max(0.4, min(0.85, float(settings.get("promo_split_ratio", 0.7) or 0.7)))
+    promo_timing = "loop" if promo_mode == "split_bottom" else str(settings.get("promo_timing") or "loop")
+    promo_windows: List[Any] = []
+    if settings.get("ads_enabled", True):
+        raw_promo = str(settings.get("promo_footage") or "").strip()
+        promo_id = raw_promo
+        if raw_promo == "random":
+            picked = ads.pick_random_footage(str(clip.get("id") or clip.get("idx") or ""))
+            promo_id = str(picked["id"]) if picked else ""
+        if promo_id:
+            promo_path = ads.asset_path(promo_id)
+    if promo_path is not None:
+        promo_windows = timeline.promo_windows(
+            promo_timing,
+            duration=out_duration,
+            start=float(settings.get("promo_start_sec", 2.0) or 0.0),
+            length=float(settings.get("promo_duration_sec", 4.0) or 4.0),
+            period=float(settings.get("promo_period_sec", 20.0) or 20.0),
+        )
+    promo_split_active = promo_path is not None and promo_mode == "split_bottom"
+    promo_bottom_reserve = (
+        1920 - render.split_geometry(1080, 1920, promo_split_ratio)["top_h"]
+        if promo_split_active else 0
+    )
+
     sub_position = settings.get("sub_position", "bottom")
     ass_path = None
     burn_subs = bool(settings.get("subtitles", True))
@@ -1236,7 +1287,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
             speed=settings.get("sub_speed", "calm"),
             line_gap=int(settings.get("line_gap", 0) or 0),
             platform=settings.get("platform", platforms.DEFAULT_PLATFORM),
-            bottom_reserve=(render.BAND_H if layout == "band" else 0),
+            bottom_reserve=max(render.BAND_H if layout == "band" else 0, promo_bottom_reserve),
             top_reserve=(render.BAND_H if layout == "band_top" else 0),
             blackouts=[(float(item["final_start"]),
                         float(item["final_start"]) + float(item["duration"]))
@@ -1265,7 +1316,10 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         except Exception:  # noqa: BLE001
             source_info = None
 
-    if layout == "adhd":
+    if promo_split_active:
+        top_h = render.split_geometry(1080, 1920, promo_split_ratio)["top_h"]
+        crop_aspect = f"1080:{top_h}"
+    elif layout == "adhd":
         # Верх — видео, низ — фон. Окно кадрирования считаем под верхнюю часть.
         top_h = render.split_geometry(1080, 1920, ratio)["top_h"]
         crop_aspect = f"1080:{top_h}"
@@ -1308,7 +1362,7 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
 
     bg_path = None
     bg_start = 0.0
-    if layout == "adhd":
+    if layout == "adhd" and not promo_split_active:
         choice = str(settings.get("adhd_bg") or settings.get("bg_video") or "random")
         bg_path = _adhd_bg_file(choice, workdir)
         if bg_path is not None:
@@ -1368,6 +1422,18 @@ def _render_one(source: Path, workdir: Path, clip: Dict[str, Any],
         adhd_bottom_volume=float(settings.get("adhd_bottom_volume", 0.0) or 0.0) / 100.0,
         ad_events=ad_events,
         ad_files=ad_files,
+        promo_path=promo_path,
+        promo_mode=promo_mode,
+        promo_scale=int(settings.get("promo_scale", 60) or 60),
+        promo_pos=str(settings.get("promo_pos") or "bottom"),
+        promo_x=float(settings.get("promo_x", 0.5) or 0.5),
+        promo_y=float(settings.get("promo_y", 0.5) or 0.5),
+        promo_fill=str(settings.get("promo_fill") or "cover"),
+        promo_key_color=str(settings.get("promo_key_color") or "none"),
+        promo_timing=promo_timing,
+        promo_windows=promo_windows,
+        promo_audio_vol=float(settings.get("promo_audio_vol", 0) or 0) / 100.0,
+        promo_split_ratio=promo_split_ratio,
         info=source_info,
     )
     settings = {**settings, "render_encoder": result.get("encoder", "libx264")}

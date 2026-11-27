@@ -200,6 +200,47 @@ SPEC: Dict[str, Setting] = {s.key: s for s in (
        "Быстрый выключатель всех событий рекламы, сами события сохраняются."),
     _s("ad_events", "events", "ads", [], "События рекламы",
        "Наложения и вставки. Время хранится в абсолютном времени источника."),
+    _s("promo_footage", "text", "ads", "", "Рекламный футаж",
+       "Ассет из библиотеки для показа в клипе. «random» выбирает видео или GIF автоматически."),
+    _s("promo_mode", "choice", "ads", "overlay", "Режим футажа",
+       "«overlay» накладывает поверх видео, «split_bottom» сдвигает видео вверх и ставит футаж снизу.",
+       choices=("overlay", "split_bottom")),
+    _s("promo_scale", "int", "ads", 60, "Ширина футажа",
+       "Ширина наложения в процентах от ширины кадра (30–100 %).",
+       30, 100, 1, unit="%"),
+    _s("promo_pos", "choice", "ads", "bottom", "Позиция футажа",
+       "Готовый пресет положения или «custom» для ручных координат X/Y.",
+       choices=("top", "bottom", "center", "custom")),
+    _s("promo_x", "float", "ads", 0.5, "Позиция X",
+       "Горизонтальная координата центра наложения (0 — левый край, 1 — правый).",
+       0.0, 1.0, 0.01, 3),
+    _s("promo_y", "float", "ads", 0.5, "Позиция Y",
+       "Вертикальная координата центра наложения (0 — верх, 1 — низ).",
+       0.0, 1.0, 0.01, 3),
+    _s("promo_fill", "choice", "ads", "cover", "Заполнение нижней плашки",
+       "«cover» заполняет нижнюю область с обрезкой, «contain» вписывает целиком.",
+       choices=tuple(render.ADHD_FILLS)),
+    _s("promo_key_color", "choice", "ads", "none", "Хромакей футажа",
+       "Удаляет зелёный или чёрный фон у MP4-футажей без альфа-канала.",
+       choices=("none", "green", "black")),
+    _s("promo_timing", "choice", "ads", "loop", "Расписание футажа",
+       "Когда показывать наложение: весь клип, один раз со старта, периодически или в конце.",
+       choices=("loop", "start", "periodic", "end")),
+    _s("promo_start_sec", "float", "ads", 2.0, "Старт показа",
+       "Секунда клипа, с которой начинается показ (для режимов «start» и «periodic»).",
+       0.0, 7200.0, 0.5, 2, unit="с"),
+    _s("promo_duration_sec", "float", "ads", 4.0, "Длина показа",
+       "Длительность одного показа футажа в секундах.",
+       0.5, 300.0, 0.5, 2, unit="с"),
+    _s("promo_period_sec", "float", "ads", 20.0, "Период повтора",
+       "Интервал между показами в режиме «periodic».",
+       2.0, 600.0, 1.0, 2, unit="с"),
+    _s("promo_audio_vol", "int", "ads", 0, "Звук футажа",
+       "Громкость звуковой дорожки футажа в процентах. 0 — звук выключен.",
+       0, 100, 1, unit="%"),
+    _s("promo_split_ratio", "float", "ads", 0.7, "Доля видео (футаж снизу)",
+       "Сколько высоты кадра занимает основное видео при режиме «split_bottom».",
+       0.4, 0.85, 0.01, 2, unit="доля"),
 
     # --- музыка ----------------------------------------------------------
     _s("music_volume", "int", "music", 8, "Громкость музыки",
@@ -400,8 +441,17 @@ def layers(values: Optional[Dict[str, Any]] = None,
         elif name == "ads":
             overlays = [e for e in events if e.get("kind") != "replace"]
             inserts = [e for e in events if e.get("kind") == "replace"]
-            detail = {"overlays": len(overlays), "inserts": len(inserts)}
-            active = bool(opts.get("ads_enabled", True)) and bool(events)
+            promo_id = str(opts.get("promo_footage") or "").strip()
+            promo_on = bool(opts.get("ads_enabled", True)) and bool(promo_id)
+            detail = {
+                "overlays": len(overlays),
+                "inserts": len(inserts),
+                "promo": {
+                    "mode": opts.get("promo_mode", "overlay"),
+                    "asset": promo_id,
+                } if promo_on else None,
+            }
+            active = bool(opts.get("ads_enabled", True)) and (bool(events) or bool(promo_id))
         elif name == "music":
             active = int(opts.get("music_volume") or 0) > 0
         elif name == "subtitles":
@@ -448,3 +498,63 @@ def ad_inserts(clip: Dict[str, Any], settings: Dict[str, Any],
     return timeline.insert_spans(tl.get("segments") or span, local,
                                  speed=float(tl.get("speed") or 1.0),
                                  duration=float(tl.get("length") or 0.1))
+
+
+def promo_plan(clip: Dict[str, Any], settings: Dict[str, Any],
+               tl: Dict[str, Any],
+               inserts: Optional[Sequence[Dict[str, Any]]] = None,
+               duration: Optional[float] = None) -> Dict[str, Any]:
+    """Единый расчёт активности, окон и геометрии промо-футажа."""
+    opts = normalize({k: v for k, v in (settings or {}).items()
+                      if isinstance(v, (int, float, bool, str))})
+    asset = str(opts.get("promo_footage") or "").strip()
+    active = bool(opts.get("ads_enabled", True)) and bool(asset)
+    mode = str(opts.get("promo_mode") or "overlay")
+    if mode not in ("overlay", "split_bottom"):
+        mode = "overlay"
+    if duration is None:
+        ins_plan = ad_inserts(clip, settings, tl) if inserts is None else None
+        dur = float(ins_plan["duration"]) if ins_plan is not None else float(tl.get("length") or 0.0)
+        ins_list = ins_plan["inserts"] if ins_plan is not None else list(inserts or [])
+    else:
+        dur = float(duration)
+        ins_list = list(inserts or [])
+    timing = "loop" if mode == "split_bottom" else str(opts.get("promo_timing") or "loop")
+    windows = (
+        timeline.promo_windows(
+            timing,
+            duration=dur,
+            start=float(opts.get("promo_start_sec") or 0.0),
+            length=float(opts.get("promo_duration_sec") or 4.0),
+            period=float(opts.get("promo_period_sec") or 20.0),
+        )
+        if active else []
+    )
+    base_windows = (
+        timeline.map_windows_to_base(windows, ins_list)
+        if active and mode == "split_bottom" else list(windows)
+    )
+    aspect = str(opts.get("aspect") or "9:16")
+    w, h = render.ASPECTS.get(aspect, render.ASPECTS["9:16"])
+    if opts.get("layout") in (*render.STREAM_LAYOUTS, "adhd") or mode == "split_bottom":
+        w, h = render.ASPECTS["9:16"]
+    geom = (render.split_geometry(w, h, float(opts.get("promo_split_ratio") or 0.7))
+            if mode == "split_bottom" else None)
+    return {
+        "active": active,
+        "asset": asset,
+        "mode": mode,
+        "timing": timing,
+        "duration": round(dur, 3),
+        "windows": windows,
+        "base_windows": base_windows,
+        "geometry": geom,
+        "key_color": opts.get("promo_key_color", "none"),
+        "scale": int(opts.get("promo_scale") or 60),
+        "pos": opts.get("promo_pos", "bottom"),
+        "x": float(opts.get("promo_x") or 0.5),
+        "y": float(opts.get("promo_y") or 0.5),
+        "fill": opts.get("promo_fill", "cover"),
+        "audio_vol": int(opts.get("promo_audio_vol") or 0),
+        "split_ratio": float(opts.get("promo_split_ratio") or 0.7),
+    }
