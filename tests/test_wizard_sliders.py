@@ -45,3 +45,13 @@ def test_wizard_adhd_preview_overrides_blur_and_allows_drag():
     fn_body = text[fn_start:fn_end]
     assert fn_body.index("if (isAdhd)") < fn_body.index('wizard.opts.mode === "blur"')
 
+
+def test_wizard_frame_style_applies_to_video_not_subtitles():
+    text = _wizard_source()
+    start = text.index("function applyFrameStyle()")
+    end = text.index("function loadFrame()", start)
+    fn_body = text[start:end]
+    assert '$("#wzFrame")' in fn_body
+    assert '$("#wzCap")' not in fn_body
+
+

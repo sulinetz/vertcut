@@ -479,19 +479,27 @@
       else applyPreviewLayout(wizard.lastBox);
     }));
     $("#wzReroll").addEventListener("click", () => { wizard.frameT = -1; loadFrame(); });
+    applyFrameStyle();
   }
 
   function applyFrameStyle() {
-    const cap = $("#wzCap");
-    if (!cap) return;
+    const frame = $("#wzFrame");
+    const blur = $("#wzBlurBg");
+    if (!frame) return;
     const transforms = [];
-    if (Number(wizard.opts.tilt) > 0) transforms.push("scale(1.04)", `rotate(${wizard.opts.tilt}deg)`);
+    if (Number(wizard.opts.tilt) > 0) transforms.push("scale(1.12)", `rotate(${wizard.opts.tilt}deg)`);
     if (wizard.opts.hflip) transforms.push("scaleX(-1)");
-    cap.style.transform = transforms.join(" ");
-    const looks = { warm: "saturate(1.1)", cool: "saturate(1.05) hue-rotate(-8deg)",
-                    contrast: "contrast(1.12) saturate(1.1)", cinematic: "contrast(1.08) saturate(0.92)",
-                    soft: "contrast(0.96) brightness(1.02)" };
-    cap.style.filter = looks[wizard.opts.look] || "";
+    const tf = transforms.join(" ");
+    frame.style.transform = tf;
+    const looks = {
+      warm: "saturate(1.10)",
+      cool: "saturate(1.06) hue-rotate(-8deg)",
+      contrast: "contrast(1.12) saturate(1.10)",
+      cinematic: "contrast(1.08) saturate(0.92)",
+      soft: "contrast(0.96) brightness(1.02)"
+    };
+    frame.style.filter = looks[wizard.opts.look] || "";
+    if (blur) blur.style.transform = tf;
   }
 
   function loadFrame() {
@@ -552,6 +560,7 @@
       }
       preview.style.cursor = "ns-resize";
       preview.style.touchAction = "none";
+      applyFrameStyle();
       return;
     }
     if (bottomBox) {
@@ -567,6 +576,7 @@
       }
       img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:contain;";
       preview.style.cursor = "";
+      applyFrameStyle();
       return;
     }
     if (blur) blur.style.display = "none";
@@ -574,6 +584,7 @@
     preview.style.cursor = "";
     if (!box) {
       img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;";
+      applyFrameStyle();
       return;
     }
     let bx = Number(box.x), by = Number(box.y);
@@ -584,6 +595,7 @@
     const scale = W / Math.max(1, box.crop_w);
     img.style.cssText = `position:absolute;left:${-bx * scale}px;top:${-by * scale}px;` +
       `width:${box.source_w * scale}px;height:${box.source_h * scale}px;object-fit:fill;`;
+    applyFrameStyle();
   }
 
   function stepSubs() {
