@@ -970,6 +970,7 @@ def process_project(pid: str) -> None:
                 {**clip_settings, "score_parts": cand.get("parts") or {},
                  "mood": cand.get("mood") or "",
                  "why": cand.get("why") or "",
+                 "tag": cand.get("tag") or "",
                  "content_types": list(cand.get("content_types") or []),
                  "picker": cand.get("source") or "",
                  "timing": _words_timing(cand.get("words") or [])},

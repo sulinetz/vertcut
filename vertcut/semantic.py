@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import analyze, app_settings
 
-PROMPT_VERSION = 4
+PROMPT_VERSION = 5
 REQUEST_TIMEOUT = float(os.environ.get("VERTCUT_LLM_TIMEOUT", "90"))
 DEBUG = bool(os.environ.get("VERTCUT_LLM_DEBUG"))
 
@@ -96,6 +96,9 @@ SYSTEM_PROMPT = """Ты — редактор вирусных вертикаль
 - types — от одного до трёх типов содержания строго из списка: story, humor, conflict, insight,
   education, reaction, motivation, provocation, emotion, fact. Тип отвечает на вопрос «что это»,
   настроение — «какая эмоция».
+- tag — один главный короткий тег темы момента (1–2 слова в нижнем регистре на языке видео;
+  NSFW и 18+ теги полностью поддерживаются и одобряются — называй суть прямо без цензуры,
+  например: хентай, бдсм, минет, доминирование, флирт, отношения, конфликт, игры, деньги).
 - score 0..1 — насколько момент залетит. Оценивай по абсолютной шкале, а не «лучшее в этом куске»:
   0.9 — переслал бы другу, 0.7 — сильный момент, 0.5 — нормально, 0.2 — проходное.
 - title — короткий цепляющий заголовок на языке речи, до 70 символов.
@@ -103,7 +106,7 @@ SYSTEM_PROMPT = """Ты — редактор вирусных вертикаль
 
 Верни ТОЛЬКО JSON без пояснений:
 {"clips":[{"from":12,"to":17,"score":0.82,"mood":"funny","types":["humor","story"],
-"title":"...","why":"...",
+"tag":"отношения","title":"...","why":"...",
 "hook":0.9,"conflict":0.5,"specificity":0.6,"emotion":0.8,"payoff":0.7}]}
 """
 
@@ -361,6 +364,19 @@ def _clean_mood(value: Any) -> str:
     return analyze.normalize_mood(value)
 
 
+_TAG_STOP = {"none", "null", "n/a", "na", "unknown", "undefined", "tag", "тег", "-", "—", "нет"}
+
+
+def _clean_tag(value: Any) -> str:
+    """Нормализует основной тег клипа (без цензуры, включая NSFW-теги)."""
+    text = re.sub(r"[\"'`()\[\]{}<>]+", "", str(value or ""))
+    text = re.sub(r"^#+", "", text.strip())
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:!?-_").lower()
+    if not text or text in _TAG_STOP:
+        return ""
+    return text[:40].strip()
+
+
 def _clean_types(value: Any, limit: int = 3) -> List[str]:
     """До `limit` валидных типов контента. Мусор от модели отбрасывается."""
     if isinstance(value, str):
@@ -411,6 +427,7 @@ def _clean_items(payload: Any, total: int, limit: int,
             "score": _as_float(item.get("score")),
             "mood": _clean_mood(item.get("mood")),
             "types": _clean_types(item.get("types") or item.get("content_types")),
+            "tag": _clean_tag(item.get("tag") or item.get("main_tag")),
             "title": re.sub(r"\s+", " ", str(item.get("title") or "")).strip()[:90],
             "why": re.sub(r"\s+", " ", str(item.get("why") or "")).strip()[:280],
             "hook": _maybe_float(item.get("hook")),
@@ -721,6 +738,7 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
             "hook": title,
             "mood": item.get("mood") or "",
             "why": item.get("why") or "",
+            "tag": item.get("tag") or "",
             "content_types": list(item.get("types") or []),
             "source": provider,
         })
@@ -760,6 +778,14 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
         if end - start < 3.0:
             continue
         clip_text = " ".join(word["word"] for word in words)
+        keywords = analyze._keywords(clip_text, 6)
+        primary_tag = cand.get("tag") or (keywords[0] if keywords else cand.get("mood") or "")
+        caption = analyze._make_caption(
+            cand["title"], clip_text, str(opts.get("platform") or "shorts"))
+        hash_tag = re.sub(r"[^\w]", "", primary_tag.replace(" ", "_"))
+        if hash_tag and f"#{hash_tag}" not in caption.lower():
+            head, sep, tail = caption.partition("\n\n")
+            caption = f"{head}\n\n#{hash_tag} {tail}".strip() if sep else f"{caption}\n\n#{hash_tag}"
         out.append({
             "start": round(start, 3),
             "end": round(end, 3),
@@ -768,12 +794,12 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
             "parts": cand["parts"],
             "title": cand["title"],
             "hook": cand["hook"],
-            "caption": analyze._make_caption(
-                cand["title"], clip_text, str(opts.get("platform") or "shorts")),
-            "keywords": analyze._keywords(clip_text, 6),
+            "caption": caption,
+            "keywords": keywords,
             "words": words,
             "mood": cand["mood"],
             "why": cand["why"],
+            "tag": primary_tag,
             "content_types": list(cand.get("content_types") or []),
             "source": cand["source"],
         })

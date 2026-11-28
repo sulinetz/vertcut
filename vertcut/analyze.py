@@ -885,6 +885,7 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
                                            offset=energy_offset))
         words = [w for w in c["words"] if w["end"] > start + 0.05 and w["start"] < end - 0.05]
         clip_text = " ".join(w["word"] for w in words)
+        keywords = _keywords(clip_text, 6)
         out.append({
             "idx": idx,
             "start": round(start, 3),
@@ -895,10 +896,11 @@ def find_segments(segments: List[Dict[str, Any]], media: Path, duration: float,
             "title": c["title"],
             "hook": c["title"],
             "caption": _make_caption(c["title"], clip_text, platform),
-            "keywords": _keywords(clip_text, 6),
+            "keywords": keywords,
             "words": words,
             "mood": c.get("mood") or "",
             "why": c.get("why") or "",
+            "tag": keywords[0] if keywords else (c.get("mood") or ""),
             "content_types": list(c.get("content_types") or []),
         })
     return out

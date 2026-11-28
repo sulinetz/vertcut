@@ -228,3 +228,18 @@ def test_short_llm_spans_expand_to_min_dur(tmp_path, monkeypatch):
     assert found and len(found) == 1
     assert 60.0 <= found[0]["duration"] <= 120.0
 
+
+def test_primary_tag_supports_nsfw_and_caption_fallback(segments, tmp_path, monkeypatch):
+    monkeypatch.setattr(semantic, "_post_json", lambda *a, **k: _reply([
+        {"from": 1, "to": 3, "score": 0.88, "mood": "хорни", "tag": "#БДСМ"},
+    ]))
+    opts = {"picker": "polza", "count": 2, "min_dur": 5, "max_dur": 40,
+            "target_dur": 20, "mood_filter": [], "min_score": 0.0}
+    found = semantic.find_segments(segments, tmp_path / "v.mp4", 30.0,
+                                   opts=opts, workdir=tmp_path)
+    assert found and found[0]["tag"] == "бдсм"
+    assert "#бдсм" in found[0]["caption"].lower()
+    assert semantic._clean_tag("  #Хентай  ") == "хентай"
+    assert semantic._clean_tag("none") == ""
+
+

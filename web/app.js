@@ -1809,6 +1809,21 @@ function asrWarningHTML(project) {
   return `<div class="warn-box"><strong>Проверьте язык распознавания.</strong> ${esc(warning)}</div>`;
 }
 
+function clipMainTag(clip) {
+  const explicit = String(clip?.settings?.tag || "").trim().replace(/^#+/, "");
+  if (explicit) return explicit;
+  const skip = new Set(["shorts", "reels", "tiktok", "виральное", "нарезка"]);
+  const matches = String(clip?.caption || "").match(/#[^\s#]+/g) || [];
+  for (const m of matches) {
+    const clean = m.slice(1).trim();
+    if (clean && !skip.has(clean.toLowerCase())) return clean;
+  }
+  const firstType = (clip?.settings?.content_types || [])[0];
+  if (firstType && TYPE_LABELS[firstType]) return TYPE_LABELS[firstType];
+  const rawMood = String(clip?.settings?.mood || "").trim();
+  return MOOD_LABELS[rawMood] || rawMood || "";
+}
+
 function clipsGridHTML() {
   const clips = filteredClips();
   const all = (state.detail && state.detail.clips) || [];
@@ -1838,6 +1853,9 @@ function clipsGridHTML() {
     const moodLabel = MOOD_LABELS[rawMood] || rawMood;
     const moodLine = moodLabel
       ? `<span class="mood-tag" title="Настроение момента">${esc(moodLabel)}</span>` : "";
+    const mainTag = clipMainTag(c);
+    const mainTagLine = mainTag
+      ? `<div class="clip-main-tag" title="Основной тег клипа"><span>Тег:</span> #${esc(mainTag)}</div>` : "";
     const typeTags = (c.settings?.content_types || [])
       .map((k) => TYPE_LABELS[k]).filter(Boolean)
       .map((label) => `<span class="type-tag">${label}</span>`).join("");
@@ -1871,6 +1889,7 @@ function clipsGridHTML() {
       </div>
       <div class="clip-body">
         <div class="clip-title">${esc(c.title || "Без названия")}</div>
+        ${mainTagLine}
         ${(partsLine || moodLine || typeTags) ? `<div class="clip-parts">${moodLine}${typeTags}${partsLine}</div>` : ""}
         ${whyLine}${approxLine}
         <div class="clip-tools">
