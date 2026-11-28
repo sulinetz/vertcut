@@ -315,7 +315,7 @@
       <div class="wz-frame-layout">
         <div class="wz-preview" id="wzPreview">
           <div class="wz-blur-bg" id="wzBlurBg"></div>
-          <img id="wzFrame" alt="кадр из видео">
+          <img id="wzFrame" alt="кадр из видео" draggable="false">
           <div class="wz-zones" id="wzZones"></div>
           <div class="wz-adhd-bottom" id="wzAdhdBottom"></div>
           <div class="wz-caption" id="wzCap">ПРИМЕР СУБТИТРОВ</div>
@@ -402,7 +402,8 @@
     };
     if (wzPreview) {
       wzPreview.addEventListener("pointerdown", (ev) => {
-        if (wizard.opts.layout !== "adhd") return;
+        if (wizard.opts.layout !== "adhd" || ev.target.closest("#wzReroll")) return;
+        ev.preventDefault();
         dragging = true;
         try { wzPreview.setPointerCapture(ev.pointerId); } catch (_) {}
         dragSplit(ev);
@@ -411,9 +412,15 @@
       ["pointerup", "pointercancel"].forEach((name) => wzPreview.addEventListener(name, () => { dragging = false; }));
     }
     const topFill = $("#wzTopFill");
-    if (topFill) topFill.addEventListener("change", () => { wizard.opts.adhd_top_fill = topFill.value; });
+    if (topFill) topFill.addEventListener("change", () => {
+      wizard.opts.adhd_top_fill = topFill.value;
+      applyPreviewLayout(wizard.lastBox);
+    });
     const bottomFill = $("#wzBottomFill");
-    if (bottomFill) bottomFill.addEventListener("change", () => { wizard.opts.adhd_bottom_fill = bottomFill.value; });
+    if (bottomFill) bottomFill.addEventListener("change", () => {
+      wizard.opts.adhd_bottom_fill = bottomFill.value;
+      applyPreviewLayout(wizard.lastBox);
+    });
     const bottomSpeed = $("#wzBottomSpeed");
     if (bottomSpeed) bottomSpeed.addEventListener("input", () => {
       wizard.opts.adhd_bottom_speed = Number(bottomSpeed.value) / 100;
@@ -508,7 +515,10 @@
     const preview = $("#wzPreview");
     const img = $("#wzFrame");
     if (!preview || !img) return;
-    const meta = ASPECT_META[wizard.opts.aspect] || ASPECT_META["9:16"];
+    const isAdhd = wizard.opts.layout === "adhd";
+    const aspectKey = (isAdhd || wizard.opts.layout === "band" || wizard.opts.layout === "band_top")
+      ? "9:16" : wizard.opts.aspect;
+    const meta = ASPECT_META[aspectKey] || ASPECT_META["9:16"];
     preview.style.aspectRatio = `${meta.w} / ${meta.h}`;
     const W = preview.clientWidth || 360;
     const zones = $("#wzZones");
@@ -519,6 +529,36 @@
         `<i class="wz-zone bottom" style="height:${(zone.bottom / 1920) * 100}%"></i>`;
     }
     const blur = $("#wzBlurBg");
+    const bottomBox = $("#wzAdhdBottom");
+    if (isAdhd) {
+      if (blur) blur.style.display = "none";
+      preview.classList.remove("is-blur");
+      const H = Math.max(1, preview.clientHeight || Math.round(W * 16 / 9));
+      const g = window.VCGeometry
+        ? VCGeometry.splitGeometry(W, H, wizard.opts.split_ratio)
+        : { top_h: Math.round(H * wizard.opts.split_ratio), bottom_h: H - Math.round(H * wizard.opts.split_ratio) };
+      const topFit = wizard.opts.adhd_top_fill === "contain" ? "contain" : "cover";
+      img.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${g.top_h}px;object-fit:${topFit};`;
+      if (bottomBox) {
+        bottomBox.style.display = "flex";
+        bottomBox.style.top = `${g.top_h}px`;
+        bottomBox.style.height = `${g.bottom_h}px`;
+        const chosen = String(wizard.opts.adhd_bg || "");
+        bottomBox.style.backgroundImage = !chosen ? "" : (chosen.startsWith("local:")
+          ? `url("/api/projects/${wizard.pid}/adhd-bg/file")`
+          : `url("/api/adhd-bg/file/${encodeURIComponent(chosen)}")`);
+        bottomBox.style.backgroundSize = wizard.opts.adhd_bottom_fill === "contain" ? "contain" : "cover";
+        bottomBox.innerHTML = chosen ? "" : "<span>Нижний ролик (СДВГ)</span>";
+      }
+      preview.style.cursor = "ns-resize";
+      preview.style.touchAction = "none";
+      return;
+    }
+    if (bottomBox) {
+      bottomBox.style.display = "none";
+      bottomBox.innerHTML = "";
+    }
+    preview.style.touchAction = "";
     if (wizard.opts.mode === "blur") {
       preview.classList.add("is-blur");
       if (blur) {
@@ -526,29 +566,11 @@
         blur.style.backgroundImage = wizard.frameUrl ? `url("${wizard.frameUrl}")` : "";
       }
       img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:contain;";
+      preview.style.cursor = "";
       return;
     }
     if (blur) blur.style.display = "none";
     preview.classList.remove("is-blur");
-    const bottomBox = $("#wzAdhdBottom");
-    if (bottomBox) bottomBox.style.display = wizard.opts.layout === "adhd" ? "block" : "none";
-    if (wizard.opts.layout === "adhd") {
-      const H = Math.max(1, preview.clientHeight);
-      const g = window.VCGeometry
-        ? VCGeometry.splitGeometry(W, H, wizard.opts.split_ratio)
-        : { top_h: Math.round(H * wizard.opts.split_ratio), bottom_h: H - Math.round(H * wizard.opts.split_ratio) };
-      img.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${g.top_h}px;object-fit:cover;`;
-      if (bottomBox) {
-        bottomBox.style.top = `${g.top_h}px`;
-        bottomBox.style.height = `${g.bottom_h}px`;
-        const chosen = String(wizard.opts.adhd_bg || "");
-        bottomBox.style.backgroundImage = !chosen ? "" : (chosen.startsWith("local:")
-          ? `url("/api/projects/${wizard.pid}/adhd-bg/file")`
-          : `url("/api/adhd-bg/file/${encodeURIComponent(chosen)}")`);
-      }
-      preview.style.cursor = "ns-resize";
-      return;
-    }
     preview.style.cursor = "";
     if (!box) {
       img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;";

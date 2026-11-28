@@ -210,3 +210,21 @@ def test_clean_items_limits():
 
 def test_build_sentences_still_used(segments):
     assert len(analyze.build_sentences(segments)) == len(segments)
+
+
+def test_short_llm_spans_expand_to_min_dur(tmp_path, monkeypatch):
+    long_segs = [
+        _segment(f"Реплика номер {i} в длинном видео.", i * 10.0)
+        for i in range(30)
+    ]
+    # Модель вернула короткий кусок ~22 сек при настройке «1–2 мин» (60–120 сек).
+    monkeypatch.setattr(semantic, "_post_json", lambda *a, **k: _reply([
+        {"from": 5, "to": 6, "score": 0.9, "mood": "drama", "title": "Короткий выбор"},
+    ]))
+    opts = {"picker": "polza", "count": 3, "min_dur": 60, "max_dur": 120,
+            "target_dur": 90, "mood_filter": [], "min_score": 0.0}
+    found = semantic.find_segments(long_segs, tmp_path / "v.mp4", 320.0,
+                                   opts=opts, workdir=tmp_path)
+    assert found and len(found) == 1
+    assert 60.0 <= found[0]["duration"] <= 120.0
+

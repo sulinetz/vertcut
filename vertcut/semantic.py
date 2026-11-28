@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import analyze, app_settings
 
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4
 REQUEST_TIMEOUT = float(os.environ.get("VERTCUT_LLM_TIMEOUT", "90"))
 DEBUG = bool(os.environ.get("VERTCUT_LLM_DEBUG"))
 
@@ -459,8 +459,9 @@ def _prompt(sents: List[Dict[str, Any]], indexes: List[int], duration: float,
     if types:
         type_hint = "\nНужны только эти типы содержания: " + ", ".join(types) + "."
     return (
-        f"Видео длится {_stamp(duration)}. Клипы от {opts.get('min_dur')} до "
-        f"{opts.get('max_dur')} секунд, цель — около {opts.get('target_dur')}.\n"
+        f"Видео длится {_stamp(duration)}. Клипы СТРОГО от {opts.get('min_dur')} до "
+        f"{opts.get('max_dur')} секунд, цель — около {opts.get('target_dur')} секунд "
+        f"(объединяй соседние реплики одной сцены до нужной длительности).\n"
         f"Верни не больше {want} лучших моментов.{mood_hint}{type_hint}\n\n"
         + "\n".join(lines)
     )
@@ -657,6 +658,22 @@ def _calibrate(provider: str, sents: List[Dict[str, Any]],
     return calibrated
 
 
+def _fit_window(sents: List[Dict[str, Any]], start_i: int, end_i: int,
+                min_dur: float, max_dur: float) -> Tuple[int, int]:
+    """Подгоняет границы окна от нейросети под выбранный диапазон [min_dur, max_dur]."""
+    start_i, end_i = analyze._extend_window(sents, start_i, end_i, max_dur)
+    while end_i > start_i and sents[end_i]["end"] - sents[start_i]["start"] > max_dur:
+        end_i -= 1
+    while sents[end_i]["end"] - sents[start_i]["start"] < min_dur:
+        if end_i + 1 < len(sents) and sents[end_i + 1]["end"] - sents[start_i]["start"] <= max_dur:
+            end_i += 1
+        elif start_i > 0 and sents[end_i]["end"] - sents[start_i - 1]["start"] <= max_dur:
+            start_i -= 1
+        else:
+            break
+    return start_i, end_i
+
+
 def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
                    duration: float, opts: Dict[str, Any], curve: List[float],
                    mean_db: float, hop: float, energy_offset: float,
@@ -666,6 +683,8 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
     min_score = float(opts.get("min_score") or 0.0)
     moods = [analyze.normalize_mood(m) for m in (opts.get("mood_filter") or []) if analyze.normalize_mood(m)]
     types_wanted = [t for t in (opts.get("type_filter") or []) if t in CONTENT_TYPES]
+    total_speech = (sents[-1]["end"] - sents[0]["start"]) if sents else 0.0
+    eff_min = min_dur if (duration > min_dur * 1.15 and total_speech >= min_dur) else 3.0
 
     candidates: List[Dict[str, Any]] = []
     for item in items:
@@ -675,13 +694,10 @@ def _to_candidates(items: List[Dict[str, Any]], sents: List[Dict[str, Any]],
             continue
         if types_wanted and not set(types_wanted) & set(item.get("types") or []):
             continue
-        start_i, end_i = item["from"], item["to"]
-        start_i, end_i = analyze._extend_window(sents, start_i, end_i, max_dur)
-        while end_i > start_i and sents[end_i]["end"] - sents[start_i]["start"] > max_dur:
-            end_i -= 1
+        start_i, end_i = _fit_window(sents, item["from"], item["to"], min_dur, max_dur)
         start = sents[start_i]["start"]
         end = sents[end_i]["end"]
-        if end - start > max_dur or end - start < 3.0:
+        if end - start > max_dur or end - start < max(3.0, eff_min):
             continue
         window = sents[start_i:end_i + 1]
         title = item.get("title") or analyze._make_title(window)

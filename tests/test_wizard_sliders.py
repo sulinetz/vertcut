@@ -35,3 +35,13 @@ def test_no_numeric_binding_passes_checked():
 def test_boolean_sub_size_falls_back_to_default():
     opts = pipeline.normalize_options({"sub_size": False})
     assert opts["sub_size"] == 118
+
+
+def test_wizard_adhd_preview_overrides_blur_and_allows_drag():
+    text = _wizard_source()
+    assert 'id="wzFrame"' in text and 'draggable="false"' in text
+    fn_start = text.index("function applyPreviewLayout(box)")
+    fn_end = text.index("function stepSubs()", fn_start)
+    fn_body = text[fn_start:fn_end]
+    assert fn_body.index("if (isAdhd)") < fn_body.index('wizard.opts.mode === "blur"')
+
